@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "umat"
+version = "0.1.0"
+description = "Unified Malware Analysis and Triage control plane"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic>=1.14,<2",
+  "argon2-cffi>=23.1,<26",
+  "asyncpg>=0.30,<1",
+  "cryptography>=44,<47",
+  "fastapi>=0.115,<1",
+  "jsonschema[format]>=4.23,<5",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic-settings>=2.7,<3",
+  "python-multipart>=0.0.20,<1",
+  "reportlab>=4.2,<5",
+  "sqlalchemy[asyncio]>=2.0.36,<3",
+  "structlog>=24.4,<26",
+  "typer>=0.15,<1",
+  "uuid6>=2024.7.10",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx>=0.28,<1",
+  "hypothesis>=6.120,<7",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+  "ruff>=0.9,<1",
+  "testcontainers[postgres]>=4.9,<5",
+  "types-jsonschema>=4.23,<5",
+  "types-reportlab>=4.2,<5",
+]
+
+[project.scripts]
+umat-api = "umat.api.app:run"
+umat-admin = "umat.cli.admin:app"
+umat-fake-executor = "umat.executors.fake:app"
+umat-c2-adapter = "umat.c2.adapter_cli:app"
+umat-c2-executor = "umat.c2.executor:app"
+umat-windows-adapter = "umat.windows.adapter_cli:app"
+umat-windows-executor = "umat.windows.executor:app"
+umat-android-adapter = "umat.android.adapter_cli:app"
+umat-android-executor = "umat.android.executor:app"
+umat-report-worker = "umat.reporting.worker:app"
+umat-adapter-worker = "umat.adapters.worker:app"
+umat-scheduler = "umat.scheduler.worker:app"
+umat-deploy = "umat.deployment.cli:app"
+umat-cape-gateway = "umat.cape_gateway.app:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/umat"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "ASYNC"]
+ignore = ["S101", "B008", "E501", "UP017"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]

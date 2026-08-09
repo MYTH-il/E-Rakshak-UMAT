@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "supported_host": {
+    "distribution": "ubuntu",
+    "version": "24.04",
+    "architecture": "x86_64",
+    "minimum_memory_gib": 15,
+    "minimum_free_disk_gib": 200,
+    "kvm_required": true
+  },
+  "paths": {
+    "winstdt_checkout": "/opt/umat/upstreams/winstdt",
+    "android_checkout": "/opt/umat/upstreams/android-erakshak",
+    "cape_root": "/opt/CAPEv2",
+    "winstdt_runtime_root": "/srv/winstdt",
+    "configuration_root": "/etc/umat",
+    "state_root": "/var/lib/umat-deploy"
+  },
+  "components": {
+    "winstdt": {
+      "repository": "https://github.com/MYTH-il/WinST-DT-module.git",
+      "commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8",
+      "tree_sha256": "bc015bc8223fcd96846882c1533d308348396affb07f7ec8c7b73fae9a812738",
+      "license_status": "authorization_required_no_upstream_license_file"
+    },
+    "cape": {
+      "repository": "https://github.com/kevoreilly/CAPEv2.git",
+      "commit": "aaebb80f3ce27164b4661c1241e14236764962b1"
+    },
+    "c2": {
+      "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
+      "commit": "47225ecb439936659e55ffa9118db083bb2f56c2",
+      "effective_version": "47225ec-winstdt.1",
+      "patch_series_sha256": "0d82a65d6ac3d3d829f622b6bb49a8b4a1e66470355bb73ba8cdf8ea70278b57",
+      "license_status": "authorization_required_no_upstream_license_file"
+    },
+    "android": {
+      "repository": "https://github.com/d4ruvil/erakshak.git",
+      "commit": "6462901d1aaa0b090b867934ea5a01a82d31bc03",
+      "tree_sha256": "9c554d1e1e2c7c5e70cf3d5b6504a28bc37ed62b81ddc0b0f3007b4bec2c58fa",
+      "image": "umat-mobsf:6462901d",
+      "image_digest": "sha256:f9ca4f7c08d979ed0cb130abb2af5b7bbf0ada349431f4c602e90c0230d06d0a"
+    },
+    "umat_postgres": {
+      "image": "postgres:16.6@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36",
+      "port": 55432
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{"schema_version":"1.1","kinds":["sample","platform_bundle","windows_bundle","android_bundle","c2_bundle","pcap","telemetry","access_events","platform_manifest","static_prior","raw_etl","report","report_export","manifest","screenshot","logcat","api_monitor","frida_logs","dropped_file","ioc_export","other"],"access_tiers":["officer","analyst","administrator"]}

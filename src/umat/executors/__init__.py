@@ -1,0 +1,1 @@
+"""Executor protocol implementation."""

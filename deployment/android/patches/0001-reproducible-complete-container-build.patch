@@ -1,0 +1,60 @@
+diff --git a/Dockerfile b/Dockerfile
+index e620ec2..0dcf88d 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,5 +1,5 @@
+ # Base image
+-FROM python:3.13-slim-bookworm
++FROM python:3.13-slim-bookworm@sha256:67a1e1f215ccda113cfc024e8639049257e88f273898f595b61476d128d387e8
+ 
+ LABEL \
+     name="MobSF" \
+@@ -21,7 +21,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
+     JAVA_HOME=/jdk-22.0.2 \
+     PATH=/jdk-22.0.2/bin:/root/.local/bin:$PATH \
+     DJANGO_SUPERUSER_USERNAME=mobsf \
+-    DJANGO_SUPERUSER_PASSWORD=mobsf
++    DJANGO_SUPERUSER_PASSWORD=mobsf \
++    POETRY_VERSION=2.4.1
+ 
+ # See https://docs.docker.com/develop/develop-images/dockerfile_best-practices/#run
+ RUN apt update -y && \
+@@ -55,14 +56,16 @@ RUN apt update -y && \
+ 
+-ARG TARGETPLATFORM
++ARG TARGETPLATFORM=linux/amd64
+ 
++# tools_download imports the MobSF package while installing JADX.
++COPY . .
++
+ # Install wkhtmltopdf, OpenJDK and jadx
+ COPY scripts/dependencies.sh mobsf/MobSF/tools_download.py ./
+ RUN ./dependencies.sh
+ 
+ # Install Python dependencies
+-COPY pyproject.toml .
++COPY pyproject.toml poetry.lock ./
+ RUN poetry config virtualenvs.create false && \
+-  poetry lock && \
+   poetry install --only main --no-root --no-interaction --no-ansi && \
+   poetry cache clear . --all --no-interaction && \
+   rm -rf /root/.cache/
+diff --git a/scripts/dependencies.sh b/scripts/dependencies.sh
+index 6dc1bb6..abff818 100755
+--- a/scripts/dependencies.sh
++++ b/scripts/dependencies.sh
+@@ -1,4 +1,5 @@
+ #!/bin/bash
++set -euo pipefail
+ JDK_FILE=openjdk-22.0.2_linux-x64_bin.tar.gz
+ JDK_FILE_ARM=openjdk-22.0.2_linux-aarch64_bin.tar.gz
+ WKH_FILE=wkhtmltox_0.12.6.1-3.bookworm_amd64.deb
+@@ -8,7 +9,7 @@ WKH_FILE_ARM=wkhtmltox_0.12.6.1-3.bookworm_arm64.deb
+ # For apktool
+ mkdir -p /home/mobsf/.local/share/apktool/framework
+ 
+-if [ "$TARGETPLATFORM" == "linux/arm64" ]
++if [ "${TARGETPLATFORM:-}" == "linux/arm64" ]
+ then
+     WKH_FILE=$WKH_FILE_ARM
+     JDK_FILE=$JDK_FILE_ARM

@@ -1,0 +1,90 @@
+openapi: 3.1.0
+info:
+  title: UMAT CAPE Management Gateway
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:8091
+paths:
+  /api/v1/machines:
+    post:
+      operationId: createCapeMachine
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Profile' }
+      responses:
+        '201':
+          description: CAPE machine registered and snapshotted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Result' }
+        '409': { $ref: '#/components/responses/Rejected' }
+  /api/v1/machines/{label}:
+    delete:
+      operationId: deleteCapeMachine
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: label
+          in: path
+          required: true
+          schema: { type: string, pattern: '^umat-[a-z0-9-]+-[0-9a-f]{8}$' }
+      responses:
+        '200':
+          description: Unlocked CAPE machine removed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Result' }
+        '409': { $ref: '#/components/responses/Rejected' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  responses:
+    Rejected:
+      description: Operation failed closed
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, detail]
+            properties:
+              error: { const: profile_management_rejected }
+              detail: { type: string }
+  schemas:
+    UserProfile:
+      type: object
+      additionalProperties: false
+      required: [username, locale, timezone, administrator, installed_software]
+      properties:
+        username: { type: string, pattern: '^[A-Za-z0-9_.-]{1,64}$' }
+        locale: { type: string, minLength: 2, maxLength: 32 }
+        timezone: { type: string, minLength: 1, maxLength: 64 }
+        administrator: { type: boolean }
+        installed_software:
+          type: array
+          maxItems: 100
+          items: { type: string }
+    Profile:
+      type: object
+      additionalProperties: false
+      required: [profile_id, name, windows_version, architecture, vcpus, ram_mb, disk_gb, user_profile, analysis_profile, cape_template]
+      properties:
+        profile_id: { type: string, format: uuid }
+        name: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$' }
+        windows_version: { type: string }
+        architecture: { type: string, enum: [x64, x86] }
+        vcpus: { type: integer, minimum: 1, maximum: 32 }
+        ram_mb: { type: integer, minimum: 2048, maximum: 131072 }
+        disk_gb: { type: integer, minimum: 40, maximum: 2048 }
+        user_profile: { $ref: '#/components/schemas/UserProfile' }
+        analysis_profile: { type: string }
+        cape_machine_label: { type: [string, 'null'] }
+        cape_template: { type: string }
+    Result:
+      type: object
+      additionalProperties: false
+      required: [operation_id, machine_label]
+      properties:
+        operation_id: { type: string, format: uuid }
+        machine_label: { type: string }

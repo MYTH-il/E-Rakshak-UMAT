@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://umat.local/contracts/case-object.schema.json",
+  "title": "UMAT public case object",
+  "type": "object",
+  "required": ["schema_version", "case_id", "owner_user_id", "created_at", "submissions", "analysis_runs", "report"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^1\\.[0-9]+$"},
+    "case_id": {"type": "string", "format": "uuid"},
+    "owner_user_id": {"type": "string", "format": "uuid"},
+    "title": {"type": ["string", "null"], "maxLength": 256},
+    "reference": {"type": ["string", "null"], "maxLength": 128},
+    "created_at": {"type": "string", "format": "date-time"},
+    "submissions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/submission"}
+    },
+    "analysis_runs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/run"}
+    },
+    "report": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/report"}]}
+  },
+  "$defs": {
+    "submission": {
+      "type": "object",
+      "required": ["id", "sample_sha256", "original_filename", "received_at"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "sample_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "original_filename": {"type": "string", "maxLength": 512},
+        "received_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "stage": {
+      "type": "object",
+      "required": ["id", "stage_type", "state", "failure_code", "failure_detail"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "stage_type": {"enum": ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"]},
+        "state": {"enum": ["waiting", "queued", "leased", "running", "completed", "partial", "failed", "cancelled", "unsupported"]},
+        "failure_code": {"type": ["string", "null"]},
+        "failure_detail": {"type": ["string", "null"]}
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["id", "submission_id", "platform", "status", "result", "stages", "windows_profile"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "submission_id": {"type": "string", "format": "uuid"},
+        "platform": {"enum": ["windows", "android"]},
+        "status": {"enum": ["awaiting_confirmation", "queued", "running", "cancelling", "terminal"]},
+        "result": {"type": ["string", "null"], "enum": ["completed", "partial", "inconclusive", "failed", "cancelled", "unsupported", null]},
+        "stages": {"type": "array", "items": {"$ref": "#/$defs/stage"}},
+        "windows_profile": {"type": ["object", "null"]}
+      }
+    },
+    "capability": {
+      "type": "object",
+      "required": ["data_type", "evidence_level", "confidence", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "data_type": {"type": "string"},
+        "evidence_level": {"enum": ["declared", "possible", "observed", "correlated"]},
+        "confidence": {"enum": ["allowlisted", "unconfirmed", "weak", "strong", "confirmed"]},
+        "summary": {"type": "string"}
+      }
+    },
+    "destination": {
+      "type": "object",
+      "required": ["value", "ip", "domain", "port", "protocol", "first_observed_at"],
+      "additionalProperties": false,
+      "properties": {
+        "value": {"type": "string"},
+        "ip": {"type": ["string", "null"]},
+        "domain": {"type": ["string", "null"]},
+        "port": {"type": ["integer", "null"], "minimum": 0, "maximum": 65535},
+        "protocol": {"type": ["string", "null"]},
+        "first_observed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["artifact_id", "kind", "sha256", "size_bytes", "media_type", "access_tier", "download_path", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {"type": "string", "format": "uuid"},
+        "kind": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "media_type": {"type": "string"},
+        "access_tier": {"enum": ["officer", "analyst", "administrator"]},
+        "download_path": {"type": "string", "pattern": "^/api/v1/artifacts/"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": ["schema_version", "analysis_run_id", "sample_sha256", "platform", "generated_at", "verdict", "headline", "information_accessed", "destinations", "provenance", "caveats", "tested_profile", "artifacts", "integrity"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": "1.1"},
+        "analysis_run_id": {"type": "string", "format": "uuid"},
+        "sample_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "platform": {"enum": ["windows", "android"]},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "verdict": {"enum": ["malicious", "suspicious", "no_malicious_activity_observed", "inconclusive", "failed"]},
+        "headline": {"type": "string", "minLength": 1},
+        "information_accessed": {"type": "array", "items": {"$ref": "#/$defs/capability"}},
+        "destinations": {"type": "array", "items": {"$ref": "#/$defs/destination"}},
+        "provenance": {"type": "array", "items": {"type": "object"}},
+        "caveats": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "tested_profile": {"type": ["object", "null"]},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+        "integrity": {
+          "type": "object",
+          "required": ["validated_bundle_count", "registered_artifact_count", "bundle_hashes"],
+          "additionalProperties": false,
+          "properties": {
+            "validated_bundle_count": {"type": "integer", "minimum": 0},
+            "registered_artifact_count": {"type": "integer", "minimum": 0},
+            "bundle_hashes": {"type": "array", "items": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "uniqueItems": true}
+          }
+        },
+        "technical": {"type": "object"}
+      }
+    }
+  }
+}

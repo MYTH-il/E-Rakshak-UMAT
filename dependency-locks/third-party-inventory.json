@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-08-09T00:00:00Z",
+  "release_policy": "Only entries with redistribution_allowed=true and a verified runtime lock may be included in a distributable UMAT deployment artifact.",
+  "components": [
+    {
+      "name": "WinST/DT module",
+      "repository": "https://github.com/MYTH-il/WinST-DT-module.git",
+      "lock_file": "dependency-locks/winstdt.json",
+      "commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8",
+      "license": null,
+      "license_evidence": "No license file exists in the locked commit tree",
+      "redistribution_allowed": false,
+      "runtime_status": "authorization_and_runtime_validation_required"
+    },
+    {
+      "name": "CAPEv2",
+      "repository": "https://github.com/kevoreilly/CAPEv2.git",
+      "lock_file": "dependency-locks/winstdt.json",
+      "commit": "aaebb80f3ce27164b4661c1241e14236764962b1",
+      "license": "GNU Affero General Public License v3.0",
+      "license_evidence": "upstream LICENSE",
+      "redistribution_allowed": true,
+      "runtime_status": "gateway_contract_defined_runtime_pending"
+    },
+    {
+      "name": "E-Rakshak Android/MobSF fork",
+      "repository": "https://github.com/d4ruvil/erakshak.git",
+      "lock_file": "dependency-locks/android-erakshak.json",
+      "commit": "6462901d1aaa0b090b867934ea5a01a82d31bc03",
+      "license": "GNU General Public License v3.0",
+      "license_evidence": "upstream LICENSE",
+      "redistribution_allowed": true,
+      "runtime_status": "static_validated_dynamic_boot_gate_failed"
+    },
+    {
+      "name": "C2 Exfil analyzer",
+      "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
+      "lock_file": "dependency-locks/c2-exfil.json",
+      "commit": "47225ecb439936659e55ffa9118db083bb2f56c2",
+      "license": null,
+      "license_evidence": "No explicit upstream license file recorded",
+      "redistribution_allowed": false,
+      "runtime_status": "effective_runtime_validated_android_compatibility_and_authorization_required"
+    }
+  ]
+}

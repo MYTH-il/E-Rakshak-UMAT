@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16@sha256:${MOBSF_POSTGRES_IMAGE_DIGEST:?set MOBSF_POSTGRES_IMAGE_DIGEST}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mobsf
+      POSTGRES_PASSWORD: ${MOBSF_DATABASE_PASSWORD:?set MOBSF_DATABASE_PASSWORD}
+      POSTGRES_DB: mobsf
+    volumes: ["mobsf-postgres:/var/lib/postgresql/data"]
+    networks: [mobsf]
+
+  djangoq:
+    image: ${MOBSF_IMAGE:-umat-mobsf:6462901d}
+    restart: unless-stopped
+    command: /home/mobsf/Mobile-Security-Framework-MobSF/scripts/qcluster.sh
+    environment: &mobsf-environment
+      POSTGRES_USER: mobsf
+      POSTGRES_PASSWORD: ${MOBSF_DATABASE_PASSWORD:?set MOBSF_DATABASE_PASSWORD}
+      POSTGRES_DB: mobsf
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MOBSF_ASYNC_ANALYSIS: "1"
+      MOBSF_ANALYZER_IDENTIFIER: emulator-5554
+    volumes: ["mobsf-data:/home/mobsf/.MobSF"]
+    depends_on: [postgres]
+    networks: [mobsf]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  mobsf:
+    image: ${MOBSF_IMAGE:-umat-mobsf:6462901d}
+    restart: unless-stopped
+    environment: *mobsf-environment
+    volumes: ["mobsf-data:/home/mobsf/.MobSF"]
+    ports: ["127.0.0.1:8001:8000", "127.0.0.1:1338:1337"]
+    depends_on: [postgres, djangoq]
+    networks: [mobsf]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+networks:
+  mobsf: {}
+
+volumes:
+  mobsf-postgres: {}
+  mobsf-data: {}

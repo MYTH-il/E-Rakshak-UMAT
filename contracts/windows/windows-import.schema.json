@@ -1,0 +1,27 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://umat.local/contracts/windows/windows-import.schema.json",
+  "type":"object",
+  "required":["schema_version","analysis_run_id","sample_sha256","platform","created_at","producer","native_contract","handoff_manifest","cape","selected_profile","artifacts","caveats","signature"],
+  "additionalProperties":false,
+  "properties":{
+    "schema_version":{"type":"string","pattern":"^1\\.[0-9]+$"},
+    "analysis_run_id":{"type":"string","format":"uuid"},
+    "sample_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "platform":{"const":"windows"},
+    "created_at":{"type":"string","format":"date-time"},
+    "producer":{"$ref":"#/$defs/producer"},
+    "native_contract":{"type":"object","required":["schema_version","source_commit","schema_path","schema_sha256"],"additionalProperties":false,"properties":{"schema_version":{"const":"1.0"},"source_commit":{"const":"7bc74765e9d38d7ba6df3f2115db67761cb4cbd8"},"schema_path":{"const":"schemas/handoff_manifest.schema.json"},"schema_sha256":{"const":"e53705f8a70ceeb86083cec46ae6980147941abf931028ba931bc868b0b39223"}}},
+    "handoff_manifest":{"type":"object","required":["schema_version","sample_sha256","cape_task_id"],"properties":{"schema_version":{"const":"1.0"},"sample_sha256":{"type":"string"},"cape_task_id":{"type":"integer","minimum":1}},"additionalProperties":true},
+    "cape":{"type":"object","required":["task_id","package","detected_type"],"properties":{"task_id":{"type":"integer","minimum":1},"package":{"type":["string","null"]},"detected_type":{"type":["string","null"]}},"additionalProperties":false},
+    "selected_profile":{"type":"object"},
+    "artifacts":{"type":"array","items":{"$ref":"#/$defs/artifact"}},
+    "caveats":{"type":"array","items":{"type":"string"},"uniqueItems":true},
+    "signature":{"$ref":"#/$defs/signature"}
+  },
+  "$defs":{
+    "producer":{"type":"object","required":["name","commit"],"properties":{"name":{"const":"winstdt"},"commit":{"type":"string","pattern":"^[a-f0-9]{40}$"}},"additionalProperties":false},
+    "artifact":{"type":"object","required":["path","sha256","size_bytes"],"properties":{"path":{"type":"string","minLength":1},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"size_bytes":{"type":"integer","minimum":0}},"additionalProperties":false},
+    "signature":{"type":"object","required":["key_id","algorithm","value"],"properties":{"key_id":{"type":"string"},"algorithm":{"const":"Ed25519"},"value":{"type":"string"}},"additionalProperties":false}
+  }
+}

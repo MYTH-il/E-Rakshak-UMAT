@@ -1,0 +1,21 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://umat.local/contracts/common-finding.schema.json",
+  "type":"object",
+  "required":["schema_version","finding_id","analysis_run_id","stage_id","platform","kind","confidence","evidence_level","summary","evidence_artifact_ids","caveats"],
+  "additionalProperties":false,
+  "properties":{
+    "schema_version":{"type":"string","pattern":"^1\\.[0-9]+$"},
+    "finding_id":{"type":"string","format":"uuid"},
+    "analysis_run_id":{"type":"string","format":"uuid"},
+    "stage_id":{"type":"string","format":"uuid"},
+    "platform":{"enum":["windows","android"]},
+    "kind":{"type":"string","minLength":1},
+    "confidence":{"enum":["allowlisted","unconfirmed","weak","strong","confirmed"]},
+    "evidence_level":{"enum":["declared","possible","observed","correlated"]},
+    "summary":{"type":"string","minLength":1},
+    "details":{"type":"object"},
+    "evidence_artifact_ids":{"type":"array","items":{"type":"string","format":"uuid"},"uniqueItems":true},
+    "caveats":{"type":"array","items":{"type":"string"},"uniqueItems":true}
+  }
+}

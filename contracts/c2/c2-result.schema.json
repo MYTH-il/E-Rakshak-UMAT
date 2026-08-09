@@ -1,0 +1,26 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://umat.local/contracts/c2/c2-result.schema.json",
+  "type":"object",
+  "required":["schema_version","native_event_schema_version","analysis_run_id","sample_sha256","platform","created_at","producer","pcap_sha256","platform_manifest_sha256","analysis_window","guest_ip","correlation_mode","network_events","artifacts","caveats","evidence_chain","signature"],
+  "additionalProperties":false,
+  "properties":{
+    "schema_version":{"type":"string","pattern":"^1\\.[0-9]+$"},
+    "native_event_schema_version":{"const":"1.3"},
+    "analysis_run_id":{"type":"string","format":"uuid"},
+    "sample_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "platform":{"enum":["windows","android"]},
+    "created_at":{"type":"string","format":"date-time"},
+    "producer":{"type":"object","required":["name","runtime_identity","tool_versions"],"properties":{"name":{"type":"string","minLength":1},"runtime_identity":{"type":"string","minLength":1},"tool_versions":{"type":"object","additionalProperties":{"type":"string"}}},"additionalProperties":false},
+    "pcap_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "platform_manifest_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "analysis_window":{"type":"object","required":["started_at","ended_at"],"properties":{"started_at":{"type":"string","format":"date-time"},"ended_at":{"type":"string","format":"date-time"}},"additionalProperties":false},
+    "guest_ip":{"type":["string","null"],"format":"ipvanyaddress"},
+    "correlation_mode":{"enum":["host_network","network_only"]},
+    "network_events":{"type":"array","items":{"$ref":"c2-event-v1.3.schema.json"}},
+    "artifacts":{"type":"array","items":{"type":"object","required":["path","sha256","size_bytes"],"properties":{"path":{"type":"string"},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"size_bytes":{"type":"integer","minimum":0}},"additionalProperties":false}},
+    "caveats":{"type":"array","items":{"type":"string"},"uniqueItems":true},
+    "evidence_chain":{"type":"object","required":["root","tip"],"properties":{"root":{"type":"string","pattern":"^[a-f0-9]{64}$"},"tip":{"type":"string","pattern":"^[a-f0-9]{64}$"}},"additionalProperties":false},
+    "signature":{"type":"object","required":["algorithm","key_id","value"],"properties":{"algorithm":{"const":"Ed25519"},"key_id":{"type":"string","minLength":1},"value":{"type":"string","minLength":1}},"additionalProperties":false}
+  }
+}

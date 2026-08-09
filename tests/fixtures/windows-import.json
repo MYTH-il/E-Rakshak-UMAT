@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "analysis_run_id": "0198fd40-1111-7000-8000-000000000003",
+  "sample_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "platform": "windows",
+  "created_at": "2026-08-08T12:00:00Z",
+  "producer": {
+    "name": "winstdt",
+    "commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8"
+  },
+  "native_contract": {
+    "schema_version": "1.0",
+    "source_commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8",
+    "schema_path": "schemas/handoff_manifest.schema.json",
+    "schema_sha256": "e53705f8a70ceeb86083cec46ae6980147941abf931028ba931bc868b0b39223"
+  },
+  "handoff_manifest": {
+    "schema_version": "1.0",
+    "sample_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cape_task_id": 1
+  },
+  "artifacts": [
+    {
+      "path": "manifest.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size_bytes": 1
+    }
+  ],
+  "caveats": [],
+  "signature": {
+    "key_id": "fixture",
+    "algorithm": "Ed25519",
+    "value": "sanitized"
+  },
+  "cape": {
+    "task_id": 1,
+    "package": "generic",
+    "detected_type": "PE32 executable"
+  },
+  "selected_profile": {}
+}

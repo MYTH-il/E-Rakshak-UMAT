@@ -1,0 +1,27 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://umat.local/contracts/android/android-bundle.schema.json",
+  "type":"object",
+  "required":["schema_version","analysis_run_id","sample_sha256","platform","created_at","producer","native_contract","analysis_window","emulator","mobsf_reports","artifacts","stimulation","caveats","signature"],
+  "additionalProperties":false,
+  "properties":{
+    "schema_version":{"type":"string","pattern":"^1\\.[0-9]+$"},
+    "analysis_run_id":{"type":"string","format":"uuid"},
+    "sample_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "platform":{"const":"android"},
+    "created_at":{"type":"string","format":"date-time"},
+    "producer":{"type":"object","required":["name","commit","mobsf_version"],"properties":{"name":{"const":"android-erakshak"},"commit":{"type":"string"},"mobsf_version":{"type":"string"}},"additionalProperties":false},
+    "native_contract":{"type":"object","required":["api_version","source_commit","static_report_endpoint","dynamic_report_endpoint"],"additionalProperties":false,"properties":{"api_version":{"const":"v1"},"source_commit":{"const":"6462901d1aaa0b090b867934ea5a01a82d31bc03"},"static_report_endpoint":{"const":"/api/v1/report_json"},"dynamic_report_endpoint":{"const":"/api/v1/dynamic/report_json"}}},
+    "analysis_window":{"type":"object","required":["started_at","ended_at"],"properties":{"started_at":{"type":"string","format":"date-time"},"ended_at":{"type":"string","format":"date-time"}},"additionalProperties":false},
+    "emulator":{"type":"object","required":["api_level","avd_name","guest_ip"],"properties":{"api_level":{"const":30},"avd_name":{"type":"string"},"guest_ip":{"type":["string","null"]}},"additionalProperties":true},
+    "mobsf_reports":{"type":"object","required":["scan_hash","static","dynamic"],"additionalProperties":false,"properties":{"scan_hash":{"type":"string","pattern":"^[a-fA-F0-9]{32}$"},"static":{"$ref":"#/$defs/artifact"},"dynamic":{"oneOf":[{"$ref":"#/$defs/artifact"},{"type":"null"}]}}},
+    "artifacts":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/artifact"}},
+    "stimulation":{"type":"object"},
+    "caveats":{"type":"array","items":{"type":"string"},"uniqueItems":true},
+    "signature":{"$ref":"#/$defs/signature"}
+  },
+  "$defs":{
+    "artifact":{"type":"object","required":["kind","path","sha256","size_bytes"],"properties":{"kind":{"type":"string"},"path":{"type":"string"},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"size_bytes":{"type":"integer","minimum":0}},"additionalProperties":false},
+    "signature":{"type":"object","required":["key_id","algorithm","value"],"properties":{"key_id":{"type":"string"},"algorithm":{"const":"Ed25519"},"value":{"type":"string"}},"additionalProperties":false}
+  }
+}
