@@ -11,6 +11,23 @@ class CapeError(RuntimeError):
     pass
 
 
+def cape_package_for_sample(sample: Path) -> str:
+    """Select a CAPE package only when the native PE header is conclusive."""
+    with sample.open("rb") as source:
+        header = source.read(64)
+        if len(header) < 64 or header[:2] != b"MZ":
+            return ""
+        pe_offset = int.from_bytes(header[60:64], "little")
+        if pe_offset < 64 or pe_offset > 16 * 1024 * 1024:
+            return ""
+        source.seek(pe_offset)
+        coff = source.read(24)
+    if len(coff) != 24 or coff[:4] != b"PE\0\0":
+        return ""
+    characteristics = int.from_bytes(coff[22:24], "little")
+    return "dll" if characteristics & 0x2000 else "exe"
+
+
 class CapeClient:
     """Pinned CAPE HTTP client plus the deployment's CAPE machine-management gateway."""
 
@@ -22,6 +39,7 @@ class CapeClient:
         api_token: str | None = None,
         management_url: str | None = None,
         management_token: str | None = None,
+        analysis_timeout_seconds: int = 180,
     ) -> None:
         headers = {"Authorization": f"Token {api_token}"} if api_token else {}
         self.client = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=60)
@@ -33,6 +51,7 @@ class CapeClient:
             headers=management_headers,
             timeout=900,
         )
+        self.analysis_timeout_seconds = analysis_timeout_seconds
 
     def create_machine(self, profile: dict[str, Any]) -> tuple[str, str]:
         response = self.management.post("/api/v1/machines", json=profile)
@@ -48,8 +67,13 @@ class CapeClient:
     def submit(self, sample: Path, profile: dict[str, Any]) -> int:
         data = {
             "machine": profile.get("cape_machine_label") or "",
-            "package": "",
+            # CAPE can mistake a PE containing an archive overlay for a ZIP and
+            # abort the guest before ETW finalization. Other formats remain on
+            # CAPE's native automatic package selection path.
+            "package": cape_package_for_sample(sample),
             "options": f"analysis_profile={profile.get('analysis_profile', 'standard')}",
+            "timeout": str(self.analysis_timeout_seconds),
+            "enforce_timeout": "true",
         }
         with sample.open("rb") as source:
             response = self.client.post(

@@ -22,13 +22,30 @@
     }
   },
   "tree_sha256": "bc015bc8223fcd96846882c1533d308348396affb07f7ec8c7b73fae9a812738",
+  "deployment_patch_series": {
+    "files": [
+      {
+        "path": "deployment/windows/patches/0001-schema-compatible-correlation.patch",
+        "sha256": "60ba109c6029f9549d9ae6de79744deb976fbbceaf7207399f3429eaaaa46fc2"
+      },
+      {
+        "path": "deployment/windows/patches/0002-deployment-runtime-identity.patch",
+        "sha256": "3af414e6f5b857bb565dd8388828bc36c5e02411588fe169746431d5f1edf668"
+      }
+    ],
+    "patch_series_sha256": "9dd8ac177ad7e35cdae342ed26c8d04adb90efdd5e3ce8ef28b1be64ae285cff"
+  },
   "license_status": "authorization_required_no_upstream_license_file",
   "redistribution_allowed": false,
   "container_image_digest": null,
   "validation": {
-    "status": "contract_validated_runtime_handoff_gate_failed",
+    "status": "runtime_and_umat_windows_stage_validated",
     "validated_at": "2026-08-09",
-    "result": "The locked schemas and CAPE commit are present. Existing handoffs fail closed: older tasks predate required fields, newer tasks use an unpromoted schema, and the sole locked-schema-compatible task declared a missing PCAP. No real Windows runtime is promoted."
+    "result": "The ordered deployment patch series passed all five locked upstream reporter tests. Harmless CAPE task 23 ran for the enforced 180-second window and produced a locked-schema-valid handoff with a 17,184-byte PCAP, a 63,037,440-byte ETL, seven access events, and explicit runtime identity. Public UMAT run 019fe74d-9750-7923-abe1-4654ddc1b2ca completed its Windows platform stage, registered five signed artifacts, and queued C2 analysis. The audit chain verified after acceptance.",
+    "cape_task_id": 23,
+    "analysis_run_id": "019fe74d-9750-7923-abe1-4654ddc1b2ca",
+    "telemetry_degraded": true,
+    "telemetry_note": "Kernel Process, File, Registry, and Network providers were captured. Kernel Image was unavailable and Threat Intelligence was access denied; the handoff records both caveats."
   },
   "cape": {
     "repository": "https://github.com/kevoreilly/CAPEv2.git",

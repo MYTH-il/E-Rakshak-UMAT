@@ -22,23 +22,23 @@ Implemented and verified:
 
 Runtime status and gates:
 
-- WinST/CAPE: installed CAPE is at the locked commit, but no existing handoff both validates
-  against the locked schema and contains its declared, hash-covered PCAP. UMAT now rejects
-  missing, unhashed, duplicate, and incompletely covered native artifacts.
+- WinST/CAPE: the ordered UMAT reporter patch series reconciles the locked reporter with its
+  locked schema and supplies deployment runtime identity. Harmless CAPE task 23 and public UMAT
+  run `019fe74d-9750-7923-abe1-4654ddc1b2ca` passed the native handoff and signed-artifact gates.
+  UMAT continues to reject missing, unhashed, duplicate, and incompletely covered artifacts.
 - CAPE VM management: the authenticated loopback gateway and native task cancellation are now
   implemented. A harmless real create/customize/snapshot/register/delete round trip passed. The
-  gateway systemd unit is not yet promoted on the current workstation because the PostgreSQL 16
-  migration and full UMAT service installation remain incomplete.
+  gateway and explicitly enrolled Windows executor are installed as isolated systemd services.
 - Android dynamic analysis: the locked MobSF static path passes, but API-30's prepared second
   boot remains offline. Partial static output remains the fail-closed behavior.
 - Licensing: WinST/DT and the C2 repository have no license file at their locked commits. Their
   source and derived images are excluded from redistributable UMAT releases until authorization
   is recorded.
 
-Deployment promotion remains closed while the earlier PostgreSQL 18 cluster owns port `55432`.
-The pinned PostgreSQL 16 restore is in progress with recoverable, root-only backups; failed
-cross-version restore attempts returned the host to PostgreSQL 18 without losing application
-records. See the root README for the exact snapshot state and Phase 6 backlog.
+The UMAT control plane now officially targets PostgreSQL 18.4. The complete suite, migration
+downgrade/re-upgrade path, and existing audit chain pass on PostgreSQL 18; no PostgreSQL-16-only
+dependency was found. MobSF retains its separately validated PostgreSQL 16 runtime lock. See the
+root README for the exact snapshot state and Phase 6 backlog.
 
 The machine-readable status is in `dependency-locks/*.json` and
 `dependency-locks/third-party-inventory.json`.

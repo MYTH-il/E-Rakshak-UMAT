@@ -465,20 +465,29 @@ class AndroidExecutor:
 
 @app.command()
 def run(
-    umat_url: str = typer.Option("http://127.0.0.1:8080"),
-    mobsf_url: str = typer.Option(...),
+    umat_url: str = typer.Option("http://127.0.0.1:8080", envvar="UMAT_EXECUTOR_URL"),
+    mobsf_url: str = typer.Option(..., envvar="UMAT_MOBSF_URL"),
     mobsf_api_key: str = typer.Option(..., envvar="MOBSF_API_KEY"),
-    avdmanager: Path = typer.Option(...),
-    emulator: Path = typer.Option(...),
-    adb: Path = typer.Option(...),
+    avdmanager: Path = typer.Option(..., envvar="UMAT_ANDROID_AVDMANAGER"),
+    emulator: Path = typer.Option(..., envvar="UMAT_ANDROID_EMULATOR"),
+    adb: Path = typer.Option(..., envvar="UMAT_ANDROID_ADB"),
     system_image: str = typer.Option("system-images;android-30;google_apis;x86_64"),
     emulator_port: int = typer.Option(5554),
-    adb_relay: Path | None = typer.Option(None),
-    adb_relay_bind_address: str | None = typer.Option(None),
-    work_root: Path = typer.Option(Path("var/android-work")),
-    state_path: Path = typer.Option(Path("var/android-executor/state.json")),
-    enrollment_token: str | None = typer.Option(None),
-    name: str = typer.Option("android-executor"),
+    adb_relay: Path | None = typer.Option(None, envvar="UMAT_ANDROID_ADB_RELAY"),
+    adb_relay_bind_address: str | None = typer.Option(
+        None, envvar="UMAT_ANDROID_ADB_RELAY_BIND_ADDRESS"
+    ),
+    work_root: Path = typer.Option(
+        Path("var/android-work"), envvar="UMAT_ANDROID_WORK_ROOT"
+    ),
+    state_path: Path = typer.Option(
+        Path("var/android-executor/state.json"), envvar="UMAT_ANDROID_STATE_PATH"
+    ),
+    enrollment_token: str | None = typer.Option(
+        None, envvar="UMAT_ANDROID_ENROLLMENT_TOKEN"
+    ),
+    name: str = typer.Option("android-executor", envvar="UMAT_ANDROID_EXECUTOR_NAME"),
+    enroll_only: bool = typer.Option(False, help="Enroll and publish capabilities, then exit"),
     stimulation_seconds: int = typer.Option(30, min=1, max=600),
     stimulation_actions: int = typer.Option(20, min=1, max=500),
     once: bool = typer.Option(False),
@@ -504,6 +513,8 @@ def run(
         if not enrollment_token:
             raise typer.BadParameter("enrollment-token is required on first run")
         executor_process.enroll(enrollment_token, name)
+    if enroll_only:
+        return
     while True:
         processed = executor_process.process_stage()
         if once:

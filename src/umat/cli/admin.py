@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import typer
 from sqlalchemy import select, update
@@ -36,17 +37,45 @@ async def require_administrator(db: AsyncSession, username: str) -> User:
 def create_user(
     username: str = typer.Option(...),
     role: str = typer.Option(..., help="officer, analyst, or administrator"),
-    password: str = typer.Option(..., prompt=True, hide_input=True, confirmation_prompt=True),
+    password: str | None = typer.Option(None, hide_input=True),
+    password_file: Path | None = typer.Option(
+        None, help="Read the password from a mode-0600 file"
+    ),
+    if_missing: bool = typer.Option(False, help="Succeed when the user already exists"),
+    non_interactive: bool = typer.Option(False),
 ) -> None:
+    supplied_password = password
+    if password_file is not None:
+        mode = password_file.stat().st_mode & 0o777
+        if mode & 0o077:
+            raise typer.BadParameter("password file must not be accessible by group or other")
+        supplied_password = password_file.read_text().rstrip("\r\n")
+    if supplied_password is None and not non_interactive:
+        supplied_password = typer.prompt(
+            "Password", hide_input=True, confirmation_prompt=True
+        )
+
     async def operation() -> None:
         normalized = normalize_username(username)
         async with session_factory() as db:
-            if await db.scalar(select(User).where(User.username == normalized)):
+            existing = await db.scalar(select(User).where(User.username == normalized))
+            if existing and if_missing:
+                typer.echo(str(existing.id))
+                return
+            if existing:
                 raise typer.BadParameter("username already exists")
+            if not supplied_password:
+                raise typer.BadParameter(
+                    "password or --password-file is required in non-interactive mode"
+                )
             role_row = await db.scalar(select(Role).where(Role.name == role))
             if not role_row:
                 raise typer.BadParameter("unknown role")
-            user = User(username=normalized, password_hash=hash_password(password), roles=[role_row])
+            user = User(
+                username=normalized,
+                password_hash=hash_password(supplied_password),
+                roles=[role_row],
+            )
             db.add(user)
             await db.flush()
             await append_audit(db, actor_type="local_admin", actor_id=None, action="user.created", target_type="user", target_id=str(user.id), payload={"username": normalized, "role": role})

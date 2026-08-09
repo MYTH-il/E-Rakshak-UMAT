@@ -16,8 +16,13 @@ import typer
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from umat.contracts import ContractError
 from umat.executors.protocol import ExecutorStopRequested, raise_for_stop, signature_message
-from umat.windows.bundle import NativeWindowsValidator, WindowsBundleBuilder, sha256_file
+from umat.windows.bundle import (
+    NativeWindowsValidator,
+    WindowsBundleBuilder,
+    sha256_file,
+)
 from umat.windows.cape import CapeClient
 
 app = typer.Typer(no_args_is_help=True)
@@ -110,6 +115,7 @@ class WindowsExecutor:
                 if status_value.get("status") in {"failed_analysis", "failed_processing"}:
                     raise RuntimeError(f"CAPE task failed: {status_value}")
                 native_root = self.handoff_root / str(task_id)
+                self._wait_for_handoff(claim, common, native_root, poll_seconds)
                 target = status_value.get("target")
                 detected_type = target.get("file", {}).get("type") if isinstance(target, dict) else target
                 bundle = WindowsBundleBuilder(self.private_key, str(self.state["executor_id"]), self.native_validator).build(analysis_run_id=UUID(claim["analysis_run_id"]), sample_sha256=claim["sample_sha256"], cape_task_id=task_id, cape_package=status_value.get("package"), detected_type=str(detected_type) if detected_type else None, profile_snapshot=claim["execution_configuration"], native_root=native_root, destination=workspace / "windows-result")
@@ -125,6 +131,17 @@ class WindowsExecutor:
                     acknowledgement,
                     claim["lease_token"],
                 ).raise_for_status()
+        except ContractError as exc:
+            failure = common | {
+                "error_code": "windows_native_evidence_invalid",
+                "detail": str(exc)[:2000],
+                "retryable": False,
+            }
+            self.mutate(
+                f"/api/internal/v1/stages/{claim['stage_id']}/fail",
+                failure,
+                claim["lease_token"],
+            ).raise_for_status()
         except Exception as exc:
             failure = common | {"error_code": "windows_executor_failure", "detail": str(exc)[:2000], "retryable": True}
             self.mutate(f"/api/internal/v1/stages/{claim['stage_id']}/fail", failure, claim["lease_token"]).raise_for_status()
@@ -162,6 +179,31 @@ class WindowsExecutor:
                 return value
             time.sleep(poll_seconds)
 
+    def _wait_for_handoff(
+        self,
+        claim: dict[str, Any],
+        common: dict[str, Any],
+        native_root: Path,
+        poll_seconds: float,
+        timeout_seconds: int = 300,
+    ) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            manifest = native_root / "manifest.json"
+            hashes = native_root / "hashes.sha256"
+            if manifest.is_file() and manifest.stat().st_size > 0 and hashes.is_file():
+                return
+            heartbeat = common | {"state": "running"}
+            response = self.mutate(
+                f"/api/internal/v1/stages/{claim['stage_id']}/heartbeat",
+                heartbeat,
+                claim["lease_token"],
+            )
+            response.raise_for_status()
+            raise_for_stop(response.json())
+            time.sleep(poll_seconds)
+        raise RuntimeError("WinST/DT handoff was not published before the readiness deadline")
+
     def _upload_native_inputs(self, claim: dict[str, Any], native: Path) -> None:
         candidates = [(native / "manifest.json", "platform_manifest", "application/json"), (native / "network/capture.pcapng", "pcap", "application/vnd.tcpdump.pcap"), (native / "behavior/access_events.json", "access_events", "application/json"), (native / "analysis/c2-static-prior.json", "static_prior", "application/json"), (native / "behavior/trace.etl", "raw_etl", "application/octet-stream")]
         for path, kind, media_type in candidates:
@@ -178,13 +220,42 @@ class WindowsExecutor:
 
 
 @app.command()
-def run(umat_url: str = typer.Option("http://127.0.0.1:8080"), cape_url: str = typer.Option(...), cape_token: str | None = typer.Option(None), cape_management_url: str | None = typer.Option(None), cape_management_token: str | None = typer.Option(None), handoff_root: Path = typer.Option(Path("/srv/winstdt/handoff")), schema_root: Path = typer.Option(...), work_root: Path = typer.Option(Path("var/windows-work")), state_path: Path = typer.Option(Path("var/windows-executor/state.json")), enrollment_token: str | None = typer.Option(None), name: str = typer.Option("windows-executor"), once: bool = typer.Option(False), poll_seconds: float = typer.Option(5.0, min=0.5)) -> None:
+def run(
+    umat_url: str = typer.Option("http://127.0.0.1:8080", envvar="UMAT_EXECUTOR_URL"),
+    cape_url: str = typer.Option(..., envvar="UMAT_CAPE_URL"),
+    cape_token: str | None = typer.Option(None, envvar="UMAT_CAPE_API_TOKEN"),
+    cape_management_url: str | None = typer.Option(
+        None, envvar="UMAT_CAPE_MANAGEMENT_URL"
+    ),
+    cape_management_token: str | None = typer.Option(
+        None, envvar="UMAT_CAPE_MANAGEMENT_TOKEN"
+    ),
+    handoff_root: Path = typer.Option(
+        Path("/srv/winstdt/handoff"), envvar="UMAT_WINDOWS_HANDOFF_ROOT"
+    ),
+    schema_root: Path = typer.Option(..., envvar="UMAT_WINDOWS_SCHEMA_ROOT"),
+    work_root: Path = typer.Option(
+        Path("var/windows-work"), envvar="UMAT_WINDOWS_WORK_ROOT"
+    ),
+    state_path: Path = typer.Option(
+        Path("var/windows-executor/state.json"), envvar="UMAT_WINDOWS_STATE_PATH"
+    ),
+    enrollment_token: str | None = typer.Option(
+        None, envvar="UMAT_WINDOWS_ENROLLMENT_TOKEN"
+    ),
+    name: str = typer.Option("windows-executor", envvar="UMAT_WINDOWS_EXECUTOR_NAME"),
+    enroll_only: bool = typer.Option(False, help="Enroll and publish capabilities, then exit"),
+    once: bool = typer.Option(False),
+    poll_seconds: float = typer.Option(5.0, min=0.5),
+) -> None:
     work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     executor = WindowsExecutor(umat_url, state_path, CapeClient(cape_url, cape_token, cape_management_url, cape_management_token), handoff_root, schema_root, work_root)
     if not executor.state:
         if not enrollment_token:
             raise typer.BadParameter("enrollment-token is required on first run")
         executor.enroll(enrollment_token, name)
+    if enroll_only:
+        return
     while True:
         processed = executor.process_profile_operation() or executor.process_stage(poll_seconds)
         if once:

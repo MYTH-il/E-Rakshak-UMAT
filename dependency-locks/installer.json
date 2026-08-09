@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "platform": "manylinux_2_17_x86_64",
+  "python": "3.12",
+  "uv": {
+    "version": "0.12.3",
+    "artifact": "uv-0.12.3-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "1482d1462b1aecd18ee33627363fe1c63d6a194f12d40d37efc446d9e0d800a1",
+    "source": "https://pypi.org/project/uv/0.12.3/"
+  }
+}

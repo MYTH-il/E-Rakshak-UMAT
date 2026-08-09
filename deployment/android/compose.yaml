@@ -21,6 +21,7 @@ services:
       POSTGRES_PORT: "5432"
       MOBSF_ASYNC_ANALYSIS: "1"
       MOBSF_ANALYZER_IDENTIFIER: emulator-5554
+      MOBSF_API_KEY: ${MOBSF_API_KEY:?set MOBSF_API_KEY}
     volumes: ["mobsf-data:/home/mobsf/.MobSF"]
     depends_on: [postgres]
     networks: [mobsf]

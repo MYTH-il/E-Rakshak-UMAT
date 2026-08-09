@@ -1,0 +1,61 @@
+diff --git a/cape/modules/reporting/winstdt_handoff_export.py b/cape/modules/reporting/winstdt_handoff_export.py
+--- a/cape/modules/reporting/winstdt_handoff_export.py
++++ b/cape/modules/reporting/winstdt_handoff_export.py
+@@ -65,6 +65,8 @@ class ExportOptions:
+     fail_on_validator_error: bool
+     pcap_converter: str | None
+     default_profile: str = "standard"
++    guest_vm_identity: str = "unknown"
++    guest_ip: str = "unknown"
+ 
+ 
+ class WinstdtHandoffExport(Report):
+@@ -120,6 +122,8 @@ def options_from_mapping(values: dict[str, Any]) -> ExportOptions:
+         fail_on_validator_error=boolean("fail_on_validator_error", True),
+         pcap_converter=converter or "editcap",
+         default_profile=text("default_profile", "standard"),
++        guest_vm_identity=text("guest_vm_identity", "unknown"),
++        guest_ip=text("guest_ip", "unknown"),
+     )
+ 
+ 
+@@ -305,6 +309,7 @@ def build_manifest(
+     access_status: dict[str, Any],
+ ) -> dict[str, Any]:
+     info = as_dict(results.get("info"))
++    machine = as_dict(info.get("machine"))
+     task_id = get_task_id(results)
+     telemetry = build_telemetry(package.telemetry_sidecar)
+     errors = list(package.errors)
+@@ -324,8 +329,13 @@ def build_manifest(
+         "detonation_end_utc": cape_time(info.get("ended")),
+         "guest_vm_identity": {
+             "image_version": options.image_version,
+-            "vm_uuid": first_text(info.get("machine_uuid"), info.get("machine_id"), "unknown"),
+-            "guest_ip": first_text(info.get("machine_ip"), info.get("guest_ip"), "unknown"),
++            "vm_uuid": first_text(
++                info.get("machine_uuid"), info.get("machine_id"), machine.get("uuid"),
++                options.guest_vm_identity,
++            ),
++            "guest_ip": first_text(
++                info.get("machine_ip"), info.get("guest_ip"), machine.get("ip"), options.guest_ip
++            ),
+         },
+         "network_mode": options.network_mode,
+         "static_risk_score": sample_meta["static_risk_score"],
+diff --git a/tests/test_winstdt_handoff_export.py b/tests/test_winstdt_handoff_export.py
+--- a/tests/test_winstdt_handoff_export.py
++++ b/tests/test_winstdt_handoff_export.py
+@@ -49,3 +49,5 @@ class WinstdtHandoffExportTests(unittest.TestCase):
+             fail_on_validator_error=True,
+             pcap_converter=None,
++            guest_vm_identity="winstdt-win10-22h2",
++            guest_ip="10.66.0.101",
+         )
+@@ -75,3 +77,6 @@ class WinstdtHandoffExportTests(unittest.TestCase):
+         manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+         self.assertEqual(manifest["status"], "completed")
++        self.assertEqual(manifest["guest_vm_identity"]["vm_uuid"], "vm-uuid-test")
++        self.assertEqual(manifest["guest_vm_identity"]["guest_ip"], "10.66.0.101")
++        self.assertNotEqual(manifest["tool_versions"]["cape_git_ref"], "unknown")
+         self.assertTrue(manifest["telemetry"]["telemetry_degraded"])

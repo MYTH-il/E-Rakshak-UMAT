@@ -6,6 +6,11 @@ system PostgreSQL cluster on `5432`.
 
 ## PostgreSQL with Docker
 
+The UMAT control-plane database is pinned to PostgreSQL 18.4. Its volume is deliberately named
+`umat-postgres-18` so Docker cannot attach an older major-version data directory by accident. The
+volume mounts `/var/lib/postgresql`, matching the version-specific `PGDATA` layout introduced by
+the official PostgreSQL 18 image.
+
 ```bash
 docker compose -f deployment/single-host/compose.yaml up -d postgres
 cp .env.example .env

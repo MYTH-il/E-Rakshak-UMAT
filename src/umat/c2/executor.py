@@ -329,10 +329,12 @@ class C2Executor:
 
 @app.command()
 def run(
-    base_url: str = typer.Option("http://127.0.0.1:8080"),
-    state_path: Path = typer.Option(Path("var/c2-executor/state.json")),
-    work_root: Path = typer.Option(Path("var/c2-work")),
-    runtime_root: Path | None = typer.Option(None),
+    base_url: str = typer.Option("http://127.0.0.1:8080", envvar="UMAT_EXECUTOR_URL"),
+    state_path: Path = typer.Option(
+        Path("var/c2-executor/state.json"), envvar="UMAT_C2_STATE_PATH"
+    ),
+    work_root: Path = typer.Option(Path("var/c2-work"), envvar="UMAT_C2_WORK_ROOT"),
+    runtime_root: Path | None = typer.Option(None, envvar="UMAT_C2_RUNTIME_ROOT"),
     runtime_commit: str = typer.Option("47225ecb439936659e55ffa9118db083bb2f56c2"),
     runtime_patch_sha256: str = typer.Option(
         "0d82a65d6ac3d3d829f622b6bb49a8b4a1e66470355bb73ba8cdf8ea70278b57"
@@ -340,8 +342,9 @@ def run(
     runtime_timeout_seconds: int = typer.Option(1800, min=1),
     max_result_bytes: int = typer.Option(1024 * 1024 * 1024, min=1),
     fixture_runtime: bool = typer.Option(False, help="Use deterministic test runtime"),
-    enrollment_token: str | None = typer.Option(None),
-    name: str = typer.Option("c2-executor"),
+    enrollment_token: str | None = typer.Option(None, envvar="UMAT_C2_ENROLLMENT_TOKEN"),
+    name: str = typer.Option("c2-executor", envvar="UMAT_C2_EXECUTOR_NAME"),
+    enroll_only: bool = typer.Option(False, help="Enroll and publish capabilities, then exit"),
     once: bool = typer.Option(False),
     poll_seconds: float = typer.Option(2.0, min=0.1),
 ) -> None:
@@ -362,6 +365,8 @@ def run(
         if not enrollment_token:
             raise typer.BadParameter("enrollment-token is required on first run")
         executor.enroll(enrollment_token, name)
+    if enroll_only:
+        return
     while True:
         processed = executor.process_once()
         if once:

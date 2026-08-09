@@ -21,7 +21,7 @@ import typer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MANIFEST_PATH = PROJECT_ROOT / "deployment/full-stack/manifest.json"
-COMPONENTS = ("control-plane", "windows", "android", "services")
+COMPONENTS = ("control-plane", "windows", "android", "c2", "services")
 app = typer.Typer(no_args_is_help=True)
 
 
@@ -178,6 +178,9 @@ def acquire_checkout(runner: CommandRunner, path: Path, component: dict[str, Any
             typer.echo(f"= verify existing checkout {path}")
         return
     runner.run(
+        [command("sudo"), "-n", "install", "-d", "-m", "0755", str(path.parent)]
+    )
+    runner.run(
         [
             command("sudo"),
             "-n",
@@ -226,6 +229,7 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
     values = [
         ("UMAT_POSTGRES_PASSWORD", postgres_password),
         ("MOBSF_DATABASE_PASSWORD", secrets.token_urlsafe(36)),
+        ("MOBSF_API_KEY", secrets.token_urlsafe(48)),
         ("MOBSF_POSTGRES_IMAGE_DIGEST", "95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"),
         ("MOBSF_IMAGE", "umat-mobsf:6462901d"),
         ("UMAT_DATABASE_URL", f"postgresql+asyncpg://umat:{postgres_password}@127.0.0.1:55432/umat"),
@@ -376,12 +380,31 @@ def install(
         False,
         help="Install the Windows host stack without completing a guest VM",
     ),
+    skip_runtime_acceptance: bool = typer.Option(
+        False,
+        help="Explicitly leave harmless upstream runtime acceptance pending",
+    ),
+    admin_username: str = typer.Option("admin"),
+    admin_password_file: Path | None = typer.Option(
+        None, help="Mode-0600 password file used only when the administrator is absent"
+    ),
+    skip_admin_bootstrap: bool = typer.Option(False),
+    skip_executor_enrollment: bool = typer.Option(
+        False, help="Install executor units but leave one-time enrollment pending"
+    ),
+    accept_android_sdk_licenses: bool = typer.Option(
+        False, help="Accept Android SDK licenses for the pinned API-30 runtime"
+    ),
 ) -> None:
     manifest = load_manifest()
     selected = selected_components(component)
-    if execute and "windows" in selected and not accept_unlicensed_source:
+    if execute and selected.intersection({"windows", "c2"}) and not accept_unlicensed_source:
         raise typer.BadParameter(
             "Windows/C2 installation requires explicit --accept-unlicensed-source authorization"
+        )
+    if execute and "android" in selected and not accept_android_sdk_licenses:
+        raise typer.BadParameter(
+            "Android installation requires explicit --accept-android-sdk-licenses"
         )
     if (
         execute
@@ -398,6 +421,20 @@ def install(
     if execute:
         runner.run([command("sudo"), "-n", "true"])
     environment_file = install_environment(runner, manifest)
+
+    if "c2" in selected:
+        acquire_checkout(
+            runner,
+            Path(manifest["paths"]["c2_checkout"]),
+            manifest["components"]["c2"],
+        )
+        if "windows" not in selected:
+            winstdt_checkout = Path(manifest["paths"]["winstdt_checkout"])
+            acquire_checkout(runner, winstdt_checkout, manifest["components"]["winstdt"])
+            c2_setup = [str(winstdt_checkout / "scripts/install-c2-analyzer.sh")]
+            if execute:
+                c2_setup.append("--execute")
+            runner.run(c2_setup, cwd=winstdt_checkout)
 
     if "windows" in selected:
         checkout = Path(manifest["paths"]["winstdt_checkout"])
@@ -418,9 +455,21 @@ def install(
         if execute:
             cape_integration.append("--execute")
         runner.run(cape_integration)
+        if not allow_no_windows_guest and not skip_runtime_acceptance:
+            acceptance = [str(checkout / "scripts/validate-deployment.sh")]
+            if execute:
+                acceptance.append("--execute")
+            runner.run(acceptance, cwd=checkout)
 
     if "android" in selected:
         checkout = Path(manifest["paths"]["android_checkout"])
+        acquire_checkout(runner, checkout, manifest["components"]["android"])
+        android_runtime = [
+            str(PROJECT_ROOT / "deployment/android/install-runtime.sh")
+        ]
+        if execute:
+            android_runtime.extend(["--execute", "--accept-sdk-licenses"])
+        runner.run(android_runtime)
         bootstrap = [
             command("sudo"),
             "-n",
@@ -465,6 +514,28 @@ def install(
             cwd=PROJECT_ROOT,
             environment=environment,
         )
+        if not skip_admin_bootstrap:
+            administrator = [
+                command("uv"),
+                "run",
+                "umat-admin",
+                "create-user",
+                "--username",
+                admin_username,
+                "--role",
+                "administrator",
+                "--if-missing",
+                "--non-interactive",
+            ]
+            if admin_password_file is not None:
+                administrator.extend(
+                    ["--password-file", str(admin_password_file.expanduser().resolve())]
+                )
+            runner.run(
+                administrator,
+                cwd=PROJECT_ROOT,
+                environment=environment,
+            )
 
     if "services" in selected:
         service_script = PROJECT_ROOT / "deployment/full-stack/install-services.sh"
@@ -472,7 +543,23 @@ def install(
         if execute:
             arguments.append("--execute")
         runner.run(arguments)
+        if not skip_executor_enrollment:
+            enrollment_script = PROJECT_ROOT / "deployment/full-stack/enroll-executors.sh"
+            enrollment_base = [
+                str(enrollment_script),
+                "--project-root",
+                str(PROJECT_ROOT),
+                "--admin",
+                admin_username,
+            ]
+            for executor_component in ("windows", "c2", "android"):
+                if executor_component in selected:
+                    runner.run(
+                        [*enrollment_base, "--component", executor_component]
+                    )
     record_state(runner, manifest, selected)
+    if execute:
+        runner.run([str(PROJECT_ROOT / ".venv/bin/umat-deploy"), "status"])
     typer.echo("deployment complete" if execute else "dry-run complete; no host changes made")
 
 
@@ -491,13 +578,23 @@ def status() -> None:
         "winstdt": paths["winstdt_checkout"],
         "cape": paths["cape_root"],
         "c2_runtime": f"{paths['winstdt_runtime_root']}/libexec/c2-exfil/47225ec-winstdt.1",
+        "c2_source": paths["c2_checkout"],
         "android": paths["android_checkout"],
     }
     for name, location in locations.items():
         check(f"path:{name}", Path(location).exists(), location)
+    uv_version = subprocess.run(  # noqa: S603
+        [command("uv"), "--version"], check=False, capture_output=True, text=True
+    ).stdout.strip()
+    check(
+        "installer_uv",
+        uv_version == f"uv {manifest['components']['installer']['uv_version']} (x86_64-unknown-linux-gnu)",
+        uv_version,
+    )
     for name, component_key, location in (
         ("winstdt_revision", "winstdt", paths["winstdt_checkout"]),
         ("cape_revision", "cape", paths["cape_root"]),
+        ("c2_revision", "c2", paths["c2_checkout"]),
         ("android_revision", "android", paths["android_checkout"]),
     ):
         path = Path(location)
@@ -521,6 +618,9 @@ def status() -> None:
         "umat-report-worker.service",
         "umat-adapter-worker.service",
         "umat-cape-gateway.service",
+        "umat-windows-executor.service",
+        "umat-c2-executor.service",
+        "umat-android-executor.service",
     ):
         active = subprocess.run(  # noqa: S603
             [command("systemctl"), "is-active", "--quiet", service], check=False
@@ -552,6 +652,69 @@ def status() -> None:
         image_id == manifest["components"]["android"]["image_digest"],
         {"expected": manifest["components"]["android"]["image_digest"], "observed": image_id},
     )
+    emulator = Path("/usr/lib/android-sdk/emulator/emulator")
+    emulator_output = subprocess.run(  # noqa: S603
+        [str(emulator), "-version"], check=False, capture_output=True, text=True
+    ).stdout if emulator.is_file() else ""
+    expected_emulator = manifest["components"]["android"]["emulator_version"]
+    check(
+        "android_emulator",
+        f"Android emulator version {expected_emulator}" in emulator_output,
+        emulator_output.splitlines()[0] if emulator_output else "unavailable",
+    )
+    runtime_manifest_path = Path(locations["c2_runtime"]) / "runtime-manifest.json"
+    runtime_manifest = (
+        json.loads(runtime_manifest_path.read_text()) if runtime_manifest_path.is_file() else {}
+    )
+    check(
+        "c2_effective_runtime",
+        runtime_manifest.get("upstream_commit") == manifest["components"]["c2"]["commit"]
+        and runtime_manifest.get("patch_series_sha256")
+        == manifest["components"]["c2"]["patch_series_sha256"],
+        runtime_manifest or "runtime manifest unavailable",
+    )
+    handoff_root = Path(paths["winstdt_runtime_root"]) / "handoff"
+    handoffs = sorted(
+        (item for item in handoff_root.glob("*/manifest.json") if item.parent.name.isdigit()),
+        key=lambda item: int(item.parent.name),
+        reverse=True,
+    )
+    accepted_handoff: dict[str, Any] | None = None
+    validator = Path(paths["winstdt_runtime_root"]) / "bin/winstdt"
+    for handoff in handoffs:
+        try:
+            document = json.loads(handoff.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if document.get("status") != "completed":
+            continue
+        pcap = handoff.parent / "network/capture.pcapng"
+        etl = handoff.parent / "behavior/trace.etl"
+        if not pcap.is_file() or not etl.is_file() or pcap.stat().st_size <= 0 or etl.stat().st_size <= 0:
+            continue
+        validation = subprocess.run(  # noqa: S603
+            [str(validator), "validate-bundle", str(handoff.parent)],
+            check=False,
+            capture_output=True,
+            text=True,
+        ) if validator.is_file() else None
+        if validation is not None and validation.returncode == 0:
+            accepted_handoff = {
+                "task_id": handoff.parent.name,
+                "pcap_bytes": pcap.stat().st_size,
+                "etl_bytes": etl.stat().st_size,
+            }
+            break
+    check("windows_harmless_handoff", accepted_handoff is not None, accepted_handoff or "none")
+    for component in ("windows", "c2", "android"):
+        executor_environment = Path(f"/etc/umat/{component}-executor.env")
+        if path_exists(executor_environment):
+            environment_text = read_environment_text(executor_environment)
+            isolated = "UMAT_DATABASE_URL=" not in environment_text
+            detail: Any = "PostgreSQL credential absent" if isolated else "credential leak"
+        else:
+            isolated, detail = False, "environment unavailable"
+        check(f"executor_isolation:{component}", isolated, detail)
     for name, url in (
         ("umat_api", "http://127.0.0.1:8080/health/live"),
         ("cape_gateway", "http://127.0.0.1:8091/health/live"),
@@ -573,8 +736,11 @@ def status() -> None:
 
 
 def path_exists(path: Path) -> bool:
-    if path.exists():
-        return True
+    try:
+        if path.exists():
+            return True
+    except PermissionError:
+        pass
     return subprocess.run(  # noqa: S603
         [command("sudo"), "-n", "test", "-e", str(path)], check=False
     ).returncode == 0

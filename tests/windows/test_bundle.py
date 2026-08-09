@@ -83,6 +83,8 @@ def test_windows_profile_resource_bounds() -> None:
     assert CreateWindowsProfileRequest.model_validate(valid).analysis_profile == "standard"
     with pytest.raises(ValueError):
         CreateWindowsProfileRequest.model_validate(valid | {"vcpus": 0})
+    with pytest.raises(ValueError):
+        CreateWindowsProfileRequest.model_validate(valid | {"architecture": "x86"})
 
 
 def test_windows_executor_import_does_not_load_database_code() -> None:

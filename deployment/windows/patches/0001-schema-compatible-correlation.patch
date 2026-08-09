@@ -1,0 +1,54 @@
+diff --git a/cape/modules/reporting/winstdt_handoff_export.py b/cape/modules/reporting/winstdt_handoff_export.py
+index 84c5f7d..d58ab02 100644
+--- a/cape/modules/reporting/winstdt_handoff_export.py
++++ b/cape/modules/reporting/winstdt_handoff_export.py
+@@ -332,7 +332,15 @@ def build_manifest(
+         "profile": profile,
+         "resolved_options": resolved_options,
+         "capabilities": capabilities,
+-        "correlation": access_status,
++        # The detailed access-event status remains a separately hashed artifact.
++        # Project only the fields owned by handoff_manifest.schema.json here.
++        "correlation": {
++            "access_events_path": ACCESS_EVENTS_PATH,
++            "event_count": access_status["event_count"],
++            "clock_quality_acceptable": access_status["clock_quality_acceptable"],
++            "host_network_correlation_enabled": access_status["host_network_correlation_enabled"],
++            "reason": access_status["reason_code"],
++        },
+         "telemetry": telemetry,
+         "tool_versions": {
+             "cape_git_ref": options.cape_git_ref,
+@@ -355,7 +364,6 @@ def build_manifest(
+             "report_json": REPORT_JSON_PATH,
+             "report_html": REPORT_HTML_PATH,
+             "access_events": ACCESS_EVENTS_PATH,
+-            "access_events_status": ACCESS_EVENTS_STATUS_PATH,
+             **({"clock_sync": CLOCK_SYNC_PATH} if usable_file(package.clock_sync_source) else {}),
+         },
+         "integrity": {
+@@ -846,6 +854,7 @@ def write_access_events(path: Path, status_path: Path, results: dict[str, Any],
+         "source": status["source"],
+         "etw_corroboration_state": status["etw_corroboration_state"],
+         "clock_algorithm": status["clock_algorithm"],
++        "clock_quality_acceptable": bool(clock.get("quality", {}).get("acceptable", False)),
+         "maximum_uncertainty_ns": status["maximum_uncertainty_ns"],
+         "host_network_correlation_enabled": status["correlation_eligible"],
+         "reason_code": status["reason_code"],
+diff --git a/tests/test_winstdt_handoff_export.py b/tests/test_winstdt_handoff_export.py
+index 5238eb8..215ea12 100644
+--- a/tests/test_winstdt_handoff_export.py
++++ b/tests/test_winstdt_handoff_export.py
+@@ -82,5 +82,12 @@ class WinstdtHandoffExportTests(unittest.TestCase):
+         self.assertEqual(json.loads((bundle / "behavior" / "access_events.json").read_text()), [])
+         self.assertFalse(manifest["correlation"]["host_network_correlation_enabled"])
++        self.assertEqual(
++            set(manifest["correlation"]),
++            {"access_events_path", "event_count", "clock_quality_acceptable", "host_network_correlation_enabled", "reason"},
++        )
++        schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/handoff_manifest.schema.json").read_text())
++        import jsonschema
++        jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(manifest)
+         self.assertFalse((bundle / "behavior" / "events.jsonl").exists())
+         report = json.loads((bundle / "report.json").read_text(encoding="utf-8"))
+         self.assertEqual(report["session_id"], "42")

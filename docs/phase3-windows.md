@@ -5,6 +5,8 @@ Phase 3 connects the control plane to the pinned WinST/DT and CAPE runtime. The 
 1. Claims only Windows platform stages and downloads the sample through a signed lease-bound
    attachment endpoint.
 2. Submits it to CAPE using the immutable selected VM/profile snapshot.
+   Native PE headers select the unambiguous `exe` or `dll` package so archive overlays cannot
+   cause CAPE to abort before ETW finalization; other formats retain CAPE auto-detection.
 3. Records the native CAPE task ID immediately and recovers it after restart without another
    submission.
 4. Polls CAPE while renewing its lease.
@@ -35,3 +37,15 @@ umat-windows-adapter adapt --run-id ANALYSIS_RUN_UUID
 Real detonation requires the pinned CAPE/WinST deployment and controlled malware network. Unit
 and PostgreSQL integration tests use harmless fixtures and never execute uploaded files.
 
+The deployment applies the ordered, digest-locked reporter patches under
+`deployment/windows/patches/`. They make the upstream reporter conform to its own locked handoff
+schema and populate producer, guest, image, rule, and tool identity from deployment configuration.
+The executor waits for atomic handoff publication after CAPE reaches a terminal native state and
+fails malformed or incomplete native evidence without retrying the already-recorded CAPE task.
+
+The clean-host installer delegates baseline VM construction and snapshot sealing to the locked
+WinST/DT scripts. UMAT does not replace VMCloak or CAPE's native machine lifecycle. Dynamically
+cloned selectable profiles remain fail-closed: the baseline-profile run is validated, while the
+first cloned-profile acceptance task reached the CAPE agent but timed out during analyzer upload
+and produced no ETL. That clone path is not promoted until the upstream-supported snapshot flow
+passes the same harmless evidence gate.

@@ -4,6 +4,26 @@
   "release_policy": "Only entries with redistribution_allowed=true and a verified runtime lock may be included in a distributable UMAT deployment artifact.",
   "components": [
     {
+      "name": "uv installer bootstrap",
+      "repository": "https://github.com/astral-sh/uv",
+      "lock_file": "dependency-locks/installer.json",
+      "commit": null,
+      "license": "Apache-2.0 OR MIT",
+      "license_evidence": "upstream package metadata",
+      "redistribution_allowed": true,
+      "runtime_status": "x86_64_wheel_hash_pinned"
+    },
+    {
+      "name": "PostgreSQL 18.4 control-plane database",
+      "repository": "https://github.com/docker-library/postgres",
+      "lock_file": "dependency-locks/umat-postgres.json",
+      "commit": null,
+      "license": "PostgreSQL License",
+      "license_evidence": "official PostgreSQL image and upstream distribution",
+      "redistribution_allowed": true,
+      "runtime_status": "fresh_migration_and_full_suite_validated"
+    },
+    {
       "name": "WinST/DT module",
       "repository": "https://github.com/MYTH-il/WinST-DT-module.git",
       "lock_file": "dependency-locks/winstdt.json",
@@ -11,7 +31,7 @@
       "license": null,
       "license_evidence": "No license file exists in the locked commit tree",
       "redistribution_allowed": false,
-      "runtime_status": "authorization_and_runtime_validation_required"
+      "runtime_status": "runtime_validated_redistribution_authorization_required"
     },
     {
       "name": "CAPEv2",
@@ -21,7 +41,7 @@
       "license": "GNU Affero General Public License v3.0",
       "license_evidence": "upstream LICENSE",
       "redistribution_allowed": true,
-      "runtime_status": "gateway_contract_defined_runtime_pending"
+      "runtime_status": "gateway_lifecycle_and_windows_analysis_runtime_validated"
     },
     {
       "name": "E-Rakshak Android/MobSF fork",

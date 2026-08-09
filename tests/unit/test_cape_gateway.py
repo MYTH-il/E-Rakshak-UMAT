@@ -5,6 +5,7 @@ import uuid
 from fastapi.testclient import TestClient
 
 from umat.cape_gateway.app import create_app
+from umat.cape_gateway.manager import CapeProfileManager
 from umat.cape_gateway.schemas import MachineResult, ProfileRequest
 
 TOKEN = "t" * 48
@@ -74,3 +75,19 @@ def test_gateway_rejects_deletion_outside_managed_namespace(monkeypatch) -> None
     )
     assert response.status_code == 422
     assert manager.deleted is None
+
+
+def test_gateway_rejects_architecture_not_provided_by_baseline(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("UMAT_CAPE_GATEWAY_TOKEN", TOKEN)
+    client = TestClient(create_app(FakeManager()))
+    response = client.post(
+        "/api/v1/machines",
+        json=profile() | {"architecture": "x86"},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 422
+
+
+def test_non_administrator_guest_profile_is_actually_demoted() -> None:
+    script = CapeProfileManager._profile_script("encoded")
+    assert "Remove-LocalGroupMember -Group 'Administrators'" in script

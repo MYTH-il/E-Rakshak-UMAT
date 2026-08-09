@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,7 +22,7 @@ class ProfileRequest(BaseModel):
     profile_id: str = Field(pattern=r"^[0-9a-f-]{36}$")
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
     windows_version: str = Field(min_length=1, max_length=128)
-    architecture: str = Field(pattern=r"^(x64|x86)$")
+    architecture: Literal["x64"]
     vcpus: int = Field(ge=1, le=32)
     ram_mb: int = Field(ge=2048, le=131072)
     disk_gb: int = Field(ge=40, le=2048)

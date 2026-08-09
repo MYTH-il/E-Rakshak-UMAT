@@ -46,6 +46,7 @@ async def process_once(db: AsyncSession) -> bool:
         return True
     settings = get_settings()
     store = LocalArtifactStore(settings.quarantine_root, settings.artifact_root)
+    stage_id = stage.id
     try:
         if stage.stage_type == StageType.C2_ADAPTATION:
             await C2Adapter(store).adapt_run(db, run.id)
@@ -59,13 +60,13 @@ async def process_once(db: AsyncSession) -> bool:
             ).adapt_run(db, run.id)
     except Exception as exc:
         await db.rollback()
-        failed = await db.get(AnalysisStage, stage.id, with_for_update=True)
+        failed = await db.get(AnalysisStage, stage_id, with_for_update=True)
         if failed:
             failed.state = StageState.FAILED
             failed.failure_code = "adaptation_failed"
             failed.failure_detail = str(exc)[:2000]
         await db.commit()
-        raise
+        return True
     return True
 
 

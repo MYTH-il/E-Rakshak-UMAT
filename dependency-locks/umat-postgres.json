@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "component": "UMAT control-plane PostgreSQL",
+  "image": "postgres:18.4",
+  "image_digest": "sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636",
+  "architecture": "linux/amd64",
+  "volume_root": "/var/lib/postgresql",
+  "required_features": [
+    "jsonb",
+    "advisory_transaction_locks",
+    "for_update_skip_locked",
+    "transactional_ddl",
+    "native_enums"
+  ],
+  "client_versions_validated": {
+    "sqlalchemy": "2.0.51",
+    "alembic": "1.19.1",
+    "asyncpg": "0.31.0",
+    "psycopg": "3.3.4"
+  },
+  "validated_at": "2026-08-09",
+  "validation_result": "Fresh container initialization and migrations through 0005_android passed; full 73-test PostgreSQL suite, downgrade/re-upgrade migration test, and existing 415-event audit-chain verification passed on PostgreSQL 18.4."
+}

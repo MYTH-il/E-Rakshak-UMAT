@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 
-from umat.windows.cape import CapeClient
+from umat.windows.cape import CapeClient, cape_package_for_sample
 
 
 def test_profile_management_uses_separate_authenticated_gateway() -> None:
@@ -54,6 +54,9 @@ def test_submit_never_uses_original_filename(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert b'attacker-name.exe' not in request.content
         assert b'name="file"; filename="sample.bin"' in request.content
+        assert b'name="timeout"' in request.content
+        assert b"180" in request.content
+        assert b'name="enforce_timeout"' in request.content
         return httpx.Response(200, json={"data": {"task_ids": [7]}})
 
     client = CapeClient("http://cape.invalid")
@@ -61,3 +64,20 @@ def test_submit_never_uses_original_filename(tmp_path: Path) -> None:
         base_url="http://cape.invalid", transport=httpx.MockTransport(handler)
     )
     assert client.submit(sample, {"analysis_profile": "standard"}) == 7
+
+
+def test_cape_package_for_native_pe(tmp_path: Path) -> None:
+    sample = tmp_path / "sample.bin"
+    image = bytearray(128)
+    image[:2] = b"MZ"
+    image[60:64] = (64).to_bytes(4, "little")
+    image[64:68] = b"PE\0\0"
+    sample.write_bytes(image)
+    assert cape_package_for_sample(sample) == "exe"
+
+    image[64 + 22 : 64 + 24] = (0x2000).to_bytes(2, "little")
+    sample.write_bytes(image)
+    assert cape_package_for_sample(sample) == "dll"
+
+    sample.write_bytes(b"PK\x03\x04not-a-pe")
+    assert cape_package_for_sample(sample) == ""

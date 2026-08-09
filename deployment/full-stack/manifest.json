@@ -11,16 +11,21 @@
   "paths": {
     "winstdt_checkout": "/opt/umat/upstreams/winstdt",
     "android_checkout": "/opt/umat/upstreams/android-erakshak",
+    "c2_checkout": "/opt/umat/upstreams/c2-exfil",
     "cape_root": "/opt/CAPEv2",
     "winstdt_runtime_root": "/srv/winstdt",
     "configuration_root": "/etc/umat",
     "state_root": "/var/lib/umat-deploy"
   },
   "components": {
+    "installer": {
+      "uv_version": "0.12.3"
+    },
     "winstdt": {
       "repository": "https://github.com/MYTH-il/WinST-DT-module.git",
       "commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8",
       "tree_sha256": "bc015bc8223fcd96846882c1533d308348396affb07f7ec8c7b73fae9a812738",
+      "patch_series_sha256": "9dd8ac177ad7e35cdae342ed26c8d04adb90efdd5e3ce8ef28b1be64ae285cff",
       "license_status": "authorization_required_no_upstream_license_file"
     },
     "cape": {
@@ -39,10 +44,11 @@
       "commit": "6462901d1aaa0b090b867934ea5a01a82d31bc03",
       "tree_sha256": "9c554d1e1e2c7c5e70cf3d5b6504a28bc37ed62b81ddc0b0f3007b4bec2c58fa",
       "image": "umat-mobsf:6462901d",
-      "image_digest": "sha256:f9ca4f7c08d979ed0cb130abb2af5b7bbf0ada349431f4c602e90c0230d06d0a"
+      "image_digest": "sha256:f9ca4f7c08d979ed0cb130abb2af5b7bbf0ada349431f4c602e90c0230d06d0a",
+      "emulator_version": "37.1.11"
     },
     "umat_postgres": {
-      "image": "postgres:16.6@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36",
+      "image": "postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636",
       "port": 55432
     }
   }

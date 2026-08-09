@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,7 +21,7 @@ class CreateWindowsProfileRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*$")
     display_name: str = Field(min_length=1, max_length=128)
     windows_version: str = Field(min_length=1, max_length=128)
-    architecture: str = Field(default="x64", pattern=r"^(x64|x86)$")
+    architecture: Literal["x64"] = "x64"
     vcpus: int = Field(ge=1, le=32)
     ram_mb: int = Field(ge=2048, le=131072)
     disk_gb: int = Field(ge=40, le=2048)

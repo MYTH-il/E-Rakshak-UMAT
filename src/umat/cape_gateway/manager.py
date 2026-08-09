@@ -38,6 +38,7 @@ class CapeProfileConfiguration:
     image_root: Path
     base_domain: str
     base_disk: Path
+    base_windows_version: str
     network: str
     bridge: str
     host_ip: str
@@ -71,6 +72,9 @@ class CapeProfileManager:
                         "/var/lib/libvirt/images/winstdt/winstdt-win10-22h2-golden.qcow2",
                     )
                 ),
+                base_windows_version=os.environ.get(
+                    "UMAT_CAPE_BASE_WINDOWS_VERSION", "Windows 10 22H2"
+                ),
                 network=os.environ.get("UMAT_CAPE_NETWORK", "winstdt-isolated"),
                 bridge=os.environ.get("UMAT_CAPE_BRIDGE", "virbr-winstdt"),
                 host_ip=os.environ.get("UMAT_CAPE_HOST_IP", "10.66.0.1"),
@@ -102,6 +106,10 @@ class CapeProfileManager:
     def _create_locked(self, profile: ProfileRequest) -> MachineResult:
         if profile.cape_template not in self.configuration.allowed_templates:
             raise ProfileManagementError("CAPE template is not approved by this deployment")
+        if profile.windows_version != self.configuration.base_windows_version:
+            raise ProfileManagementError(
+                "requested Windows version does not match the selected deployment baseline"
+            )
         state_path = self.configuration.state_root / f"{profile.profile_id}.json"
         if state_path.is_file():
             state = json.loads(state_path.read_text())
@@ -164,7 +172,7 @@ class CapeProfileManager:
                 ]
             )
             self._run(["virsh", "-c", "qemu:///system", "destroy", label])
-            self._write_cape_machine(label, ip)
+            self._write_cape_machine(label, ip, profile)
             state = {
                 "schema_version": "1.0",
                 "operation_id": operation_id,
@@ -326,6 +334,11 @@ if ($profile.administrator) {{
     try {{ Add-LocalGroupMember -Group 'Administrators' -Member $profile.username -ErrorAction Stop }}
     catch {{ if ($_.Exception.Message -notmatch 'already a member') {{ throw }} }}
   }}
+}} else {{
+  $members = Get-LocalGroupMember -Group 'Administrators' | Select-Object -ExpandProperty Name
+  if ($members | Where-Object {{ $_ -like "*\\$($profile.username)" }}) {{
+    Remove-LocalGroupMember -Group 'Administrators' -Member $profile.username
+  }}
 }}
 """
 
@@ -341,7 +354,7 @@ if ($profile.administrator) {{
                 return candidate
         raise ProfileManagementError("CAPE profile address pool is exhausted")
 
-    def _write_cape_machine(self, label: str, ip: str) -> None:
+    def _write_cape_machine(self, label: str, ip: str, profile: ProfileRequest) -> None:
         path = self.configuration.cape_root / "conf/kvm.conf"
         parser = configparser.ConfigParser()
         parser.read(path)
@@ -357,18 +370,18 @@ if ($profile.administrator) {{
             "snapshot": self.configuration.snapshot,
             "interface": self.configuration.bridge,
             "resultserver_ip": self.configuration.host_ip,
-            "arch": "x64",
+            "arch": profile.architecture,
             "reserved": "no",
         }
-        self._cape_db("add", label, ip)
+        self._cape_db("add", label, ip, profile.architecture)
         try:
             self._atomic_config(path, parser)
         except Exception:
-            self._cape_db("delete", label, "")
+            self._cape_db("delete", label, "", "x64")
             raise
 
     def _remove_cape_machine(self, label: str) -> None:
-        self._cape_db("delete", label, "")
+        self._cape_db("delete", label, "", "x64")
         path = self.configuration.cape_root / "conf/kvm.conf"
         parser = configparser.ConfigParser()
         parser.read(path)
@@ -378,14 +391,14 @@ if ($profile.administrator) {{
         self._atomic_config(path, parser)
 
     def _cape_machine_locked(self, label: str) -> bool:
-        output = self._cape_db("locked", label, "")
+        output = self._cape_db("locked", label, "", "x64")
         return output.strip() == "true"
 
-    def _cape_db(self, action: str, label: str, ip: str) -> str:
+    def _cape_db(self, action: str, label: str, ip: str, architecture: str) -> str:
         script = """import json, sys
 from lib.cuckoo.core.database import init_database
 d = init_database(exists_ok=True)
-action, label, ip = sys.argv[1:4]
+action, label, ip, architecture, snapshot, interface, resultserver_ip = sys.argv[1:8]
 machine = d.view_machine_by_label(label)
 if action == "locked":
     print(json.dumps(bool(machine.locked) if machine else False))
@@ -395,13 +408,17 @@ elif action == "delete":
     d.session.commit()
 elif action == "add":
     if not machine:
-        d.add_machine(name=label, label=label, arch="x64", ip=ip, platform="windows", tags="win10,umat-profile", interface="virbr-winstdt", snapshot="umat-profile-baseline-v1", resultserver_ip="10.66.0.1", resultserver_port=2042, reserved=False)
+        d.add_machine(name=label, label=label, arch=architecture, ip=ip, platform="windows", tags="win10,umat-profile", interface=interface, snapshot=snapshot, resultserver_ip=resultserver_ip, resultserver_port=2042, reserved=False)
     d.session.commit()
 else:
     raise SystemExit("unsupported CAPE database operation")
 """
         return self._capture(
-            ["sudo", "-n", "-u", "cape", "/etc/poetry/bin/poetry", "run", "python", "-c", script, action, label, ip],
+            [
+                "sudo", "-n", "-u", "cape", "/etc/poetry/bin/poetry", "run", "python",
+                "-c", script, action, label, ip, architecture, self.configuration.snapshot,
+                self.configuration.bridge, self.configuration.host_ip,
+            ],
             cwd=self.configuration.cape_root,
         )
 
