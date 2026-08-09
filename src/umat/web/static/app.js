@@ -1,5 +1,29 @@
 "use strict";
 
+// Officer-facing caveat text. Mirrors contracts/vocabularies/caveats.json
+// (descriptions). tests/unit/test_web_ui.py asserts the two stay in sync —
+// an officer must never be shown a bare machine code.
+const CAVEAT_TEXT = {
+  analysis_timed_out: "The analysis ran out of time before finishing. Behaviour that occurs later than the time allowed would not have been seen.",
+  android_api_monitoring_failed: "Monitoring of the app's activity on the device did not work, so its behaviour was only partly recorded.",
+  android_dynamic_stop_failed: "The device did not shut down cleanly after the test, so the final part of the recording may be incomplete.",
+  c2_analysis_failed: "The examination of network traffic failed, even though the rest of the analysis completed. Any servers contacted are not reported here.",
+  c2_workflow_skipped: "Network-traffic analysis was not run for this sample, so no report is made about which servers it contacted. This was a choice made when the analysis was started, not a failure.",
+  c2_network_only: "Only network traffic was available for this analysis. We can report which servers were contacted, but not which specific information was taken from the device.",
+  cape_package_unsupported: "No suitable method was available to run this particular file type, so it could not be fully tested.",
+  clock_uncertainty: "The clocks used to time events did not agree closely enough, which reduces confidence in the order and timing of what happened.",
+  delayed_behavior_possible: "This file may be built to stay inactive for a period, or to act only under conditions not present during the test. A quiet result may not reflect its behaviour on a real device.",
+  guest_profile_out_of_support: "The test system used a version of Windows that is no longer supported, which may not match the device under investigation.",
+  host_network_correlation_unavailable: "We could not reliably link what the file read on the computer to what it sent over the network, so no claim is made about which specific information left the device.",
+  host_telemetry_degraded: "Some monitoring on the test computer did not run, so certain activity may have happened without being recorded. Absence of a finding is not proof it did not occur.",
+  network_capture_incomplete: "The recording of network traffic was incomplete, so some connections may be missing from this report.",
+  network_responses_simulated: "The internet connection was faked during analysis. We can see where this file tried to send information, but not whether it succeeded. Seeing no theft here does not mean the file is safe.",
+  static_analysis_only: "The file was examined but never run. Findings describe what it appears able to do, not what it was observed doing.",
+  static_tool_unavailable: "One of the file-inspection tools did not run, so part of the examination of the file itself is missing.",
+  stimulation_incomplete: "The app was not fully exercised during the test, so features that only activate through further use may not have been triggered.",
+  tls_pinning: "The file used encryption we could not read. We can see who it contacted and how often, but not the contents of what was sent."
+};
+
 const state = { session: null, cases: [], pollTimer: null, activeTab: "overview" };
 const app = document.querySelector("#app");
 
@@ -306,7 +330,7 @@ function renderOverview(content, report, run) {
   content.append(grid);
   content.append(node("h3", "section-title", "Important provenance"), listCard(null, report.provenance, (item) => [item.statement, [human(item.item_type), item.destination].filter(Boolean).join(" · ")]));
   content.append(node("h3", "section-title", "Analysis limitations"));
-  if (report.caveats.length) content.append(listCard(null, report.caveats.map((value) => ({ value })), (item) => [human(item.value), "Caveat included in officer report"]));
+  if (report.caveats.length) content.append(listCard(null, report.caveats.map((value) => ({ value })), (item) => [CAVEAT_TEXT[item.value] || human(item.value), human(item.value)]));
   else content.append(node("div", "notice", "No material analysis limitations were recorded."));
   if (report.tested_profile) content.append(node("h3", "section-title", "Tested OS profile"), listCard(null, [report.tested_profile], (item) => [item.name || item.windows_version || "Windows profile", `${item.windows_version || ""} · ${item.vcpus || "?"} vCPU · ${item.ram_mb ? formatBytes(item.ram_mb * 1024 * 1024) : "RAM unknown"}`]));
 }

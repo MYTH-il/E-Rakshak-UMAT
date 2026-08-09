@@ -58,6 +58,32 @@ NEGATIVE_BLOCKING_CAVEATS = {
 }
 
 
+# Officer-facing wording for each shared data type. The vocabulary values are
+# machine identifiers; an officer reads this instead. Keep every phrase usable
+# in the middle of a sentence ("This sample accessed <phrase> and ...").
+_DATA_TYPE_PHRASES: dict[str, str] = {
+    "browser_credentials": "saved website passwords",
+    "browser_cookies": "saved website login sessions",
+    "browser_history": "web browsing history",
+    "keystrokes": "everything typed on the keyboard",
+    "screenshot": "pictures of the screen",
+    "clipboard": "copied and pasted content",
+    "crypto_wallet": "cryptocurrency wallet files",
+    "system_info": "details about the computer",
+    "file_access": "files stored on the system",
+    "documents": "personal documents",
+    "sms": "text messages, including one-time passcodes",
+    "contacts": "the contact list",
+    "call_log": "the record of calls made and received",
+    "location": "the device's location",
+    "camera": "the camera",
+    "microphone": "the microphone",
+    "calendar": "calendar entries",
+    "device_identity": "identifiers that uniquely identify the device",
+    "other": "other information",
+}
+
+
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -176,7 +202,13 @@ class CaseAggregator:
             c2_adaptation is not None,
             run.c2_analysis_enabled,
         )
-        headline = self._headline(verdict, finding_items, run.platform)
+        information_accessed = self._capabilities(
+            windows_capabilities, exfil_events, run.platform, android_capabilities
+        )
+        destinations = self._destinations(observations)
+        headline = self._headline(
+            verdict, finding_items, run.platform, information_accessed, destinations
+        )
         generated_at = datetime.now(timezone.utc)
         report: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -188,10 +220,8 @@ class CaseAggregator:
             "generated_at": _iso(generated_at),
             "verdict": verdict.value,
             "headline": headline,
-            "information_accessed": self._capabilities(
-                windows_capabilities, exfil_events, run.platform, android_capabilities
-            ),
-            "destinations": self._destinations(observations),
+            "information_accessed": information_accessed,
+            "destinations": destinations,
             "provenance": self._provenance(provenance, run.platform),
             "caveats": caveats,
             "tested_profile": windows_metadata.profile_snapshot if windows_metadata else None,
@@ -558,18 +588,105 @@ class CaseAggregator:
         )
 
     @staticmethod
-    def _headline(verdict: Verdict, findings: list[dict[str, Any]], platform: Platform) -> str:
+    def _headline(
+        verdict: Verdict,
+        findings: list[dict[str, Any]],
+        platform: Platform,
+        information_accessed: list[dict[str, Any]] | None = None,
+        destinations: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """The one sentence an officer reads.
+
+        It must answer the two questions the investigation actually has — what
+        was accessed, and where it went — not report the analysis's own status.
+        "Confirmed malicious behavior was detected during the Windows analysis"
+        is true but tells an officer nothing actionable.
+
+        Falls back to a status sentence only when there is nothing concrete to
+        name, and never claims more than the verdict supports.
+        """
         platform_name = "Windows" if platform == Platform.WINDOWS else "Android"
+        what = CaseAggregator._accessed_phrase(information_accessed or [])
+        where = CaseAggregator._destination_phrase(destinations or [])
+
         if verdict == Verdict.MALICIOUS:
-            return f"Confirmed malicious behavior was detected during the {platform_name} analysis."
+            if what and where:
+                return f"This sample accessed {what} and sent data to {where}."
+            if what:
+                return f"This sample accessed {what} on the analysed system."
+            if where:
+                return f"This sample sent data to {where}."
+            return (
+                f"Confirmed malicious behaviour was detected during the "
+                f"{platform_name} analysis."
+            )
+
         if verdict == Verdict.SUSPICIOUS:
             count = len([item for item in findings if _confidence(str(item["confidence"])) >= 2])
-            return f"{count} suspicious finding{'s' if count != 1 else ''} require analyst review."
+            noun = f"{count} suspicious finding{'s' if count != 1 else ''}"
+            if what and where:
+                return (
+                    f"{noun}: this sample accessed {what} and contacted {where}. "
+                    f"This is not confirmed and requires analyst review."
+                )
+            if where:
+                return (
+                    f"{noun}: this sample contacted {where}. This is not "
+                    f"confirmed and requires analyst review."
+                )
+            return f"{noun} require analyst review."
+
         if verdict == Verdict.NO_MALICIOUS_ACTIVITY_OBSERVED:
-            return "No malicious activity was observed during the completed analysis window."
+            return (
+                "No malicious activity was observed during the completed "
+                "analysis window. See the analysis limitations below before "
+                "treating this file as safe."
+            )
         if verdict == Verdict.FAILED:
             return "The platform analysis failed before a valid result was produced."
-        return "The available evidence is insufficient for a reliable conclusion."
+        return (
+            "The available evidence is insufficient for a reliable conclusion. "
+            "See the analysis limitations below."
+        )
+
+    @staticmethod
+    def _accessed_phrase(information_accessed: list[dict[str, Any]]) -> str:
+        """Plain-language list of what was accessed, strongest evidence first."""
+        order = {"correlated": 0, "observed": 1, "possible": 2, "declared": 3}
+        ranked = sorted(
+            (item for item in information_accessed if item.get("data_type")),
+            key=lambda item: (
+                order.get(str(item.get("evidence_level")), 9),
+                -_confidence(str(item.get("confidence", "unconfirmed"))),
+            ),
+        )
+        names: list[str] = []
+        for item in ranked:
+            label = _DATA_TYPE_PHRASES.get(
+                str(item["data_type"]), str(item["data_type"]).replace("_", " ")
+            )
+            if label not in names:
+                names.append(label)
+        if not names:
+            return ""
+        if len(names) == 1:
+            return names[0]
+        if len(names) == 2:
+            return f"{names[0]} and {names[1]}"
+        rest = len(names) - 2
+        kind = "other type of information" if rest == 1 else "other types of information"
+        return f"{names[0]}, {names[1]} and {rest} {kind}"
+
+    @staticmethod
+    def _destination_phrase(destinations: list[dict[str, Any]]) -> str:
+        values = [str(item["value"]) for item in destinations if item.get("value")]
+        if not values:
+            return ""
+        if len(values) == 1:
+            return values[0]
+        rest = len(values) - 1
+        noun = "other destination" if rest == 1 else "other destinations"
+        return f"{values[0]} and {rest} {noun}"
 
     @staticmethod
     def _platform_details(
