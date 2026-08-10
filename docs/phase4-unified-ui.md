@@ -19,10 +19,11 @@ uv run umat-api
 uv run umat-report-worker run
 ```
 
-The report worker uses PostgreSQL row locking to discover runs whose platform and C2 adaptation
-stages are complete. It creates an immutable aggregate snapshot, completes report generation, and
-makes the run terminal. `--once` processes at most one queued aggregation/report stage for tests
-and operational scripts.
+The report worker uses PostgreSQL row locking to discover runs whose required adaptations are
+complete. C2 is independently selectable: C2-enabled runs require both platform and C2 adaptation;
+C2-disabled runs require only platform adaptation. It creates an immutable aggregate snapshot,
+completes report generation, and makes the run terminal. `--once` processes at most one queued
+aggregation/report stage for tests and operational scripts.
 
 ## Verdict policy
 
@@ -53,6 +54,18 @@ The visual language is a clean-room adaptation of the pinned Android static-anal
 (dark panels with violet/teal hierarchy), not copied Django/AdminLTE source. This avoids coupling
 UMAT to MobSF templates and avoids importing GPL-3.0-only frontend code while UMAT's distribution
 license remains undecided.
+
+## Current browser scope
+
+The browser is an implemented foundation, not yet the complete operator console. The backend and
+workers can run CAPE end to end even where the UI cannot currently express or diagnose the
+operation. Pending UI work includes case management and search, a recent-analysis list, multiple
+analyses per case, a complete new-analysis dialog for all platform/profile/network/C2 variations,
+available-worker inventory, guest-profile lists, platform-specific Windows and Android profile
+creation/retirement menus, and complete RBAC-aware navigation/actions. Native-task progress,
+post-processing state, retries, cancellation, evidence, and error diagnostics also need a fuller
+presentation. Until then, use `/api/v1` and native CAPE diagnostics for capabilities absent from
+the browser.
 
 ## Exports
 

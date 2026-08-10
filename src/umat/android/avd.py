@@ -29,6 +29,7 @@ class AvdManager:
         system_image: str,
         boot_timeout_seconds: int = 180,
         emulator_port: int = 5554,
+        memory_mb: int = 4096,
         sdk_root: Path | None = None,
         adb_relay: Path | None = None,
         adb_relay_bind_address: str | None = None,
@@ -39,7 +40,15 @@ class AvdManager:
         self.system_image = system_image
         self.boot_timeout_seconds = boot_timeout_seconds
         self.emulator_port = emulator_port
-        self.sdk_root = (sdk_root or emulator.parent.parent).resolve()
+        self.memory_mb = memory_mb
+        configured_sdk = sdk_root
+        if configured_sdk is None and os.environ.get("ANDROID_SDK_ROOT"):
+            configured_sdk = Path(os.environ["ANDROID_SDK_ROOT"])
+        if configured_sdk is None:
+            inferred = emulator.parent.parent
+            system_sdk = Path("/usr/lib/android-sdk")
+            configured_sdk = system_sdk if (system_sdk / "platforms").is_dir() else inferred
+        self.sdk_root = configured_sdk.resolve()
         self.adb_relay = adb_relay
         self.adb_relay_bind_address = adb_relay_bind_address
         self.process: subprocess.Popen[bytes] | None = None
@@ -60,17 +69,41 @@ class AvdManager:
         environment["ANDROID_HOME"] = str(self.sdk_root)
         self.environment = environment
         self._run(
-            [str(self.avdmanager), "create", "avd", "--force", "--name", name, "--package", self.system_image, "--device", "pixel"],
+            [
+                str(self.avdmanager),
+                "create",
+                "avd",
+                "--force",
+                "--name",
+                name,
+                "--package",
+                self.system_image,
+                "--device",
+                "pixel",
+            ],
             environment=environment,
             input_bytes=b"no\n",
             timeout=120,
         )
         pcap_path = workspace / "android-capture.pcap"
         command = [
-            str(self.emulator), "-avd", name, "-port", str(self.emulator_port),
-            "-no-window", "-no-audio", "-no-boot-anim", "-wipe-data",
-            "-no-snapshot", "-writable-system", "-skip-adb-auth",
-            "-tcpdump", str(pcap_path),
+            str(self.emulator),
+            "-avd",
+            name,
+            "-port",
+            str(self.emulator_port),
+            "-memory",
+            str(self.memory_mb),
+            "-feature",
+            "-PlayStoreImage",
+            "-no-window",
+            "-no-audio",
+            "-no-boot-anim",
+            "-wipe-data",
+            "-no-snapshot",
+            "-writable-system",
+            "-tcpdump",
+            str(pcap_path),
         ]
         serial = f"emulator-{self.emulator_port}"
         self.running = RunningAVD(name, serial, pcap_path, None)
@@ -80,9 +113,7 @@ class AvdManager:
             command, env=environment, stdout=self.log_stream, stderr=subprocess.STDOUT
         )
         self._wait_for_boot(serial, environment)
-        self._prepare_writable_system(
-            serial, environment, command, avd_home / f"{name}.avd"
-        )
+        self._prepare_rooted_guest(serial, environment)
         time.sleep(5)
         self._start_adb_relay(workspace)
         guest_ip = self._guest_ip(serial, environment)
@@ -93,7 +124,16 @@ class AvdManager:
         deadline = time.monotonic() + self.boot_timeout_seconds
         while time.monotonic() < deadline:
             if self.process is None or self.process.poll() is not None:
-                raise RuntimeError("Android emulator exited before boot completed")
+                detail = ""
+                if self.log_stream:
+                    self.log_stream.flush()
+                    log_path = Path(self.log_stream.name)
+                    if log_path.is_file():
+                        detail = log_path.read_text(errors="replace")[-2000:]
+                raise RuntimeError(
+                    "Android emulator exited before boot completed"
+                    + (f": {detail}" if detail else "")
+                )
             result = self._run(
                 [str(self.adb), "-s", serial, "shell", "getprop", "sys.boot_completed"],
                 environment=environment,
@@ -105,68 +145,30 @@ class AvdManager:
             time.sleep(2)
         raise RuntimeError("Android emulator boot timed out")
 
-    def _prepare_writable_system(
+    def _prepare_rooted_guest(
         self,
         serial: str,
         environment: dict[str, str],
-        first_boot_command: list[str],
-        avd_directory: Path,
     ) -> None:
-        """Disable verity on first boot, restart, remount, and verify write access."""
-        for arguments in (["root"], ["wait-for-device"], ["disable-verity"]):
-            self._run(
+        """Prepare an ADB-rooted disposable guest for fail-soft analysis."""
+        for arguments in (["root"], ["wait-for-device"]):
+            result = self._run(
                 [str(self.adb), "-s", serial, *arguments],
                 environment=environment,
                 timeout=30,
                 check=False,
             )
-        self._run(
-            [str(self.adb), "-s", serial, "emu", "kill"],
+            if result.returncode != 0:
+                raise RuntimeError(f"failed to prepare Android guest: {arguments[0]}")
+        probe = "/data/local/tmp/umat-writable-probe"
+        identity = self._run(
+            [str(self.adb), "-s", serial, "shell", "id", "-u"],
             environment=environment,
             timeout=15,
             check=False,
         )
-        if self.process:
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    self.process.wait(timeout=10)
-        for lock_path in avd_directory.glob("*.lock"):
-            if lock_path.is_file() or lock_path.is_symlink():
-                lock_path.unlink(missing_ok=True)
-        for arguments in (["kill-server"], ["start-server"]):
-            result = self._run(
-                [str(self.adb), *arguments],
-                environment=environment,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"failed to reset ADB before second boot: {arguments[0]}")
-        time.sleep(2)
-        second_boot_command = [item for item in first_boot_command if item != "-wipe-data"]
-        self.process = subprocess.Popen(  # noqa: S603
-            second_boot_command,
-            env=environment,
-            stdout=self.log_stream,
-            stderr=subprocess.STDOUT,
-        )
-        self._wait_for_boot(serial, environment)
-        for arguments in (["root"], ["wait-for-device"], ["remount"]):
-            result = self._run(
-                [str(self.adb), "-s", serial, *arguments],
-                environment=environment,
-                timeout=30,
-                check=False,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"failed to prepare writable Android system: {arguments[0]}")
-        probe = "/system/umat-writable-probe"
+        if identity.returncode != 0 or identity.stdout.strip() != b"0":
+            raise RuntimeError("Android guest did not provide root ADB access")
         result = self._run(
             [str(self.adb), "-s", serial, "shell", "touch", probe],
             environment=environment,
@@ -174,7 +176,7 @@ class AvdManager:
             check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError("Android system partition remains read-only after remount")
+            raise RuntimeError("Android analysis data partition is not writable")
         self._run(
             [str(self.adb), "-s", serial, "shell", "rm", probe],
             environment=environment,

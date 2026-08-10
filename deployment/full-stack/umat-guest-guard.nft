@@ -1,0 +1,25 @@
+table ip umat_guest_guard {
+    chain input {
+        # Run after the host's base firewall, which admits only tracked replies.
+        # New guest-originated connections then reach the explicit rules below.
+        type filter hook input priority 10; policy accept;
+
+        iifname "virbr-winstdt" udp dport { 53, 67 } accept
+        iifname "virbr-winstdt" tcp dport { 53, 2042 } accept
+        # CAPE initiates guest control on TCP 8000; admit the fixed guest
+        # source endpoint used for replies and reject every other host target.
+        iifname "virbr-winstdt" ip saddr 10.66.0.101 tcp sport 8000 accept
+        iifname "virbr-winstdt" drop
+
+        # ReDroid's only host-side control channel is ADB on guest TCP 5555.
+        # The guest has no default route; allow this fixed source endpoint and
+        # drop every other guest-to-host packet below.
+        iifname "br-umat-android" ip saddr 172.30.0.0/24 tcp sport 5555 accept
+        iifname "br-umat-android" drop
+    }
+
+    chain forward {
+        type filter hook forward priority -5; policy accept;
+        iifname { "virbr-winstdt", "br-umat-android" } drop
+    }
+}

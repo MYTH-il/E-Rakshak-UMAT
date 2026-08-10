@@ -1,9 +1,13 @@
+import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from umat.c2.models import C2AnalysisContext, InputArtifact
 from umat.c2.runtime import C2RuntimeError, SubprocessC2Runtime
 from umat.config.settings import Settings
 from umat.executors.protocol import ExecutorStopRequested, raise_for_stop
@@ -73,3 +77,61 @@ def test_packaged_c2_runtime_requires_locked_patch_digest(tmp_path: Path) -> Non
     assert verified.identity == "c2-exfil@fixture.1"
     with pytest.raises(C2RuntimeError, match="patch-series"):
         SubprocessC2Runtime(runtime, "a" * 40, 60, "e" * 64)
+
+
+def test_c2_runtime_drains_verbose_child_output(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    pipeline = runtime / "source/pipeline"
+    pipeline.mkdir(parents=True)
+    (pipeline / "orchestrator.py").write_text(
+        """import json
+from pathlib import Path
+print('x' * 200000)
+output = Path('output')
+output.mkdir()
+(output / 'exfil_events.json').write_text('[]')
+"""
+    )
+    tree_digest = SubprocessC2Runtime._tree_hash(runtime / "source")
+    (runtime / "runtime-manifest.json").write_text(
+        json.dumps(
+            {
+                "upstream_commit": "a" * 40,
+                "effective_version": "fixture.1",
+                "patch_series_sha256": "b" * 64,
+                "effective_tree_sha256": tree_digest,
+                "dependency_lock_sha256": "d" * 64,
+            }
+        )
+    )
+    pcap = tmp_path / "input.pcap"
+    manifest = tmp_path / "manifest.json"
+    pcap.write_bytes(b"pcap")
+    manifest.write_text("{}")
+
+    def input_artifact(path: Path, kind: str) -> InputArtifact:
+        content = path.read_bytes()
+        return InputArtifact(
+            artifact_id=uuid4(),
+            kind=kind,
+            sha256=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            media_type="application/json",
+            source_stage_type="platform_analysis",
+            local_path=path,
+        )
+
+    now = datetime.now(timezone.utc)
+    context = C2AnalysisContext(
+        analysis_run_id=uuid4(),
+        platform="windows",
+        sample_sha256="a" * 64,
+        pcap=input_artifact(pcap, "pcap"),
+        platform_manifest=input_artifact(manifest, "platform_manifest"),
+        analysis_started_at=now,
+        analysis_ended_at=now,
+    )
+    result = SubprocessC2Runtime(runtime, "a" * 40, 5, "b" * 64).run(
+        context, tmp_path / "work"
+    )
+    assert result.events == []

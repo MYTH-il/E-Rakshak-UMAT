@@ -1,0 +1,32 @@
+--- a/mobsf/DynamicAnalyzer/views/android/environment.py
++++ b/mobsf/DynamicAnalyzer/views/android/environment.py
+@@ -216,16 +216,21 @@
+             return
+         if action == 'install':
+             logger.info('Installing MobSF RootCA')
+-            self.adb_command(['push',
+-                              mobsf_ca,
+-                              ca_file])
+-            self.adb_command(['chmod',
+-                              '644',
+-                              ca_file], True)
++            if self.get_environment() == 'redroid':
++                temporary_ca = '/data/local/tmp/mobsf-ca.0'
++                self.adb_command(['push', mobsf_ca, temporary_ca])
++                self.adb_command(['su', '0', 'cp', temporary_ca, ca_file], True)
++                self.adb_command(['su', '0', 'chmod', '644', ca_file], True)
++                self.adb_command(['rm', temporary_ca], True)
++            else:
++                self.adb_command(['push', mobsf_ca, ca_file])
++                self.adb_command(['chmod', '644', ca_file], True)
+         elif action == 'remove':
+             logger.info('Removing MobSF RootCA')
+-            self.adb_command(['rm',
+-                              ca_file], True)
++            if self.get_environment() == 'redroid':
++                self.adb_command(['su', '0', 'rm', ca_file], True)
++            else:
++                self.adb_command(['rm', ca_file], True)
+         # with a high timeout afterwards
+
+     def set_global_proxy(self, version):

@@ -11,10 +11,23 @@ class CapeError(RuntimeError):
     pass
 
 
+LNK_HEADER = bytes.fromhex("4c0000000114020000000000c000000000000046")
+
+
 def cape_package_for_sample(sample: Path) -> str:
-    """Select a CAPE package only when the native PE header is conclusive."""
+    """Select a CAPE package from a validated leading file signature.
+
+    Leading signatures deliberately take precedence over embedded/archive
+    overlays. Malware commonly appends ZIP data to LNK and PE files, and
+    CAPE's generic detector can otherwise select the overlay instead of the
+    executable outer format.
+    """
     with sample.open("rb") as source:
         header = source.read(64)
+        if header.startswith(LNK_HEADER):
+            return "lnk"
+        if header.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+            return "zip"
         if len(header) < 64 or header[:2] != b"MZ":
             return ""
         pe_offset = int.from_bytes(header[60:64], "little")
@@ -26,6 +39,54 @@ def cape_package_for_sample(sample: Path) -> str:
         return ""
     characteristics = int.from_bytes(coff[22:24], "little")
     return "dll" if characteristics & 0x2000 else "exe"
+
+
+def cape_filename_for_package(package: str) -> str:
+    """Return a neutral filename that retains only a validated format suffix."""
+    suffix = {"lnk": ".lnk", "zip": ".zip", "dll": ".dll", "exe": ".exe"}.get(package, "")
+    return f"sample{suffix or '.bin'}"
+
+
+def _bounded_list(value: Any, limit: int) -> list[Any]:
+    return list(value[:limit]) if isinstance(value, list) else []
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def normalize_cape_evidence(report: dict[str, Any]) -> dict[str, Any]:
+    """Select bounded, format-neutral evidence from CAPE's potentially huge report."""
+    behavior = _mapping(report.get("behavior"))
+    network = _mapping(report.get("network"))
+    suricata = _mapping(report.get("suricata"))
+    cape = _mapping(report.get("CAPE"))
+    return {
+        "schema_version": "1.0",
+        "malscore": report.get("malscore"),
+        "malstatus": report.get("malstatus"),
+        "signatures": _bounded_list(report.get("signatures"), 1000),
+        "ttps": _bounded_list(report.get("ttps"), 2000),
+        "behavior": {
+            "summary": behavior.get("summary") if isinstance(behavior.get("summary"), dict) else {},
+            "processtree": _bounded_list(behavior.get("processtree"), 2000),
+            "enhanced": _bounded_list(behavior.get("enhanced"), 5000),
+        },
+        "dropped": _bounded_list(report.get("dropped"), 2000),
+        "procdump": _bounded_list(report.get("procdump"), 1000),
+        "cape": {
+            "payloads": _bounded_list(cape.get("payloads"), 2000),
+            "configs": _bounded_list(cape.get("configs"), 1000),
+        },
+        "network": {
+            key: _bounded_list(network.get(key), 10000)
+            for key in ("hosts", "domains", "dns", "http", "tcp", "udp", "smtp", "irc")
+        },
+        "suricata": {
+            key: _bounded_list(suricata.get(key), 10000)
+            for key in ("alerts", "dns", "http", "tls", "files")
+        },
+    }
 
 
 class CapeClient:
@@ -65,13 +126,19 @@ class CapeClient:
         return str(response.json()["operation_id"])
 
     def submit(self, sample: Path, profile: dict[str, Any]) -> int:
+        network_mode = profile.get("network_mode", "isolated_simulated")
+        package = cape_package_for_sample(sample)
         data = {
             "machine": profile.get("cape_machine_label") or "",
             # CAPE can mistake a PE containing an archive overlay for a ZIP and
             # abort the guest before ETW finalization. Other formats remain on
             # CAPE's native automatic package selection path.
-            "package": cape_package_for_sample(sample),
-            "options": f"analysis_profile={profile.get('analysis_profile', 'standard')}",
+            "package": package,
+            "options": (
+                f"analysis_profile={profile.get('analysis_profile', 'standard')},"
+                f"network_mode={'simulated_inetsim' if network_mode == 'isolated_simulated' else 'real_world_egress'}"
+            ),
+            "route": "none" if network_mode == "isolated_simulated" else "internet",
             "timeout": str(self.analysis_timeout_seconds),
             "enforce_timeout": "true",
         }
@@ -79,7 +146,13 @@ class CapeClient:
             response = self.client.post(
                 "/apiv2/tasks/create/file/",
                 data=data,
-                files={"file": ("sample.bin", source, "application/octet-stream")},
+                files={
+                    "file": (
+                        cape_filename_for_package(package),
+                        source,
+                        "application/octet-stream",
+                    )
+                },
             )
         response.raise_for_status()
         value = response.json()
@@ -98,6 +171,14 @@ class CapeClient:
         if not isinstance(data, dict):
             raise CapeError("CAPE status response is not an object")
         return cast(dict[str, Any], data)
+
+    def evidence(self, task_id: int) -> dict[str, Any]:
+        response = self.client.get(f"/apiv2/tasks/get/report/{task_id}/json/", timeout=300)
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise CapeError("CAPE JSON report is not an object")
+        return normalize_cape_evidence(value)
 
     def cancel(self, task_id: int, timeout_seconds: int = 120) -> None:
         response = self.client.post(

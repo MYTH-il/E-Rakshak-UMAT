@@ -4,7 +4,12 @@ from pathlib import Path
 
 import httpx
 
-from umat.windows.cape import CapeClient, cape_package_for_sample
+from umat.windows.cape import (
+    CapeClient,
+    cape_filename_for_package,
+    cape_package_for_sample,
+    normalize_cape_evidence,
+)
 
 
 def test_profile_management_uses_separate_authenticated_gateway() -> None:
@@ -52,7 +57,7 @@ def test_submit_never_uses_original_filename(tmp_path: Path) -> None:
     sample.write_bytes(b"harmless fixture")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert b'attacker-name.exe' not in request.content
+        assert b"attacker-name.exe" not in request.content
         assert b'name="file"; filename="sample.bin"' in request.content
         assert b'name="timeout"' in request.content
         assert b"180" in request.content
@@ -80,4 +85,46 @@ def test_cape_package_for_native_pe(tmp_path: Path) -> None:
     assert cape_package_for_sample(sample) == "dll"
 
     sample.write_bytes(b"PK\x03\x04not-a-pe")
-    assert cape_package_for_sample(sample) == ""
+    assert cape_package_for_sample(sample) == "zip"
+
+
+def test_lnk_signature_wins_over_embedded_zip_overlay(tmp_path: Path) -> None:
+    sample = tmp_path / "misleading.zip"
+    sample.write_bytes(
+        bytes.fromhex("4c0000000114020000000000c000000000000046")
+        + b"payload"
+        + b"PK\x03\x04embedded-archive"
+    )
+    assert cape_package_for_sample(sample) == "lnk"
+    assert cape_filename_for_package("lnk") == "sample.lnk"
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": {"task_ids": [8]}})
+
+    client = CapeClient("http://cape.invalid")
+    client.client = httpx.Client(
+        base_url="http://cape.invalid", transport=httpx.MockTransport(handler)
+    )
+    assert client.submit(sample, {"analysis_profile": "standard"}) == 8
+    assert b'name="package"' in requests[0].content
+    assert b"lnk" in requests[0].content
+    assert b'filename="sample.lnk"' in requests[0].content
+
+
+def test_cape_evidence_is_format_neutral_and_bounded() -> None:
+    report = {
+        "malscore": 10.0,
+        "signatures": [{"name": f"signature-{index}"} for index in range(1005)],
+        "behavior": {"summary": {"files": ["one"]}, "processes": [{"calls": [1]}]},
+        "network": {"hosts": ["198.51.100.1"], "domains": [{"domain": "example.test"}]},
+        "suricata": {"alerts": [{"signature": "test alert"}]},
+        "dropped": [{"sha256": "a" * 64}],
+    }
+    evidence = normalize_cape_evidence(report)
+    assert evidence["malscore"] == 10.0
+    assert len(evidence["signatures"]) == 1000
+    assert "processes" not in evidence["behavior"]
+    assert evidence["network"]["domains"][0]["domain"] == "example.test"

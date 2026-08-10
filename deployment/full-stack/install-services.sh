@@ -145,7 +145,7 @@ EOF
   if [[ "$executor_name" == "c2" ]]; then
     sed -i '/ReadWritePaths=/i ReadOnlyPaths=/srv/winstdt/libexec/c2-exfil/47225ec-winstdt.1' "$executor_unit"
   else
-    sed -i '/ReadWritePaths=/i SupplementaryGroups=kvm' "$executor_unit"
+    sed -i '/ReadWritePaths=/i SupplementaryGroups=kvm docker' "$executor_unit"
   fi
   echo "+ install $UNIT_DIR/umat-${executor_name}-executor.service (enrollment required before enablement)"
   if [[ "$EXECUTE" -eq 1 ]]; then
@@ -155,6 +155,8 @@ EOF
 done
 
 if [[ "$EXECUTE" -eq 1 ]]; then
+  sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard.nft" /etc/umat/umat-guest-guard.nft
+  sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard.service" "$UNIT_DIR/umat-guest-guard.service"
   sudo -n install -d -m 0750 -o "$SERVICE_USER" -g "$(id -gn "$SERVICE_USER")" \
     /var/lib/umat /var/lib/umat/quarantine /var/lib/umat/artifacts
   sudo -n install -d -m 0700 -o root -g root /var/lib/umat-cape-profiles
@@ -190,7 +192,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   sudo -n install -o root -g "$executor_group" -m 0640 "$android_env" /etc/umat/android-executor.env
   mkdir -p "$PROJECT_ROOT/var"
   sudo -n systemctl daemon-reload
-  sudo -n systemctl enable --now umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway
+  sudo -n systemctl enable --now umat-guest-guard umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway
 else
   echo "dry-run complete; no services changed"
 fi

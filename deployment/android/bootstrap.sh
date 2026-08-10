@@ -6,6 +6,9 @@ readonly TREE_SHA256="9c554d1e1e2c7c5e70cf3d5b6504a28bc37ed62b81ddc0b0f3007b4bec
 readonly REPOSITORY="https://github.com/d4ruvil/erakshak.git"
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly PATCH="$PROJECT_ROOT/deployment/android/patches/0001-reproducible-complete-container-build.patch"
+readonly API30_PATCH="$PROJECT_ROOT/deployment/android/patches/0002-api30-data-runtime.patch"
+readonly REDROID_PATCH="$PROJECT_ROOT/deployment/android/patches/0003-redroid-su-root.patch"
+readonly REDROID_CA_PATCH="$PROJECT_ROOT/deployment/android/patches/0004-redroid-system-ca.patch"
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 /absolute/path/to/android-upstream" >&2
@@ -29,5 +32,8 @@ readonly BUILD_ROOT="$(mktemp -d)"
 trap 'rm -rf -- "$BUILD_ROOT"' EXIT
 git -C "$CHECKOUT" archive "$COMMIT" | tar -x -C "$BUILD_ROOT"
 patch --batch --forward -d "$BUILD_ROOT" -p1 <"$PATCH"
+patch --batch --forward -d "$BUILD_ROOT" -p1 <"$API30_PATCH"
+patch --batch --forward -d "$BUILD_ROOT" -p1 <"$REDROID_PATCH"
+patch --batch --forward -d "$BUILD_ROOT" -p1 <"$REDROID_CA_PATCH"
 docker build --pull --tag umat-mobsf:6462901d "$BUILD_ROOT"
 echo "Built umat-mobsf:6462901d from verified commit $COMMIT"

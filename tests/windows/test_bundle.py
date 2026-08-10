@@ -42,7 +42,10 @@ def native_bundle(root: Path) -> Path:
 
     paths = [root / "network/capture.pcapng", root / "behavior/trace.etl", root / "report.json"]
     (root / "hashes.sha256").write_text(
-        "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}\n" for path in paths)
+        "".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}\n"
+            for path in paths
+        )
     )
     return root
 
@@ -59,11 +62,13 @@ def test_windows_bundle_signature_identity_and_tamper_detection(tmp_path: Path) 
         profile_snapshot={"name": "standard-win10", "vcpus": 4},
         native_root=native_bundle(tmp_path / "native-source"),
         destination=tmp_path / "result",
+        cape_evidence={"schema_version": "1.0", "malscore": 9.5, "signatures": []},
     )
     extracted = safe_extract_windows_bundle(built.archive_path, tmp_path / "extracted", 10_000_000)
     manifest = verify_windows_bundle(extracted, private.public_key(), validator)  # type: ignore[arg-type]
     assert manifest["cape"]["task_id"] == 42
     assert manifest["selected_profile"]["name"] == "standard-win10"
+    assert json.loads((extracted / "cape-evidence.json").read_text())["malscore"] == 9.5
     (extracted / "native/report.json").write_text('{"tampered":true}')
     with pytest.raises(WindowsBundleError, match="artifact mismatch"):
         verify_windows_bundle(extracted, private.public_key(), validator)  # type: ignore[arg-type]

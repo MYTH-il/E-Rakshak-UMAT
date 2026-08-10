@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from umat.audit import append_audit, verify_audit_chain
 from umat.auth.security import hash_password, normalize_username, random_token, token_hash
 from umat.db.models import (
+    AndroidAnalysisProfile,
+    AndroidProfileState,
     Executor,
     ExecutorCredential,
     ExecutorEnrollmentToken,
@@ -22,6 +24,8 @@ from umat.db.models import (
 from umat.db.session import session_factory
 
 app = typer.Typer(no_args_is_help=True)
+
+REDROID_IMAGE = "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d"
 
 
 async def require_administrator(db: AsyncSession, username: str) -> User:
@@ -38,9 +42,7 @@ def create_user(
     username: str = typer.Option(...),
     role: str = typer.Option(..., help="officer, analyst, or administrator"),
     password: str | None = typer.Option(None, hide_input=True),
-    password_file: Path | None = typer.Option(
-        None, help="Read the password from a mode-0600 file"
-    ),
+    password_file: Path | None = typer.Option(None, help="Read the password from a mode-0600 file"),
     if_missing: bool = typer.Option(False, help="Succeed when the user already exists"),
     non_interactive: bool = typer.Option(False),
 ) -> None:
@@ -51,9 +53,7 @@ def create_user(
             raise typer.BadParameter("password file must not be accessible by group or other")
         supplied_password = password_file.read_text().rstrip("\r\n")
     if supplied_password is None and not non_interactive:
-        supplied_password = typer.prompt(
-            "Password", hide_input=True, confirmation_prompt=True
-        )
+        supplied_password = typer.prompt("Password", hide_input=True, confirmation_prompt=True)
 
     async def operation() -> None:
         normalized = normalize_username(username)
@@ -78,9 +78,85 @@ def create_user(
             )
             db.add(user)
             await db.flush()
-            await append_audit(db, actor_type="local_admin", actor_id=None, action="user.created", target_type="user", target_id=str(user.id), payload={"username": normalized, "role": role})
+            await append_audit(
+                db,
+                actor_type="local_admin",
+                actor_id=None,
+                action="user.created",
+                target_type="user",
+                target_id=str(user.id),
+                payload={"username": normalized, "role": role},
+            )
             await db.commit()
             typer.echo(str(user.id))
+
+    asyncio.run(operation())
+
+
+@app.command("seed-android-profiles")
+def seed_android_profiles(
+    admin: str = typer.Option(..., help="Administrator username for audit attribution"),
+) -> None:
+    """Create the constrained ReDroid default and AOSP fallback profiles."""
+
+    async def operation() -> None:
+        async with session_factory() as db:
+            actor = await require_administrator(db, admin)
+            definitions = (
+                (
+                    "android-11-redroid-x86-64",
+                    "Android 11 ReDroid x86_64",
+                    REDROID_IMAGE,
+                    "redroid-11-d1ca0815",
+                    True,
+                ),
+                (
+                    "android-11-aosp-x86-64-default",
+                    "Android 11 AOSP x86_64 AVD",
+                    "system-images;android-30;default;x86_64",
+                    "34.1.19",
+                    False,
+                ),
+            )
+            for name, display, image, version, default in definitions:
+                profile = await db.scalar(
+                    select(AndroidAnalysisProfile).where(AndroidAnalysisProfile.name == name)
+                )
+                if profile:
+                    continue
+                if default:
+                    await db.execute(update(AndroidAnalysisProfile).values(is_default=False))
+                profile = AndroidAnalysisProfile(
+                    name=name,
+                    display_name=display,
+                    state=AndroidProfileState.ACTIVE,
+                    android_version="11",
+                    api_level=30,
+                    architecture="x86_64",
+                    system_image=image,
+                    emulator_version=version,
+                    vcpus=4,
+                    ram_mb=4096,
+                    writable_system=True,
+                    network_mode="controlled",
+                    interaction_profile="deterministic_adb_v1",
+                    is_default=default,
+                    qualification={"status": "candidate", "dynamic_analysis": False},
+                    created_by_user_id=actor.id,
+                )
+                db.add(profile)
+                await db.flush()
+                await append_audit(
+                    db,
+                    actor_type="user",
+                    actor_id=str(actor.id),
+                    action="android_profile.seeded",
+                    target_type="android_analysis_profile",
+                    target_id=str(profile.id),
+                    payload={"name": name, "default": default},
+                )
+            await db.commit()
+
     asyncio.run(operation())
 
 
@@ -95,12 +171,27 @@ def enroll_executor(
         raw = random_token(48)
         async with session_factory() as db:
             user = await require_administrator(db, created_by)
-            enrollment = ExecutorEnrollmentToken(token_hash=token_hash(raw), executor_type=executor_type, scopes=stage_type, expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes), created_by_user_id=user.id)
+            enrollment = ExecutorEnrollmentToken(
+                token_hash=token_hash(raw),
+                executor_type=executor_type,
+                scopes=stage_type,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
+                created_by_user_id=user.id,
+            )
             db.add(enrollment)
             await db.flush()
-            await append_audit(db, actor_type="user", actor_id=str(user.id), action="executor.enrollment_created", target_type="executor_enrollment", target_id=str(enrollment.id), payload={"executor_type": executor_type, "stage_types": stage_type})
+            await append_audit(
+                db,
+                actor_type="user",
+                actor_id=str(user.id),
+                action="executor.enrollment_created",
+                target_type="executor_enrollment",
+                target_id=str(enrollment.id),
+                payload={"executor_type": executor_type, "stage_types": stage_type},
+            )
             await db.commit()
             typer.echo(raw)
+
     asyncio.run(operation())
 
 
@@ -116,7 +207,9 @@ def set_user_role(
             raise typer.BadParameter("at least one role is required")
         async with session_factory() as db:
             actor = await require_administrator(db, admin)
-            target = await db.scalar(select(User).where(User.username == normalize_username(username)))
+            target = await db.scalar(
+                select(User).where(User.username == normalize_username(username))
+            )
             if not target:
                 raise typer.BadParameter("unknown username")
             rows = list((await db.scalars(select(Role).where(Role.name.in_(requested)))).all())
@@ -148,7 +241,9 @@ def set_user_enabled(
     async def operation() -> None:
         async with session_factory() as db:
             actor = await require_administrator(db, admin)
-            target = await db.scalar(select(User).where(User.username == normalize_username(username)))
+            target = await db.scalar(
+                select(User).where(User.username == normalize_username(username))
+            )
             if not target:
                 raise typer.BadParameter("unknown username")
             if actor.id == target.id and not enabled:
@@ -187,7 +282,9 @@ def revoke_user_sessions(
     async def operation() -> None:
         async with session_factory() as db:
             actor = await require_administrator(db, admin)
-            target = await db.scalar(select(User).where(User.username == normalize_username(username)))
+            target = await db.scalar(
+                select(User).where(User.username == normalize_username(username))
+            )
             if not target:
                 raise typer.BadParameter("unknown username")
             revoked_ids = await db.scalars(
@@ -258,4 +355,5 @@ def verify_audit() -> None:
                 typer.echo(f"audit chain invalid at sequence {sequence}", err=True)
                 raise typer.Exit(1)
             typer.echo("audit chain valid")
+
     asyncio.run(operation())

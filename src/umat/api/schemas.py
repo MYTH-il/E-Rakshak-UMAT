@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,6 +40,9 @@ class CreateCaseResponse(BaseModel):
 class CreateRunRequest(BaseModel):
     submission_id: UUID
     windows_profile_id: UUID | None = None
+    android_profile_id: UUID | None = None
+    network_mode: Literal["isolated_simulated", "real_world_egress"] = "isolated_simulated"
+    c2_analysis_enabled: bool = False
 
 
 class RunActionResponse(BaseModel):
@@ -62,8 +65,11 @@ class RunResponse(BaseModel):
     platform: str
     status: str
     result: str | None
+    network_mode: str
+    c2_analysis_enabled: bool
     stages: list[StageResponse]
     windows_profile: dict[str, Any] | None = None
+    android_profile: dict[str, Any] | None = None
 
 
 class SubmissionResponse(BaseModel):

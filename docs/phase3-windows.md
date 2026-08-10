@@ -4,9 +4,9 @@ Phase 3 connects the control plane to the pinned WinST/DT and CAPE runtime. The 
 
 1. Claims only Windows platform stages and downloads the sample through a signed lease-bound
    attachment endpoint.
-2. Submits it to CAPE using the immutable selected VM/profile snapshot.
-   Native PE headers select the unambiguous `exe` or `dll` package so archive overlays cannot
-   cause CAPE to abort before ETW finalization; other formats retain CAPE auto-detection.
+2. Normalizes the original object for CAPE without changing UMAT custody. Signature-first format
+   detection distinguishes LNK, ZIP, EXE and DLL inputs (including files with misleading archive
+   overlays), assigns the corresponding CAPE package, and uses a safe canonical submission name.
 3. Records the native CAPE task ID immediately and recovers it after restart without another
    submission.
 4. Polls CAPE while renewing its lease.
@@ -14,7 +14,8 @@ Phase 3 connects the control plane to the pinned WinST/DT and CAPE runtime. The 
 6. Seals the untouched handoff in a signed UMAT Windows bundle.
 7. Registers the PCAP, manifest, normalized access events, static prior, and raw ETL with
    appropriate analyst access.
-8. Completes the platform stage, which queues shared C2 analysis.
+8. Completes the platform stage. The run either queues shared offline C2 analysis or proceeds
+   directly to platform adaptation according to its independent `c2_analysis_enabled` policy.
 
 Administrators create and delete Windows VM profiles through
 `/api/v1/windows/profiles`. Operations are queued to the Windows executor and delegated to the
@@ -25,14 +26,22 @@ the CAPE machine while retaining the profile record for custody and reproducibil
 
 The adapter validates the complete bundle again, binds it to the run, sample, executor key, CAPE
 task and selected profile, then imports CAPE signatures, YARA/static findings, host-access
-capabilities, IOCs, telemetry state and Windows metadata. Re-adaptation supersedes prior active
-rows without deleting them.
+capabilities, IOCs, telemetry state and Windows metadata. CAPE's large native report is reduced to
+a bounded evidence document while retaining malscore, signatures, YARA/static data, IOCs and
+network observations. Re-adaptation supersedes prior active rows without deleting them. The
+adapter works whether C2 is enabled or skipped and never discards platform findings merely because
+C2 evidence is absent.
 
-Run it after the Windows and C2 stages complete:
+Run it after the Windows platform stage and, when selected, the C2 stage complete:
 
 ```bash
 umat-windows-adapter adapt --run-id ANALYSIS_RUN_UUID
 ```
+
+The CAPE workload has completed a real LNK-in-ZIP run end to end through UMAT reporting. CAPE's
+nominal five-minute timeout is the detonation interval; guest setup and dump/Vivisect/YARA/signature
+post-processing extend wall-clock time. The backend path is operational, although the current UMAT
+UI does not yet expose every submission, case/run, profile, worker, and diagnostic control.
 
 Real detonation requires the pinned CAPE/WinST deployment and controlled malware network. Unit
 and PostgreSQL integration tests use harmless fixtures and never execute uploaded files.
@@ -45,7 +54,6 @@ fails malformed or incomplete native evidence without retrying the already-recor
 
 The clean-host installer delegates baseline VM construction and snapshot sealing to the locked
 WinST/DT scripts. UMAT does not replace VMCloak or CAPE's native machine lifecycle. Dynamically
-cloned selectable profiles remain fail-closed: the baseline-profile run is validated, while the
-first cloned-profile acceptance task reached the CAPE agent but timed out during analyzer upload
-and produced no ETL. That clone path is not promoted until the upstream-supported snapshot flow
-passes the same harmless evidence gate.
+cloned selectable profiles remain guarded by the same evidence and snapshot checks. Profiles can
+enlarge but cannot shrink the approved baseline virtual disk; a smaller disk requires rebuilding
+the licensed baseline from the Windows ISO.

@@ -17,6 +17,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("pcap", type=Path)
     parser.add_argument("--sample-sha256", required=True)
+    parser.add_argument("--static-prior", type=Path)
     args = parser.parse_args()
 
     from orchestrator import (  # type: ignore[import-not-found]

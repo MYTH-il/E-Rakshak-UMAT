@@ -177,9 +177,7 @@ def acquire_checkout(runner: CommandRunner, path: Path, component: dict[str, Any
         else:
             typer.echo(f"= verify existing checkout {path}")
         return
-    runner.run(
-        [command("sudo"), "-n", "install", "-d", "-m", "0755", str(path.parent)]
-    )
+    runner.run([command("sudo"), "-n", "install", "-d", "-m", "0755", str(path.parent)])
     runner.run(
         [
             command("sudo"),
@@ -230,13 +228,22 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         ("UMAT_POSTGRES_PASSWORD", postgres_password),
         ("MOBSF_DATABASE_PASSWORD", secrets.token_urlsafe(36)),
         ("MOBSF_API_KEY", secrets.token_urlsafe(48)),
-        ("MOBSF_POSTGRES_IMAGE_DIGEST", "95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b"),
+        (
+            "MOBSF_POSTGRES_IMAGE_DIGEST",
+            "95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b",
+        ),
         ("MOBSF_IMAGE", "umat-mobsf:6462901d"),
-        ("UMAT_DATABASE_URL", f"postgresql+asyncpg://umat:{postgres_password}@127.0.0.1:55432/umat"),
-        ("UMAT_ENVIRONMENT", "production"),
+        (
+            "UMAT_DATABASE_URL",
+            f"postgresql+asyncpg://umat:{postgres_password}@127.0.0.1:55432/umat",
+        ),
+        ("UMAT_ENVIRONMENT", "local"),
         ("UMAT_API_HOST", "127.0.0.1"),
         ("UMAT_API_PORT", "8080"),
-        ("UMAT_SECURE_COOKIES", "true"),
+        # The single-host deployment binds the UI to loopback over HTTP.
+        # Secure cookies are appropriate only after a TLS reverse proxy is
+        # configured; enabling them here prevents browsers from authenticating.
+        ("UMAT_SECURE_COOKIES", "false"),
         ("UMAT_ALLOWED_HOSTS", '["localhost","127.0.0.1"]'),
         ("UMAT_SESSION_SECRET", secrets.token_urlsafe(48)),
         ("UMAT_EXECUTOR_ENROLLMENT_SECRET", secrets.token_urlsafe(48)),
@@ -264,15 +271,33 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
     try:
         runner.run(
             [
-                command("sudo"), "-n", "install", "-d", "-o", "root", "-g",
-                service_group, "-m", "0750", str(configuration_root),
+                command("sudo"),
+                "-n",
+                "install",
+                "-d",
+                "-o",
+                "root",
+                "-g",
+                service_group,
+                "-m",
+                "0750",
+                str(configuration_root),
             ]
         )
         runner.run([command("sudo"), "-n", "install", "-d", "-m", "0750", str(state_root)])
         runner.run(
             [
-                command("sudo"), "-n", "install", "-o", "root", "-g", service_group,
-                "-m", "0640", str(local), str(destination),
+                command("sudo"),
+                "-n",
+                "install",
+                "-o",
+                "root",
+                "-g",
+                service_group,
+                "-m",
+                "0640",
+                str(local),
+                str(destination),
             ]
         )
     finally:
@@ -328,9 +353,7 @@ def record_state(runner: CommandRunner, manifest: dict[str, Any], components: se
         "project_root": str(PROJECT_ROOT),
         "operator": getpass.getuser(),
     }
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix="umat-deployment-state-", suffix=".json"
-    )
+    descriptor, temporary_name = tempfile.mkstemp(prefix="umat-deployment-state-", suffix=".json")
     os.close(descriptor)
     local = Path(temporary_name)
     local.write_text(json.dumps(state, indent=2) + "\n")
@@ -448,7 +471,18 @@ def install(
         runtime = [str(checkout / "scripts/configure-cape-runtime.sh")]
         if execute:
             runtime.append("--execute")
-        runner.run(runtime, cwd=checkout)
+        # ``uv run`` prepends the project virtualenv to PATH.  The WinST-DT
+        # runtime post-check intentionally validates the distro's
+        # python3-libvirt package, so keep that script on the host toolchain.
+        host_environment = os.environ.copy()
+        # Keep the single-host Windows guest within the host's memory budget.
+        host_environment.setdefault("VM_RAM_MB", "4096")
+        host_environment["PATH"] = os.pathsep.join(
+            entry
+            for entry in host_environment.get("PATH", "").split(os.pathsep)
+            if Path(entry).resolve() != (PROJECT_ROOT / ".venv" / "bin").resolve()
+        )
+        runner.run(runtime, cwd=checkout, environment=host_environment)
         cape_integration = [
             str(PROJECT_ROOT / "deployment/full-stack/configure-cape-integration.sh")
         ]
@@ -464,9 +498,7 @@ def install(
     if "android" in selected:
         checkout = Path(manifest["paths"]["android_checkout"])
         acquire_checkout(runner, checkout, manifest["components"]["android"])
-        android_runtime = [
-            str(PROJECT_ROOT / "deployment/android/install-runtime.sh")
-        ]
+        android_runtime = [str(PROJECT_ROOT / "deployment/android/install-runtime.sh")]
         if execute:
             android_runtime.extend(["--execute", "--accept-sdk-licenses"])
         runner.run(android_runtime)
@@ -536,6 +568,18 @@ def install(
                 cwd=PROJECT_ROOT,
                 environment=environment,
             )
+            runner.run(
+                [
+                    command("uv"),
+                    "run",
+                    "umat-admin",
+                    "seed-android-profiles",
+                    "--admin",
+                    admin_username,
+                ],
+                cwd=PROJECT_ROOT,
+                environment=environment,
+            )
 
     if "services" in selected:
         service_script = PROJECT_ROOT / "deployment/full-stack/install-services.sh"
@@ -554,9 +598,7 @@ def install(
             ]
             for executor_component in ("windows", "c2", "android"):
                 if executor_component in selected:
-                    runner.run(
-                        [*enrollment_base, "--component", executor_component]
-                    )
+                    runner.run([*enrollment_base, "--component", executor_component])
     record_state(runner, manifest, selected)
     if execute:
         runner.run([str(PROJECT_ROOT / ".venv/bin/umat-deploy"), "status"])
@@ -588,7 +630,8 @@ def status() -> None:
     ).stdout.strip()
     check(
         "installer_uv",
-        uv_version == f"uv {manifest['components']['installer']['uv_version']} (x86_64-unknown-linux-gnu)",
+        uv_version
+        == f"uv {manifest['components']['installer']['uv_version']} (x86_64-unknown-linux-gnu)",
         uv_version,
     )
     for name, component_key, location in (
@@ -622,27 +665,45 @@ def status() -> None:
         "umat-c2-executor.service",
         "umat-android-executor.service",
     ):
-        active = subprocess.run(  # noqa: S603
-            [command("systemctl"), "is-active", "--quiet", service], check=False
-        ).returncode == 0
+        active = (
+            subprocess.run(  # noqa: S603
+                [command("systemctl"), "is-active", "--quiet", service], check=False
+            ).returncode
+            == 0
+        )
         check(f"service:{service}", active, "active" if active else "inactive")
     domain = "winstdt-win10-22h2"
-    domain_present = subprocess.run(  # noqa: S603
-        [command("virsh"), "-c", "qemu:///system", "dominfo", domain],
-        check=False,
-        capture_output=True,
-    ).returncode == 0
+    domain_present = (
+        subprocess.run(  # noqa: S603
+            [command("virsh"), "-c", "qemu:///system", "dominfo", domain],
+            check=False,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
     check("windows_baseline_domain", domain_present, domain)
     snapshot = "hardened-baseline-controlled-egress-v2"
-    snapshot_present = subprocess.run(  # noqa: S603
-        [command("virsh"), "-c", "qemu:///system", "snapshot-info", domain, snapshot],
-        check=False,
-        capture_output=True,
-    ).returncode == 0
+    snapshot_present = (
+        subprocess.run(  # noqa: S603
+            [command("virsh"), "-c", "qemu:///system", "snapshot-info", domain, snapshot],
+            check=False,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
     check("windows_baseline_snapshot", snapshot_present, snapshot)
     image = manifest["components"]["android"]["image"]
     image_id = subprocess.run(  # noqa: S603
-        [command("sudo"), "-n", command("docker"), "image", "inspect", image, "--format", "{{.Id}}"],
+        [
+            command("sudo"),
+            "-n",
+            command("docker"),
+            "image",
+            "inspect",
+            image,
+            "--format",
+            "{{.Id}}",
+        ],
         check=False,
         capture_output=True,
         text=True,
@@ -653,9 +714,13 @@ def status() -> None:
         {"expected": manifest["components"]["android"]["image_digest"], "observed": image_id},
     )
     emulator = Path("/usr/lib/android-sdk/emulator/emulator")
-    emulator_output = subprocess.run(  # noqa: S603
-        [str(emulator), "-version"], check=False, capture_output=True, text=True
-    ).stdout if emulator.is_file() else ""
+    emulator_output = (
+        subprocess.run(  # noqa: S603
+            [str(emulator), "-version"], check=False, capture_output=True, text=True
+        ).stdout
+        if emulator.is_file()
+        else ""
+    )
     expected_emulator = manifest["components"]["android"]["emulator_version"]
     check(
         "android_emulator",
@@ -690,14 +755,23 @@ def status() -> None:
             continue
         pcap = handoff.parent / "network/capture.pcapng"
         etl = handoff.parent / "behavior/trace.etl"
-        if not pcap.is_file() or not etl.is_file() or pcap.stat().st_size <= 0 or etl.stat().st_size <= 0:
+        if (
+            not pcap.is_file()
+            or not etl.is_file()
+            or pcap.stat().st_size <= 0
+            or etl.stat().st_size <= 0
+        ):
             continue
-        validation = subprocess.run(  # noqa: S603
-            [str(validator), "validate-bundle", str(handoff.parent)],
-            check=False,
-            capture_output=True,
-            text=True,
-        ) if validator.is_file() else None
+        validation = (
+            subprocess.run(  # noqa: S603
+                [str(validator), "validate-bundle", str(handoff.parent)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if validator.is_file()
+            else None
+        )
         if validation is not None and validation.returncode == 0:
             accepted_handoff = {
                 "task_id": handoff.parent.name,
@@ -741,9 +815,12 @@ def path_exists(path: Path) -> bool:
             return True
     except PermissionError:
         pass
-    return subprocess.run(  # noqa: S603
-        [command("sudo"), "-n", "test", "-e", str(path)], check=False
-    ).returncode == 0
+    return (
+        subprocess.run(  # noqa: S603
+            [command("sudo"), "-n", "test", "-e", str(path)], check=False
+        ).returncode
+        == 0
+    )
 
 
 def read_environment_text(path: Path) -> str:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from umat.db.models import Platform, Verdict
+from umat.db.models import Platform, StageState, StageType, Verdict
 from umat.reporting.aggregator import CaseAggregator, filter_report_for_roles
 from umat.reporting.exports import ReportExporter
 
@@ -43,6 +43,15 @@ def test_verdict_policy_never_emits_safe() -> None:
     assert "safe" not in {item.value for item in Verdict}
 
 
+def test_isolated_verdict_does_not_require_c2_stages() -> None:
+    stages = [
+        SimpleNamespace(stage_type=StageType.PLATFORM_ANALYSIS, state=StageState.COMPLETED),
+        SimpleNamespace(stage_type=StageType.PLATFORM_ADAPTATION, state=StageState.COMPLETED),
+    ]
+    verdict = CaseAggregator._verdict([], [], stages, True, False, requires_c2=False)
+    assert verdict == Verdict.NO_MALICIOUS_ACTIVITY_OBSERVED
+
+
 def test_officer_filter_removes_technical_and_restricted_artifacts() -> None:
     report = {
         "technical": {"findings": [{"summary": "analyst detail"}]},
@@ -63,7 +72,7 @@ def test_csv_formula_injection_is_neutralized() -> None:
                 "iocs": [
                     {
                         "type": "domain",
-                        "value": "=HYPERLINK(\"bad\")",
+                        "value": '=HYPERLINK("bad")',
                         "confidence": "strong",
                         "source": "fixture",
                         "seen_in_traffic": True,

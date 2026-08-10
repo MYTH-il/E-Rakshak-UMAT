@@ -1,0 +1,101 @@
+--- a/mobsf/DynamicAnalyzer/views/android/environment.py
++++ b/mobsf/DynamicAnalyzer/views/android/environment.py
+@@ -92,23 +92,24 @@
+                                                  'connect',
+                                                   self.identifier]):
+             return False
+-        logger.info('Restarting ADB Daemon as root')
+-        if not self.run_subprocess_verify_output([get_adb(),
+-                                                  '-s',
+-                                                  self.identifier,
+-                                                  'root']):
+-            return False
+-        logger.info('Reconnecting to Android Device')
+-        # connect again with root adb
+-        if not self.run_subprocess_verify_output([get_adb(),
+-                                                  'connect',
+-                                                  self.identifier]):
+-            return False
+         # identify environment
+         runtime = self.get_environment()
+-        logger.info('Remounting')
+-        # Allow non supported environments also
+-        self.adb_command(['remount'])
++        if runtime != 'redroid':
++            logger.info('Restarting ADB Daemon as root')
++            if not self.run_subprocess_verify_output([get_adb(),
++                                                      '-s',
++                                                      self.identifier,
++                                                      'root']):
++                return False
++            logger.info('Reconnecting to Android Device')
++            if not self.run_subprocess_verify_output([get_adb(),
++                                                      'connect',
++                                                      self.identifier]):
++                return False
++            logger.info('Remounting')
++            self.adb_command(['remount'])
++        else:
++            logger.info('Using ReDroid su root without restarting TCP adbd')
+         logger.info('Performing System check')
+         if not self.system_check(runtime):
+             return False
+@@ -364,6 +365,12 @@
+         ver = self.adb_command(['getprop',
+                                 'ro.genymotion.version'],
+                                True, False).decode('utf-8', 'ignore')
++        model = self.adb_command(['getprop',
++                                  'ro.product.model'],
++                                 True, False)
++        if model and b'redroid' in model.lower():
++            logger.info('Found ReDroid Android container')
++            return 'redroid'
+         if b'EMULATOR' in out:
+             logger.info('Found Android Studio Emulator')
+             return 'emulator'
+@@ -520,15 +527,17 @@
+             err_msg = ('VM\'s /system is not writable. '
+                        'This VM cannot be used for '
+                        'Dynamic Analysis.')
+-            proc = subprocess.Popen([get_adb(),
+-                                     '-s', self.identifier,
+-                                     'shell',
+-                                     'touch',
+-                                     '/data/local/tmp/mobsf-test'],
+-                                    stdout=subprocess.PIPE,
+-                                    stderr=subprocess.PIPE)
++            command = [get_adb(), '-s', self.identifier, 'shell']
++            if runtime == 'redroid':
++                command += ["su 0 sh -c 'touch /system/mobsf-test && "
++                            "rm /system/mobsf-test'"]
++            else:
++                command += ['touch', '/data/local/tmp/mobsf-test']
++            proc = subprocess.Popen(command,
++                                     stdout=subprocess.PIPE,
++                                     stderr=subprocess.PIPE)
+             _, stderr = proc.communicate()
+-            if b'Read-only' in stderr:
++            if proc.returncode != 0:
+                 logger.error(err_msg)
+                 if runtime == 'emulator':
+                     logger.error('Please start the AVD as per '
+--- a/mobsf/DynamicAnalyzer/views/android/frida_core.py
++++ b/mobsf/DynamicAnalyzer/views/android/frida_core.py
+@@ -181,13 +181,14 @@
+             # 3. Push to /data/local/tmp on Redroid and make executable
+             logger.info('Pushing frida-server to Redroid...')
+             subprocess.run(adb + ['push', str(local_path), '/data/local/tmp/frida-server'], check=True)
+-            subprocess.run(adb + ['shell', 'chmod', '755', '/data/local/tmp/frida-server'], check=True)
++            subprocess.run(adb + ['shell', 'su', '0', 'chmod', '755', '/data/local/tmp/frida-server'], check=True)
+
+             # 4. Run in background (kill any hung processes first)
+             logger.info('Starting frida-server in background...')
+-            subprocess.run(adb + ['shell', 'killall', '-9', 'frida-server'], stderr=subprocess.DEVNULL)
++            subprocess.run(adb + ['shell', 'su', '0', 'killall', '-9', 'frida-server'], stderr=subprocess.DEVNULL)
+             # nohup detaches the process so it runs in the background
+-            subprocess.Popen(adb + ['shell', 'nohup /data/local/tmp/frida-server >/dev/null 2>&1 &'])
++            subprocess.Popen(adb + ['shell', "su 0 sh -c 'nohup "
++                                    "/data/local/tmp/frida-server >/dev/null 2>&1 &'"])
+
+             time.sleep(3) # Give the server a few seconds to bind to the port
+             logger.info('Custom Frida server setup complete.')

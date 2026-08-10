@@ -1,0 +1,49 @@
+--- a/mobsf/DynamicAnalyzer/views/android/environment.py
++++ b/mobsf/DynamicAnalyzer/views/android/environment.py
+@@ -524,7 +524,7 @@
+                                      '-s', self.identifier,
+                                      'shell',
+                                      'touch',
+-                                     '/system/test'],
++                                     '/data/local/tmp/mobsf-test'],
+                                     stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE)
+             _, stderr = proc.communicate()
+@@ -575,7 +575,7 @@
+                  '-s', self.identifier,
+                  'shell',
+                  'cat',
+-                 '/system/' + agent_file])
++                 '/data/local/tmp/' + agent_file])
+             if agent_str not in out:
+                 return False
+         except Exception:
+@@ -613,7 +613,7 @@
+         f = tempfile.NamedTemporaryFile(delete=False)
+         f.write(agent_str)
+         f.close()
+-        self.adb_command(['push', f.name, '/system/' + agent_file])
++        self.adb_command(['push', f.name, '/data/local/tmp/' + agent_file])
+         os.unlink(f.name)
+
+     def xposed_setup(self, android_version):
+@@ -709,8 +709,8 @@
+             return
+         frida_path = os.path.join(settings.DWD_DIR, frida_bin)
+         logger.info('Copying frida server v%s for %s', frida_version, frida_arch)
+-        self.adb_command(['push', frida_path, '/system/fd_server'])
+-        self.adb_command(['chmod', '755', '/system/fd_server'], True)
++        self.adb_command(['push', frida_path, '/data/local/tmp/fd_server'])
++        self.adb_command(['chmod', '755', '/data/local/tmp/fd_server'], True)
+
+     def run_frida_server(self):
+         """Start Frida Server."""
+@@ -725,7 +725,7 @@
+                     '-s',
+                     self.identifier,
+                     'shell',
+-                    '/system/fd_server']
++                    '/data/local/tmp/fd_server']
+             subprocess.call(argz, stdout=fnull, stderr=subprocess.STDOUT)
+         trd = threading.Thread(target=start_frida)
+         trd.daemon = True

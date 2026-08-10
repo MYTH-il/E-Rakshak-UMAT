@@ -34,7 +34,8 @@ async def _ensure_ready_aggregation_stages(db: AsyncSession) -> None:
     runs = list(
         (
             await db.scalars(
-                select(AnalysisRun).where(AnalysisRun.status == RunStatus.RUNNING)
+                select(AnalysisRun)
+                .where(AnalysisRun.status == RunStatus.RUNNING)
                 .with_for_update(skip_locked=True)
             )
         ).all()
@@ -48,11 +49,18 @@ async def _ensure_ready_aggregation_stages(db: AsyncSession) -> None:
             ).all()
         )
         by_type = {item.stage_type: item for item in stages}
-        required = [StageType.PLATFORM_ADAPTATION, StageType.C2_ADAPTATION]
-        if all(
-            stage_type in by_type and by_type[stage_type].state == StageState.COMPLETED
-            for stage_type in required
-        ) and StageType.CASE_AGGREGATION not in by_type:
+        required = (
+            [StageType.PLATFORM_ADAPTATION]
+            if not run.c2_analysis_enabled
+            else [StageType.PLATFORM_ADAPTATION, StageType.C2_ADAPTATION]
+        )
+        if (
+            all(
+                stage_type in by_type and by_type[stage_type].state == StageState.COMPLETED
+                for stage_type in required
+            )
+            and StageType.CASE_AGGREGATION not in by_type
+        ):
             max_attempts, timeout_seconds = get_settings().policy_for_stage(
                 StageType.CASE_AGGREGATION.value
             )
@@ -73,9 +81,7 @@ async def process_once(db: AsyncSession) -> bool:
     stage = await db.scalar(
         select(AnalysisStage)
         .where(
-            AnalysisStage.stage_type.in_(
-                [StageType.CASE_AGGREGATION, StageType.REPORT_GENERATION]
-            ),
+            AnalysisStage.stage_type.in_([StageType.CASE_AGGREGATION, StageType.REPORT_GENERATION]),
             AnalysisStage.state == StageState.QUEUED,
         )
         .order_by(AnalysisStage.created_at)

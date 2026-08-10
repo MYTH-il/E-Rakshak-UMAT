@@ -21,6 +21,7 @@ fi
 
 echo "+ enable CAPE taskstatus and user_stop APIs in $API_CONF"
 echo "+ install schema-compatible WinST/DT handoff reporter from locked source and patch"
+echo "+ make CAPE's bundled 7zz archive extractor executable"
 if [[ "$EXECUTE" -eq 0 ]]; then
   echo "dry-run complete; no CAPE configuration changed"
   exit 0
@@ -29,6 +30,8 @@ fi
 test -f "$WINSTDT_CHECKOUT/cape/modules/reporting/winstdt_handoff_export.py"
 test -f "$WINSTDT_PATCH_ROOT/0001-schema-compatible-correlation.patch"
 test -f "$WINSTDT_PATCH_ROOT/0002-deployment-runtime-identity.patch"
+test -f "$CAPE_ROOT/data/7zz"
+sudo -n chmod 0755 "$CAPE_ROOT/data/7zz"
 python3 - "$PROJECT_ROOT" <<'PY'
 import hashlib
 import json

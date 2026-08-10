@@ -27,13 +27,15 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
     postgres = json.loads((ROOT / "dependency-locks/umat-postgres.json").read_text())
     components = manifest["components"]
     assert components["winstdt"]["commit"] == winstdt["commit"]
-    assert components["winstdt"]["patch_series_sha256"] == (
-        winstdt["deployment_patch_series"]["patch_series_sha256"]
+    assert (
+        components["winstdt"]["patch_series_sha256"]
+        == (winstdt["deployment_patch_series"]["patch_series_sha256"])
     )
     assert components["cape"]["commit"] == winstdt["cape"]["commit"]
     assert components["android"]["commit"] == android["commit"]
-    assert components["android"]["emulator_version"] == (
-        android["tool_versions"]["android_emulator"]
+    assert components["android"]["patch_series_sha256"] == android["patch_series_sha256"]
+    assert (
+        components["android"]["emulator_version"] == (android["tool_versions"]["android_emulator"])
     )
     assert components["c2"]["commit"] == c2["commit"]
     assert components["c2"]["patch_series_sha256"] == c2["patch_series_sha256"]
@@ -49,12 +51,13 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
         assert hashlib.sha256(content).hexdigest() == entry["sha256"]
         patch_digest.update(content)
         declared_paths.append(patch_path)
-    assert patch_digest.hexdigest() == (
-        winstdt["deployment_patch_series"]["patch_series_sha256"]
-    )
-    assert sorted(declared_paths) == sorted(
-        (ROOT / "deployment/windows/patches").glob("*.patch")
-    )
+    assert patch_digest.hexdigest() == (winstdt["deployment_patch_series"]["patch_series_sha256"])
+
+    android_patch_digest = hashlib.sha256()
+    for patch_path in sorted((ROOT / "deployment/android/patches").glob("*.patch")):
+        android_patch_digest.update(patch_path.read_bytes())
+    assert android_patch_digest.hexdigest() == android["patch_series_sha256"]
+    assert sorted(declared_paths) == sorted((ROOT / "deployment/windows/patches").glob("*.patch"))
 
 
 def test_dry_run_never_executes_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,6 +114,8 @@ def test_windows_executor_service_has_isolated_credentials_and_storage() -> None
     assert "ReadOnlyPaths=/srv/winstdt/handoff" in installer
     assert "UMAT_DATABASE_URL" not in enrollment
     assert "--token-file" in enrollment
+    cape_integration = (ROOT / "deployment/full-stack/configure-cape-integration.sh").read_text()
+    assert 'chmod 0755 "$CAPE_ROOT/data/7zz"' in cape_integration
 
 
 def test_clean_host_installer_is_dry_run_by_default() -> None:
@@ -123,7 +128,7 @@ def test_clean_host_installer_is_dry_run_by_default() -> None:
     assert 'if [[ "$EXECUTE" -eq 0 ]]' in installer
     installer_lock = json.loads((ROOT / "dependency-locks/installer.json").read_text())
     requirements = (ROOT / "dependency-locks/installer-requirements.txt").read_text()
-    assert f'uv=={installer_lock["uv"]["version"]}' in requirements
+    assert f"uv=={installer_lock['uv']['version']}" in requirements
     assert installer_lock["uv"]["sha256"] in requirements
 
 
@@ -139,7 +144,7 @@ def test_android_runtime_installer_enforces_locked_emulator_and_license() -> Non
     android = json.loads((ROOT / "dependency-locks/android-erakshak.json").read_text())
     assert f'EXPECTED_EMULATOR="{android["tool_versions"]["android_emulator"]}"' in installer
     assert "--accept-sdk-licenses" in installer
-    assert "system-images\\;android-30\\;google_apis\\;x86_64" in installer
+    assert "system-images\\;android-30\\;default\\;x86_64" in installer
 
 
 def test_all_executor_units_use_isolated_environment_files() -> None:
@@ -158,6 +163,18 @@ def test_all_executor_units_use_isolated_environment_files() -> None:
         )
     )
     assert "--enroll-only" in enrollment
+
+
+def test_guest_firewall_is_installed_and_fail_closed() -> None:
+    installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
+    rules = (ROOT / "deployment/full-stack/umat-guest-guard.nft").read_text()
+    unit = (ROOT / "deployment/full-stack/umat-guest-guard.service").read_text()
+    assert "enable --now umat-guest-guard" in installer
+    assert 'iifname "virbr-winstdt" drop' in rules
+    assert "ip saddr 10.66.0.101 tcp sport 8000 accept" in rules
+    assert 'iifname "br-umat-android" drop' in rules
+    assert 'iifname { "virbr-winstdt", "br-umat-android" } drop' in rules
+    assert "Before=umat-android-executor.service umat-windows-executor.service" in unit
 
 
 def test_executor_enrollment_can_exit_without_claiming_work() -> None:

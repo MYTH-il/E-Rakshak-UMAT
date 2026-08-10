@@ -26,14 +26,14 @@
     "files": [
       {
         "path": "deployment/windows/patches/0001-schema-compatible-correlation.patch",
-        "sha256": "60ba109c6029f9549d9ae6de79744deb976fbbceaf7207399f3429eaaaa46fc2"
+        "sha256": "6a7b1f56c1229f6a6e9c2015c8983b21fad0c8b7784e7bdd25bee2419efc0f39"
       },
       {
         "path": "deployment/windows/patches/0002-deployment-runtime-identity.patch",
         "sha256": "3af414e6f5b857bb565dd8388828bc36c5e02411588fe169746431d5f1edf668"
       }
     ],
-    "patch_series_sha256": "9dd8ac177ad7e35cdae342ed26c8d04adb90efdd5e3ce8ef28b1be64ae285cff"
+    "patch_series_sha256": "c6ce031ed77175877d9518385cc41047d5119988ac62190634bc2cdc83d50f39"
   },
   "license_status": "authorization_required_no_upstream_license_file",
   "redistribution_allowed": false,

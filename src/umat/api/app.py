@@ -16,6 +16,7 @@ from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from umat import __version__
+from umat.android.profile_routes import router as android_profile_router
 from umat.api.artifact_routes import router as artifact_router
 from umat.api.auth_routes import router as auth_router
 from umat.api.case_routes import router as case_router
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     application.include_router(executor_router)
     application.include_router(report_router)
     application.include_router(windows_profile_router)
+    application.include_router(android_profile_router)
 
     web_root = Path(__file__).parents[1] / "web"
     application.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
@@ -82,7 +84,11 @@ def create_app() -> FastAPI:
     @application.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
         return JSONResponse(
-            {"error": f"http_{exc.status_code}", "detail": str(exc.detail), "request_id": request.headers.get("X-Request-ID")},
+            {
+                "error": f"http_{exc.status_code}",
+                "detail": str(exc.detail),
+                "request_id": request.headers.get("X-Request-ID"),
+            },
             status_code=exc.status_code,
             headers=exc.headers,
         )
@@ -103,6 +109,7 @@ def create_app() -> FastAPI:
     @application.get("/submit", include_in_schema=False)
     @application.get("/cases/{case_id}", include_in_schema=False)
     @application.get("/admin/windows", include_in_schema=False)
+    @application.get("/admin/android", include_in_schema=False)
     async def web_application(case_id: str | None = None) -> FileResponse:
         del case_id
         return FileResponse(
@@ -119,6 +126,4 @@ app = create_app()
 
 def run() -> None:
     settings = get_settings()
-    uvicorn.run(
-        "umat.api.app:app", host=settings.api_host, port=settings.api_port, reload=False
-    )
+    uvicorn.run("umat.api.app:app", host=settings.api_host, port=settings.api_port, reload=False)

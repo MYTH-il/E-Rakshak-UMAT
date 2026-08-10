@@ -1,0 +1,13 @@
+[Unit]
+Description=UMAT malware guest to control-plane firewall
+After=network-online.target docker.service libvirtd.service
+Before=umat-android-executor.service umat-windows-executor.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/umat/umat-guest-guard.nft
+ExecStop=/usr/sbin/nft delete table ip umat_guest_guard
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

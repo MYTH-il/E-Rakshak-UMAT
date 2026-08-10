@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from umat.android.avd import AvdManager
 from umat.android.bundle import ANDROID_COMMIT, MOBSF_VERSION, AndroidBundleBuilder, sha256_file
 from umat.android.mobsf import MobSFClient
+from umat.android.redroid import RedroidManager
 from umat.executors.protocol import ExecutorStopRequested, raise_for_stop, signature_message
 from umat.intake.routing import is_structurally_valid_apk
 
@@ -57,8 +58,13 @@ class AndroidExecutor:
         self.system_image, self.emulator_port = system_image, emulator_port
         self.adb_relay = adb_relay
         self.adb_relay_bind_address = adb_relay_bind_address
-        self.stimulation_seconds, self.stimulation_actions = stimulation_seconds, stimulation_actions
-        self.state: dict[str, Any] = json.loads(state_path.read_text()) if state_path.is_file() else {}
+        self.stimulation_seconds, self.stimulation_actions = (
+            stimulation_seconds,
+            stimulation_actions,
+        )
+        self.state: dict[str, Any] = (
+            json.loads(state_path.read_text()) if state_path.is_file() else {}
+        )
 
     @property
     def private_key(self) -> Ed25519PrivateKey:
@@ -121,7 +127,11 @@ class AndroidExecutor:
         return {"Authorization": f"Bearer {self.state['credential']}"}
 
     def signed(self, method: str, path: str, body: dict[str, Any], lease: str) -> dict[str, str]:
-        timestamp, nonce, key = datetime.now(timezone.utc).isoformat(), uuid.uuid4().hex, str(uuid.uuid4())
+        timestamp, nonce, key = (
+            datetime.now(timezone.utc).isoformat(),
+            uuid.uuid4().hex,
+            str(uuid.uuid4()),
+        )
         message = signature_message(
             method=method,
             path=path,
@@ -162,17 +172,26 @@ class AndroidExecutor:
                     raise RuntimeError("claimed Android sample is not a structurally valid APK")
                 recovered = claim.get("recovered_native_task")
                 if recovered:
-                    scan_hash = str(recovered["native_task_id"])
+                    scan_hash = str(
+                        (recovered.get("recovery_metadata") or {}).get("scan_hash")
+                        or recovered["native_task_id"]
+                    )
                 else:
                     uploaded = self.mobsf.upload(sample)
                     scan_hash = str(uploaded.get("hash") or uploaded.get("scan_hash") or "")
-                    if len(scan_hash) != 32 or any(char not in "0123456789abcdefABCDEF" for char in scan_hash):
+                    if len(scan_hash) != 32 or any(
+                        char not in "0123456789abcdefABCDEF" for char in scan_hash
+                    ):
                         raise RuntimeError("MobSF upload returned an invalid scan hash")
                     native = common | {
                         "task_type": "mobsf_scan",
-                        "native_task_id": scan_hash,
+                        # A MobSF hash identifies content, not one execution.
+                        # Scope the backend task identity to this run so the
+                        # same APK can be analyzed repeatedly.
+                        "native_task_id": f"{scan_hash}:{claim['analysis_run_id']}",
                         "recovery_metadata": {
                             "analysis_run_id": claim["analysis_run_id"],
+                            "scan_hash": scan_hash,
                             "file_name": uploaded.get("file_name"),
                         },
                     }
@@ -280,29 +299,60 @@ class AndroidExecutor:
         check_stop()
         static_path = workspace / "mobsf-static.json"
         self._json(static_path, static)
+        profile = claim.get("execution_configuration") or {}
+        system_image = str(profile.get("system_image") or self.system_image)
+        redroid_image = "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d"
+        if system_image not in {"system-images;android-30;default;x86_64", redroid_image}:
+            raise RuntimeError("Android profile requests an unsupported system image")
+        memory_mb = int(profile.get("ram_mb") or 4096)
+        if memory_mb != 4096:
+            raise RuntimeError("Android profile requests unsupported guest memory")
         avd_name = f"umat-{claim['analysis_run_id'].replace('-', '')[:20]}"
-        avd = AvdManager(
-            avdmanager=self.avdmanager,
-            emulator=self.emulator,
-            adb=self.adb,
-            system_image=self.system_image,
-            emulator_port=self.emulator_port,
-            adb_relay=self.adb_relay,
-            adb_relay_bind_address=self.adb_relay_bind_address,
-        )
+        if system_image == redroid_image:
+            avd: AvdManager | RedroidManager = RedroidManager(
+                adb=self.adb,
+                image=redroid_image,
+                memory_mb=memory_mb,
+                vcpus=int(profile.get("vcpus") or 4),
+                network_mode=str(profile.get("network_mode") or "isolated_simulated"),
+            )
+        else:
+            if profile.get("network_mode") == "isolated_simulated":
+                raise RuntimeError("isolated Android runs require the ReDroid profile")
+            avd = AvdManager(
+                avdmanager=self.avdmanager,
+                emulator=self.emulator,
+                adb=self.adb,
+                system_image=system_image,
+                emulator_port=self.emulator_port,
+                memory_mb=memory_mb,
+                adb_relay=self.adb_relay,
+                adb_relay_bind_address=self.adb_relay_bind_address,
+            )
         dynamic: dict[str, Any] | None = None
         stimulation: dict[str, Any] = {
-            "strategy": "deterministic_adb_v1", "actions_completed": 0, "complete": False
+            "strategy": "deterministic_adb_v1",
+            "actions_completed": 0,
+            "complete": False,
         }
         evidence: dict[str, Path] = {}
         running = None
+        dynamic_started = False
+        analysis_error: Exception | None = None
         try:
             running = avd.start(avd_name, workspace)
             check_stop()
             self.mobsf.start_dynamic(scan_hash)
+            dynamic_started = True
             activity = self._main_activity(static)
             if activity:
-                self.mobsf.start_activity(scan_hash, activity)
+                try:
+                    self.mobsf.start_activity(scan_hash, activity)
+                except Exception:
+                    # MobSF already installs and launches the package during
+                    # start_analysis. Some reports expose an activity format
+                    # rejected by the optional start_activity endpoint.
+                    caveats.append("explicit_activity_launch_failed")
             try:
                 self.mobsf.instrument(scan_hash)
             except Exception:
@@ -326,22 +376,28 @@ class AndroidExecutor:
             self.mobsf.stop_dynamic(scan_hash)
             dynamic = self.mobsf.wait_dynamic_report(scan_hash, check_stop=check_stop)
         except ExecutorStopRequested:
-            try:
-                self.mobsf.stop_dynamic(scan_hash)
-            except Exception:
-                caveats.append("android_dynamic_stop_failed")
+            if dynamic_started:
+                try:
+                    self.mobsf.stop_dynamic(scan_hash)
+                except Exception:
+                    caveats.append("android_dynamic_stop_failed")
             raise
-        except Exception:
+        except Exception as exc:
+            analysis_error = exc
             caveats.extend(["static_analysis_only", "network_capture_incomplete"])
-            try:
-                self.mobsf.stop_dynamic(scan_hash)
-            except Exception:
-                caveats.append("android_dynamic_stop_failed")
+            if dynamic_started:
+                try:
+                    self.mobsf.stop_dynamic(scan_hash)
+                except Exception:
+                    caveats.append("android_dynamic_stop_failed")
         finally:
             avd.stop()
         pcap = workspace / "android-capture.pcap"
         if not pcap.is_file() or pcap.stat().st_size == 0:
-            raise RuntimeError("Android analysis did not produce a non-empty PCAP")
+            detail = f": {analysis_error}" if analysis_error else ""
+            raise RuntimeError(
+                f"Android analysis did not produce a non-empty PCAP{detail}"
+            ) from analysis_error
         evidence["pcap"] = pcap
         dynamic_path: Path | None = None
         if dynamic is not None:
@@ -349,10 +405,12 @@ class AndroidExecutor:
             self._json(dynamic_path, dynamic)
         ended = datetime.now(timezone.utc)
         emulator_metadata = {
-            "api_level": 30,
+            "api_level": int(profile.get("api_level") or 30),
             "avd_name": avd_name,
             "guest_ip": running.guest_ip if running else None,
-            "system_image": self.system_image,
+            "system_image": system_image,
+            "runtime": "redroid" if system_image == redroid_image else "avd",
+            "profile_snapshot": profile,
         }
         bundle = AndroidBundleBuilder(self.private_key, str(self.state["executor_id"])).build(
             analysis_run_id=UUID(claim["analysis_run_id"]),
@@ -369,7 +427,9 @@ class AndroidExecutor:
             destination=workspace / "android-result",
         )
         self._upload(claim, bundle.archive_path, "android_bundle", "application/zip")
-        self._upload(claim, bundle.root / "umat-manifest.json", "platform_manifest", "application/json")
+        self._upload(
+            claim, bundle.root / "umat-manifest.json", "platform_manifest", "application/json"
+        )
         self._upload(claim, pcap, "pcap", "application/vnd.tcpdump.pcap")
         prior = self._static_prior(static, claim)
         prior_path = workspace / "c2-static-prior.json"
@@ -471,21 +531,17 @@ def run(
     avdmanager: Path = typer.Option(..., envvar="UMAT_ANDROID_AVDMANAGER"),
     emulator: Path = typer.Option(..., envvar="UMAT_ANDROID_EMULATOR"),
     adb: Path = typer.Option(..., envvar="UMAT_ANDROID_ADB"),
-    system_image: str = typer.Option("system-images;android-30;google_apis;x86_64"),
+    system_image: str = typer.Option("system-images;android-30;default;x86_64"),
     emulator_port: int = typer.Option(5554),
     adb_relay: Path | None = typer.Option(None, envvar="UMAT_ANDROID_ADB_RELAY"),
     adb_relay_bind_address: str | None = typer.Option(
         None, envvar="UMAT_ANDROID_ADB_RELAY_BIND_ADDRESS"
     ),
-    work_root: Path = typer.Option(
-        Path("var/android-work"), envvar="UMAT_ANDROID_WORK_ROOT"
-    ),
+    work_root: Path = typer.Option(Path("var/android-work"), envvar="UMAT_ANDROID_WORK_ROOT"),
     state_path: Path = typer.Option(
         Path("var/android-executor/state.json"), envvar="UMAT_ANDROID_STATE_PATH"
     ),
-    enrollment_token: str | None = typer.Option(
-        None, envvar="UMAT_ANDROID_ENROLLMENT_TOKEN"
-    ),
+    enrollment_token: str | None = typer.Option(None, envvar="UMAT_ANDROID_ENROLLMENT_TOKEN"),
     name: str = typer.Option("android-executor", envvar="UMAT_ANDROID_EXECUTOR_NAME"),
     enroll_only: bool = typer.Option(False, help="Enroll and publish capabilities, then exit"),
     stimulation_seconds: int = typer.Option(30, min=1, max=600),

@@ -121,6 +121,7 @@ function shell(title, content) {
   if (state.session.roles.includes("administrator")) {
     sidebar.append(node("div", "nav-label", "Administration"));
     sidebar.append(navItem("Windows profiles", "/admin/windows", path === "/admin/windows"));
+    sidebar.append(navItem("Android profiles", "/admin/android", path === "/admin/android"));
   }
   const foot = node("div", "sidebar-foot");
   const user = node("div", "user-chip");
@@ -223,8 +224,20 @@ async function renderSubmit() {
     items.forEach((item) => { const option = node("option", "", `${item.display_name} · ${item.windows_version} · ${item.analysis_profile}`); option.value = item.id; profiles.append(option); });
   } catch (_) { /* profile selection can remain default */ }
   append(profileWrap, profileLabel, profiles);
-  append(grid, title.wrap, reference.wrap, file.wrap, profileWrap);
-  const note = node("div", "notice", "Files are streamed into quarantine, hashed, structurally routed, and stored under generated content-addressed keys. Filenames never become storage paths.");
+  const androidProfileWrap = node("div", "field full");
+  const androidProfileLabel = node("label", "", "Android analysis profile (ignored for non-APKs)");
+  const androidProfiles = node("select"); androidProfiles.name = "android_profile_id";
+  androidProfiles.append(node("option", "", "Use active default profile")); androidProfiles.firstChild.value = "";
+  try {
+    const items = await api("/api/v1/android/profiles");
+    items.forEach((item) => { const option = node("option", "", `${item.display_name} · API ${item.api_level} · ${item.architecture} · ${item.ram_mb} MiB`); option.value = item.id; androidProfiles.append(option); });
+  } catch (_) { /* profile selection can remain default */ }
+  append(androidProfileWrap, androidProfileLabel, androidProfiles);
+  const networkWrap = node("div", "field full"); const networkLabel = node("label", "", "Analysis network"); const networkMode = node("select"); networkMode.name = "network_mode";
+  [["Isolated / simulated (recommended)", "isolated_simulated"], ["Real-world network egress (not containment-qualified)", "real_world_egress"]].forEach(([label, value]) => { const option = node("option", "", label); option.value = value; networkMode.append(option); }); append(networkWrap, networkLabel, networkMode);
+  const c2Wrap = node("label", "field full checkbox-field"); const c2Enabled = node("input"); c2Enabled.type = "checkbox"; c2Enabled.name = "c2_analysis_enabled"; append(c2Wrap, c2Enabled, node("span", "", "Run C2 analyzer on captured traffic (guest remains governed by the selected network mode)"));
+  append(grid, title.wrap, reference.wrap, file.wrap, profileWrap, androidProfileWrap, networkWrap, c2Wrap);
+  const note = node("div", "notice", "Isolated/simulated networking is the malware-safe baseline. C2 analysis is optional and can inspect captured connection attempts without enabling Internet access. Real-world egress remains unqualified.");
   const submit = button("Create case and analyze", "btn btn-primary"); submit.type = "submit";
   append(form, grid, note, append(node("div", "form-actions"), submit));
   form.addEventListener("submit", async (event) => {
@@ -233,6 +246,9 @@ async function renderSubmit() {
     if (title.input.value) data.append("title", title.input.value);
     if (reference.input.value) data.append("reference", reference.input.value);
     if (profiles.value) data.append("windows_profile_id", profiles.value);
+    if (androidProfiles.value) data.append("android_profile_id", androidProfiles.value);
+    data.append("network_mode", networkMode.value);
+    data.append("c2_analysis_enabled", c2Enabled.checked ? "true" : "false");
     try {
       const result = await api("/api/v1/cases", { method: "POST", body: data });
       if (result.duplicate_cases.length) toast("Duplicate content found. Confirmation is required before analysis starts.");
@@ -339,7 +355,7 @@ function renderProgress(content, runs) {
     const title = node("h3", "section-title", `${index ? "Earlier" : "Current"} ${human(run.platform)} run`); content.append(title);
     const card = node("section", "card card-body"); const head = node("div", "actions-row"); append(head, badge(run.status), run.result ? badge(run.result) : null, node("span", "mono muted", run.id)); card.append(head);
     const track = node("div", "stage-track stage-track-spaced");
-    const order = ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"];
+    const order = run.c2_analysis_enabled ? ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"] : ["platform_analysis", "platform_adaptation", "case_aggregation", "report_generation"];
     order.forEach((kind) => { const stageData = run.stages.find((item) => item.stage_type === kind); const stage = node("div", "stage"); append(stage, node("strong", "", human(kind)), node("span", `badge-${stageData?.state || "waiting"}`, human(stageData?.state || "waiting"))); track.append(stage); });
     card.append(track); content.append(card);
   });
@@ -364,7 +380,7 @@ async function renderWindowsAdmin() {
   content.append(pageHead("CAPE orchestration", "Windows VM profiles", "Create and retire CAPE-managed VM/user profiles. Existing run snapshots remain reproducible after retirement.", null));
   const create = node("section", "card card-body"); create.append(node("h3", "card-title", "Provision profile"));
   const form = node("form"); const grid = node("div", "field-grid");
-  const definitions = [["Machine name", "name", "text", ""], ["Display name", "display_name", "text", ""], ["Windows version", "windows_version", "text", "Windows 10 22H2"], ["CAPE template", "cape_template", "text", "win10-hardened"], ["vCPUs", "vcpus", "number", "4"], ["RAM (MiB)", "ram_mb", "number", "8192"], ["Disk (GiB)", "disk_gb", "number", "160"], ["Guest username", "username", "text", "officer"]];
+  const definitions = [["Machine name", "name", "text", ""], ["Display name", "display_name", "text", ""], ["Windows version", "windows_version", "text", "Windows 10 22H2"], ["CAPE template", "cape_template", "text", "win10-hardened"], ["vCPUs", "vcpus", "number", "4"], ["RAM (MiB)", "ram_mb", "number", "4096"], ["Disk (GiB)", "disk_gb", "number", "160"], ["Guest username", "username", "text", "officer"]];
   const controls = {};
   definitions.forEach(([label, name, type, value]) => { const item = field(label, type, name, true); item.input.value = value; controls[name] = item.input; grid.append(item.wrap); });
   const profileField = node("div", "field"); const profileLabel = node("label", "", "Analysis profile"); const profile = node("select"); ["standard", "deep_static", "tls_intercept", "full_memory", "full_investigation"].forEach((value) => { const option = node("option", "", human(value)); option.value = value; profile.append(option); }); append(profileField, profileLabel, profile); grid.append(profileField);
@@ -372,6 +388,30 @@ async function renderWindowsAdmin() {
   const list = node("div", "case-list"); content.append(list); shell("Windows profiles", content);
   async function load() { const items = await api("/api/v1/windows/profiles?include_inactive=true"); list.replaceChildren(); items.forEach((item) => { const row = node("div", "card case-row"); const copy = node("div"); append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · ${item.windows_version} · ${item.vcpus} vCPU · ${item.ram_mb} MiB · ${item.disk_gb} GiB`)); const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = ["deleting", "deleted", "provisioning"].includes(item.state); remove.addEventListener("click", async () => { try { await api(`/api/v1/windows/profiles/${item.id}`, { method: "DELETE" }); toast("Profile deletion queued through CAPE."); load(); } catch (failure) { toast(failure.message, true); } }); append(row, copy, node("div", "", human(item.analysis_profile)), badge(item.state), remove); list.append(row); }); }
   form.addEventListener("submit", async (event) => { event.preventDefault(); const body = { name: controls.name.value, display_name: controls.display_name.value, windows_version: controls.windows_version.value, architecture: "x64", vcpus: Number(controls.vcpus.value), ram_mb: Number(controls.ram_mb.value), disk_gb: Number(controls.disk_gb.value), user_profile: { username: controls.username.value, locale: "en-US", timezone: "UTC", installed_software: [] }, analysis_profile: profile.value, cape_template: controls.cape_template.value, is_default: false }; try { await api("/api/v1/windows/profiles", { method: "POST", body }); toast("Profile provisioning queued."); form.reset(); load(); } catch (failure) { toast(failure.message, true); } });
+  try { await load(); } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }
+}
+
+async function renderAndroidAdmin() {
+  if (!state.session.roles.includes("administrator")) { go("/cases"); return; }
+  const content = node("div");
+  content.append(pageHead("Android orchestration", "Android emulator profiles", "Manage qualified Android 11 AOSP x86_64 analysis baselines. ARM profiles are intentionally unsupported.", null));
+  const create = node("section", "card card-body"); create.append(node("h3", "card-title", "Create candidate profile"));
+  const form = node("form"); const grid = node("div", "field-grid");
+  const name = field("Profile name", "text", "android_name", true);
+  const display = field("Display name", "text", "android_display_name", true);
+  const defaultWrap = node("div", "field"); const defaultLabel = node("label", "", "Make active default"); const isDefault = node("input"); isDefault.type = "checkbox"; append(defaultWrap, defaultLabel, isDefault);
+  append(grid, name.wrap, display.wrap, defaultWrap);
+  const runtimeField = node("div", "field"); const runtimeLabel = node("label", "", "Runtime"); const runtime = node("select"); [["ReDroid Android 11 x86_64", "redroid"], ["AOSP API 30 x86_64 AVD", "avd"]].forEach(([label, value]) => { const option = node("option", "", label); option.value = value; runtime.append(option); }); append(runtimeField, runtimeLabel, runtime); grid.append(runtimeField);
+  const fixed = node("div", "notice", "Both runtimes are fixed to Android 11 / API 30, x86_64, 4 vCPU, 4096 MiB RAM, and controlled networking. CPU/ARM emulation cannot be enabled here.");
+  const submit = button("Create profile", "btn btn-primary"); submit.type = "submit"; append(form, grid, fixed, append(node("div", "form-actions"), submit)); create.append(form);
+  content.append(create, node("h3", "section-title", "Managed profiles"));
+  const list = node("div", "case-list"); content.append(list); shell("Android profiles", content);
+  async function load() {
+    const items = await api("/api/v1/android/profiles?include_inactive=true"); list.replaceChildren();
+    if (!items.length) list.append(node("div", "card empty", "No Android profiles configured."));
+    items.forEach((item) => { const row = node("div", "card case-row"); const copy = node("div"); append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · Android ${item.android_version} / API ${item.api_level} · ${item.architecture} · ${item.vcpus} vCPU · ${item.ram_mb} MiB`), node("div", "mono muted", item.system_image)); const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = item.state !== "active" || item.is_default; remove.title = item.is_default ? "Select another default before retiring this profile" : "Retire profile"; remove.addEventListener("click", async () => { try { await api(`/api/v1/android/profiles/${item.id}`, { method: "DELETE" }); toast("Android profile retired; existing run snapshots are preserved."); load(); } catch (failure) { toast(failure.message, true); } }); append(row, copy, node("div", "", item.is_default ? "Default" : human(item.qualification?.status || "candidate")), badge(item.state), remove); list.append(row); });
+  }
+  form.addEventListener("submit", async (event) => { event.preventDefault(); const redroid = runtime.value === "redroid"; try { await api("/api/v1/android/profiles", { method: "POST", body: { name: name.input.value, display_name: display.input.value, system_image: redroid ? "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d" : "system-images;android-30;default;x86_64", emulator_version: redroid ? "redroid-11-d1ca0815" : "34.1.19", is_default: isDefault.checked } }); toast("Android candidate profile created."); form.reset(); load(); } catch (failure) { toast(failure.message, true); } });
   try { await load(); } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }
 }
 
@@ -386,6 +426,7 @@ async function renderRoute() {
   if (path === "/" || path === "/cases") return renderCases();
   if (path === "/submit") return renderSubmit();
   if (path === "/admin/windows") return renderWindowsAdmin();
+  if (path === "/admin/android") return renderAndroidAdmin();
   const match = path.match(/^\/cases\/([0-9a-f-]+)$/i);
   if (match) return renderCase(match[1]);
   go("/cases");

@@ -41,7 +41,9 @@ def json_list_type() -> TypeEngine[Any]:
 
 
 def db_enum(enum_class: type[enum.StrEnum], name: str) -> Enum:
-    return Enum(enum_class, name=name, values_callable=lambda values: [item.value for item in values])
+    return Enum(
+        enum_class, name=name, values_callable=lambda values: [item.value for item in values]
+    )
 
 
 class Platform(enum.StrEnum):
@@ -117,6 +119,11 @@ class WindowsProfileState(enum.StrEnum):
     ERROR = "error"
 
 
+class AndroidProfileState(enum.StrEnum):
+    ACTIVE = "active"
+    RETIRED = "retired"
+
+
 class WindowsProfileOperationType(enum.StrEnum):
     CREATE = "create"
     DELETE = "delete"
@@ -150,7 +157,9 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     roles: Mapped[list[Role]] = relationship(secondary="user_roles", lazy="selectin")
 
 
@@ -162,8 +171,12 @@ class Role(Base):
 
 class UserRole(Base):
     __tablename__ = "user_roles"
-    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True)
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="RESTRICT"), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True
+    )
+    role_id: Mapped[int] = mapped_column(
+        ForeignKey("roles.id", ondelete="RESTRICT"), primary_key=True
+    )
 
 
 class Session(Base):
@@ -187,17 +200,25 @@ class LoginAttempt(Base):
     username: Mapped[str] = mapped_column(String(128), index=True)
     ip_address: Mapped[str] = mapped_column(String(64), index=True)
     succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
-    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
 
 
 class Case(Base):
     __tablename__ = "cases"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    owner_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
     title: Mapped[str | None] = mapped_column(String(256))
     reference: Mapped[str | None] = mapped_column(String(128), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     submissions: Mapped[list[Submission]] = relationship(lazy="selectin")
     runs: Mapped[list[AnalysisRun]] = relationship(lazy="selectin")
 
@@ -216,7 +237,9 @@ class Submission(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
     case_id: Mapped[UUID] = mapped_column(ForeignKey("cases.id", ondelete="RESTRICT"), index=True)
     uploader_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
-    sample_sha256: Mapped[str] = mapped_column(ForeignKey("samples.sha256", ondelete="RESTRICT"), index=True)
+    sample_sha256: Mapped[str] = mapped_column(
+        ForeignKey("samples.sha256", ondelete="RESTRICT"), index=True
+    )
     original_filename: Mapped[str] = mapped_column(String(512))
     storage_id: Mapped[UUID] = mapped_column(Uuid, unique=True, default=uuid7)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -225,25 +248,38 @@ class Submission(Base):
 
 class CaseSample(Base):
     __tablename__ = "case_samples"
-    case_id: Mapped[UUID] = mapped_column(ForeignKey("cases.id", ondelete="RESTRICT"), primary_key=True)
-    sample_sha256: Mapped[str] = mapped_column(ForeignKey("samples.sha256", ondelete="RESTRICT"), primary_key=True)
+    case_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cases.id", ondelete="RESTRICT"), primary_key=True
+    )
+    sample_sha256: Mapped[str] = mapped_column(
+        ForeignKey("samples.sha256", ondelete="RESTRICT"), primary_key=True
+    )
 
 
 class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
     case_id: Mapped[UUID] = mapped_column(ForeignKey("cases.id", ondelete="RESTRICT"), index=True)
-    submission_id: Mapped[UUID] = mapped_column(ForeignKey("submissions.id", ondelete="RESTRICT"), index=True)
+    submission_id: Mapped[UUID] = mapped_column(
+        ForeignKey("submissions.id", ondelete="RESTRICT"), index=True
+    )
     platform: Mapped[Platform] = mapped_column(db_enum(Platform, "platform"))
     status: Mapped[RunStatus] = mapped_column(db_enum(RunStatus, "run_status"), index=True)
     result: Mapped[RunResult | None] = mapped_column(db_enum(RunResult, "run_result"))
+    network_mode: Mapped[str] = mapped_column(String(32), default="isolated_simulated")
+    c2_analysis_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     stages: Mapped[list[AnalysisStage]] = relationship(lazy="selectin")
     windows_configuration: Mapped[WindowsRunConfiguration | None] = relationship(
+        lazy="selectin", uselist=False
+    )
+    android_configuration: Mapped[AndroidRunConfiguration | None] = relationship(
         lazy="selectin", uselist=False
     )
 
@@ -252,7 +288,9 @@ class AnalysisStage(Base):
     __tablename__ = "analysis_stages"
     __table_args__ = (UniqueConstraint("analysis_run_id", "stage_type"),)
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    analysis_run_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True)
+    analysis_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True
+    )
     stage_type: Mapped[StageType] = mapped_column(db_enum(StageType, "stage_type"), index=True)
     state: Mapped[StageState] = mapped_column(db_enum(StageState, "stage_state"), index=True)
     priority: Mapped[int] = mapped_column(Integer, default=0)
@@ -262,14 +300,20 @@ class AnalysisStage(Base):
     failure_code: Mapped[str | None] = mapped_column(String(128))
     failure_detail: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     attempts: Mapped[list[AnalysisAttempt]] = relationship(lazy="selectin")
 
 
 class StageDependency(Base):
     __tablename__ = "stage_dependencies"
-    parent_stage_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_stages.id", ondelete="RESTRICT"), primary_key=True)
-    child_stage_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_stages.id", ondelete="RESTRICT"), primary_key=True)
+    parent_stage_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), primary_key=True
+    )
+    child_stage_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), primary_key=True
+    )
 
 
 class Executor(Base):
@@ -277,7 +321,9 @@ class Executor(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
     name: Mapped[str] = mapped_column(String(128), unique=True)
     executor_type: Mapped[str] = mapped_column(String(64), index=True)
-    status: Mapped[ExecutorStatus] = mapped_column(db_enum(ExecutorStatus, "executor_status"), default=ExecutorStatus.ACTIVE)
+    status: Mapped[ExecutorStatus] = mapped_column(
+        db_enum(ExecutorStatus, "executor_status"), default=ExecutorStatus.ACTIVE
+    )
     public_key: Mapped[bytes] = mapped_column(LargeBinary)
     supported_stage_types: Mapped[list[str]] = mapped_column(json_list_type(), default=list)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(json_dict_type(), default=dict)
@@ -288,7 +334,9 @@ class Executor(Base):
 class ExecutorCredential(Base):
     __tablename__ = "executor_credentials"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    executor_id: Mapped[UUID] = mapped_column(ForeignKey("executors.id", ondelete="RESTRICT"), index=True)
+    executor_id: Mapped[UUID] = mapped_column(
+        ForeignKey("executors.id", ondelete="RESTRICT"), index=True
+    )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     scopes: Mapped[list[str]] = mapped_column(json_list_type(), default=list)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -303,7 +351,9 @@ class ExecutorRequest(Base):
         UniqueConstraint("executor_id", "nonce", name="uq_executor_requests_nonce"),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    executor_id: Mapped[UUID] = mapped_column(ForeignKey("executors.id", ondelete="RESTRICT"), index=True)
+    executor_id: Mapped[UUID] = mapped_column(
+        ForeignKey("executors.id", ondelete="RESTRICT"), index=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(128))
     nonce: Mapped[str] = mapped_column(String(128))
     request_hash: Mapped[str] = mapped_column(String(64))
@@ -327,8 +377,12 @@ class AnalysisAttempt(Base):
     __tablename__ = "analysis_attempts"
     __table_args__ = (UniqueConstraint("stage_id", "attempt_number"),)
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    stage_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True)
-    executor_id: Mapped[UUID] = mapped_column(ForeignKey("executors.id", ondelete="RESTRICT"), index=True)
+    stage_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True
+    )
+    executor_id: Mapped[UUID] = mapped_column(
+        ForeignKey("executors.id", ondelete="RESTRICT"), index=True
+    )
     attempt_number: Mapped[int] = mapped_column(Integer)
     state: Mapped[AttemptState] = mapped_column(db_enum(AttemptState, "attempt_state"))
     error_code: Mapped[str | None] = mapped_column(String(128))
@@ -340,9 +394,15 @@ class AnalysisAttempt(Base):
 class ExecutorLease(Base):
     __tablename__ = "executor_leases"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    stage_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True)
-    attempt_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_attempts.id", ondelete="RESTRICT"), unique=True)
-    executor_id: Mapped[UUID] = mapped_column(ForeignKey("executors.id", ondelete="RESTRICT"), index=True)
+    stage_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True
+    )
+    attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_attempts.id", ondelete="RESTRICT"), unique=True
+    )
+    executor_id: Mapped[UUID] = mapped_column(
+        ForeignKey("executors.id", ondelete="RESTRICT"), index=True
+    )
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -354,8 +414,12 @@ class BackendTask(Base):
     __tablename__ = "backend_tasks"
     __table_args__ = (UniqueConstraint("executor_id", "task_type", "native_task_id"),)
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    stage_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True)
-    attempt_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_attempts.id", ondelete="RESTRICT"))
+    stage_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True
+    )
+    attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_attempts.id", ondelete="RESTRICT")
+    )
     executor_id: Mapped[UUID] = mapped_column(ForeignKey("executors.id", ondelete="RESTRICT"))
     task_type: Mapped[str] = mapped_column(String(64))
     native_task_id: Mapped[str] = mapped_column(String(255))
@@ -366,7 +430,9 @@ class BackendTask(Base):
 class BackendCapabilitySnapshot(Base):
     __tablename__ = "backend_capability_snapshots"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    executor_id: Mapped[UUID] = mapped_column(ForeignKey("executors.id", ondelete="RESTRICT"), index=True)
+    executor_id: Mapped[UUID] = mapped_column(
+        ForeignKey("executors.id", ondelete="RESTRICT"), index=True
+    )
     runtime_identity: Mapped[str] = mapped_column(String(255))
     schema_version: Mapped[str] = mapped_column(String(16))
     capabilities: Mapped[dict[str, Any]] = mapped_column(json_dict_type())
@@ -376,9 +442,15 @@ class BackendCapabilitySnapshot(Base):
 class Artifact(Base):
     __tablename__ = "artifacts"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    analysis_run_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True)
-    stage_id: Mapped[UUID | None] = mapped_column(ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True)
-    attempt_id: Mapped[UUID | None] = mapped_column(ForeignKey("analysis_attempts.id", ondelete="RESTRICT"))
+    analysis_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True
+    )
+    stage_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True
+    )
+    attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("analysis_attempts.id", ondelete="RESTRICT")
+    )
     kind: Mapped[str] = mapped_column(String(64), index=True)
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger)
@@ -392,7 +464,9 @@ class Artifact(Base):
 class BundleImport(Base):
     __tablename__ = "bundle_imports"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    analysis_run_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True)
+    analysis_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True
+    )
     stage_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_stages.id", ondelete="RESTRICT"))
     artifact_id: Mapped[UUID] = mapped_column(ForeignKey("artifacts.id", ondelete="RESTRICT"))
     bundle_sha256: Mapped[str] = mapped_column(String(64), index=True)
@@ -586,9 +660,7 @@ class WindowsVMProfile(Base):
     cape_machine_label: Mapped[str | None] = mapped_column(String(128), unique=True)
     cape_template: Mapped[str] = mapped_column(String(128))
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    created_by_user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT")
-    )
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
@@ -645,9 +717,62 @@ class WindowsRunConfiguration(Base):
         ForeignKey("windows_vm_profiles.id", ondelete="RESTRICT"), index=True
     )
     profile_snapshot: Mapped[dict[str, Any]] = mapped_column(json_dict_type(), default=dict)
-    selected_by_user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT")
+    selected_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AndroidAnalysisProfile(Base):
+    __tablename__ = "android_analysis_profiles"
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    state: Mapped[AndroidProfileState] = mapped_column(
+        db_enum(AndroidProfileState, "android_profile_state"), index=True
     )
+    android_version: Mapped[str] = mapped_column(String(32), default="11")
+    api_level: Mapped[int] = mapped_column(Integer, default=30)
+    architecture: Mapped[str] = mapped_column(String(16), default="x86_64")
+    system_image: Mapped[str] = mapped_column(String(255))
+    emulator_version: Mapped[str] = mapped_column(String(32))
+    vcpus: Mapped[int] = mapped_column(Integer, default=4)
+    ram_mb: Mapped[int] = mapped_column(Integer, default=4096)
+    writable_system: Mapped[bool] = mapped_column(Boolean, default=True)
+    network_mode: Mapped[str] = mapped_column(String(64), default="controlled")
+    interaction_profile: Mapped[str] = mapped_column(String(64), default="deterministic_adb_v1")
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    qualification: Mapped[dict[str, Any]] = mapped_column(json_dict_type(), default=dict)
+    created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "profile_id": str(self.id),
+            "name": self.name,
+            "android_version": self.android_version,
+            "api_level": self.api_level,
+            "architecture": self.architecture,
+            "system_image": self.system_image,
+            "emulator_version": self.emulator_version,
+            "vcpus": self.vcpus,
+            "ram_mb": self.ram_mb,
+            "writable_system": self.writable_system,
+            "network_mode": self.network_mode,
+            "interaction_profile": self.interaction_profile,
+            "qualification": self.qualification,
+        }
+
+
+class AndroidRunConfiguration(Base):
+    __tablename__ = "android_run_configurations"
+    analysis_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="RESTRICT"), primary_key=True
+    )
+    profile_id: Mapped[UUID] = mapped_column(
+        ForeignKey("android_analysis_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    profile_snapshot: Mapped[dict[str, Any]] = mapped_column(json_dict_type())
+    selected_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -765,9 +890,7 @@ class CaseReportSnapshot(Base):
     __tablename__ = "case_report_snapshots"
     __table_args__ = (UniqueConstraint("analysis_run_id", "revision"),)
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("cases.id", ondelete="RESTRICT"), index=True
-    )
+    case_id: Mapped[UUID] = mapped_column(ForeignKey("cases.id", ondelete="RESTRICT"), index=True)
     analysis_run_id: Mapped[UUID] = mapped_column(
         ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True
     )
@@ -785,9 +908,7 @@ class ReportExport(Base):
 
     __tablename__ = "report_exports"
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
-    case_id: Mapped[UUID] = mapped_column(
-        ForeignKey("cases.id", ondelete="RESTRICT"), index=True
-    )
+    case_id: Mapped[UUID] = mapped_column(ForeignKey("cases.id", ondelete="RESTRICT"), index=True)
     analysis_run_id: Mapped[UUID] = mapped_column(
         ForeignKey("analysis_runs.id", ondelete="RESTRICT"), index=True
     )
@@ -803,9 +924,7 @@ class ReportExport(Base):
     format_version: Mapped[str] = mapped_column(String(16))
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger)
-    requested_by_user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="RESTRICT")
-    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=BinderFS for UMAT ReDroid workers
+Before=docker.service umat-android-executor.service
+
+[Mount]
+What=binder
+Where=/dev/binderfs
+Type=binder
+
+[Install]
+WantedBy=multi-user.target

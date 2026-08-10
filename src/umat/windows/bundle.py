@@ -93,9 +93,7 @@ class NativeWindowsValidator:
             )
         verified_paths = self._verify_native_hashes(root)
         artifact_paths = handoff.get("artifact_paths")
-        if not isinstance(artifact_paths, dict) or not isinstance(
-            artifact_paths.get("pcap"), str
-        ):
+        if not isinstance(artifact_paths, dict) or not isinstance(artifact_paths.get("pcap"), str):
             raise WindowsBundleError("WinST/DT handoff does not declare a PCAP artifact")
         for kind, relative in artifact_paths.items():
             if not isinstance(relative, str):
@@ -161,19 +159,24 @@ class WindowsBundleBuilder:
         profile_snapshot: dict[str, Any],
         native_root: Path,
         destination: Path,
+        cape_evidence: dict[str, Any] | None = None,
     ) -> BuiltWindowsBundle:
         handoff = self.native_validator.validate(native_root, sample_sha256, cape_task_id)
         if destination.exists():
             raise WindowsBundleError("Windows bundle destination already exists")
         native_destination = destination / "native"
         shutil.copytree(native_root, native_destination)
+        if cape_evidence is not None:
+            (destination / "cape-evidence.json").write_text(
+                json.dumps(cape_evidence, sort_keys=True, separators=(",", ":"))
+            )
         descriptors = [
             {
                 "path": path.relative_to(destination).as_posix(),
                 "sha256": sha256_file(path),
                 "size_bytes": path.stat().st_size,
             }
-            for path in sorted(native_destination.rglob("*"))
+            for path in sorted(destination.rglob("*"))
             if path.is_file()
         ]
         unsigned = {
@@ -238,7 +241,11 @@ def safe_extract_windows_bundle(archive: Path, destination: Path, max_bytes: int
             raise WindowsBundleError("Windows bundle exceeds uncompressed size limit")
         for info in bundle.infolist():
             relative = Path(info.filename)
-            if relative.is_absolute() or ".." in relative.parts or stat.S_ISLNK(info.external_attr >> 16):
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or stat.S_ISLNK(info.external_attr >> 16)
+            ):
                 raise WindowsBundleError("unsafe Windows bundle member")
             if info.is_dir():
                 continue
@@ -261,7 +268,9 @@ def verify_windows_bundle(
     signature = manifest["signature"]
     unsigned = {key: value for key, value in manifest.items() if key != "signature"}
     try:
-        public_key.verify(base64.b64decode(signature["value"], validate=True), canonical_json(unsigned))
+        public_key.verify(
+            base64.b64decode(signature["value"], validate=True), canonical_json(unsigned)
+        )
     except (ValueError, InvalidSignature) as exc:
         raise WindowsBundleError("Windows bundle signature verification failed") from exc
     observed = {

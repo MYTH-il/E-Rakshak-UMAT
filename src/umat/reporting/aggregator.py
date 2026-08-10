@@ -76,11 +76,15 @@ def filter_report_for_roles(report: dict[str, Any], roles: frozenset[str]) -> di
     is_technical = bool(roles & {"analyst", "administrator"})
     if not is_technical:
         filtered.pop("technical", None)
-    allowed_tiers = {"officer", "analyst", "administrator"} if "administrator" in roles else (
-        {"officer", "analyst"} if "analyst" in roles else {"officer"}
+    allowed_tiers = (
+        {"officer", "analyst", "administrator"}
+        if "administrator" in roles
+        else ({"officer", "analyst"} if "analyst" in roles else {"officer"})
     )
     filtered["artifacts"] = [
-        dict(item) for item in report.get("artifacts", []) if item.get("access_tier") in allowed_tiers
+        dict(item)
+        for item in report.get("artifacts", [])
+        if item.get("access_tier") in allowed_tiers
     ]
     return filtered
 
@@ -105,8 +109,12 @@ class CaseAggregator:
             ).all()
         )
         adaptation_ids = [item.id for item in adaptations]
-        windows_adaptation = next((item for item in adaptations if item.adapter_type == "windows"), None)
-        android_adaptation = next((item for item in adaptations if item.adapter_type == "android"), None)
+        windows_adaptation = next(
+            (item for item in adaptations if item.adapter_type == "windows"), None
+        )
+        android_adaptation = next(
+            (item for item in adaptations if item.adapter_type == "android"), None
+        )
         c2_adaptation = next((item for item in adaptations if item.adapter_type == "c2"), None)
 
         windows_findings = await self._rows(db, WindowsFinding, adaptation_ids)
@@ -124,23 +132,39 @@ class CaseAggregator:
             (await db.scalars(select(Artifact).where(Artifact.analysis_run_id == run.id))).all()
         )
         imports = list(
-            (await db.scalars(select(BundleImport).where(BundleImport.analysis_run_id == run.id))).all()
+            (
+                await db.scalars(select(BundleImport).where(BundleImport.analysis_run_id == run.id))
+            ).all()
         )
         stages = list(
-            (await db.scalars(select(AnalysisStage).where(AnalysisStage.analysis_run_id == run.id))).all()
+            (
+                await db.scalars(
+                    select(AnalysisStage).where(AnalysisStage.analysis_run_id == run.id)
+                )
+            ).all()
         )
-        windows_metadata = await db.scalar(
-            select(WindowsAnalysisMetadata).where(
-                WindowsAnalysisMetadata.adaptation_id == windows_adaptation.id
+        windows_metadata = (
+            await db.scalar(
+                select(WindowsAnalysisMetadata).where(
+                    WindowsAnalysisMetadata.adaptation_id == windows_adaptation.id
+                )
             )
-        ) if windows_adaptation else None
-        android_metadata = await db.scalar(
-            select(AndroidAnalysisMetadata).where(
-                AndroidAnalysisMetadata.adaptation_id == android_adaptation.id
+            if windows_adaptation
+            else None
+        )
+        android_metadata = (
+            await db.scalar(
+                select(AndroidAnalysisMetadata).where(
+                    AndroidAnalysisMetadata.adaptation_id == android_adaptation.id
+                )
             )
-        ) if android_adaptation else None
+            if android_adaptation
+            else None
+        )
 
         caveats = self._caveats(adaptations, stages, windows_metadata, run.platform)
+        if not run.c2_analysis_enabled:
+            caveats.append("c2_workflow_skipped")
         finding_items = self._findings(
             run, windows_findings, android_findings, c2_findings, adaptations, artifacts
         )
@@ -150,6 +174,7 @@ class CaseAggregator:
             stages,
             windows_adaptation is not None or android_adaptation is not None,
             c2_adaptation is not None,
+            run.c2_analysis_enabled,
         )
         headline = self._headline(verdict, finding_items, run.platform)
         generated_at = datetime.now(timezone.utc)
@@ -158,6 +183,8 @@ class CaseAggregator:
             "analysis_run_id": str(run.id),
             "sample_sha256": submission.sample_sha256,
             "platform": run.platform.value,
+            "network_mode": run.network_mode,
+            "c2_analysis_enabled": run.c2_analysis_enabled,
             "generated_at": _iso(generated_at),
             "verdict": verdict.value,
             "headline": headline,
@@ -256,9 +283,7 @@ class CaseAggregator:
         return snapshot
 
     @staticmethod
-    async def _rows(
-        db: AsyncSession, model: type[Any], adaptation_ids: list[UUID]
-    ) -> list[Any]:
+    async def _rows(db: AsyncSession, model: type[Any], adaptation_ids: list[UUID]) -> list[Any]:
         if not adaptation_ids:
             return []
         return list(
@@ -279,7 +304,11 @@ class CaseAggregator:
             values.add("host_telemetry_degraded")
         for stage in stages:
             if stage.state == StageState.PARTIAL:
-                values.add("analysis_timed_out" if stage.failure_code == "timeout" else "host_telemetry_degraded")
+                values.add(
+                    "analysis_timed_out"
+                    if stage.failure_code == "timeout"
+                    else "host_telemetry_degraded"
+                )
             if stage.state == StageState.FAILED and stage.stage_type == StageType.C2_ANALYSIS:
                 values.add("c2_analysis_failed")
         if platform == Platform.ANDROID:
@@ -313,7 +342,9 @@ class CaseAggregator:
                     "kind": item.kind,
                     "category": item.category,
                     "confidence": item.confidence,
-                    "evidence_level": "possible" if item.category in {"static", "yara"} else "observed",
+                    "evidence_level": "possible"
+                    if item.category in {"static", "yara"}
+                    else "observed",
                     "summary": item.summary,
                     "details": item.details,
                     "mitre_technique_ids": _unique(
@@ -379,7 +410,9 @@ class CaseAggregator:
                     "caveats": _unique([c2_item.capped_by_caveat]),
                 }
             )
-        return sorted(findings, key=lambda item: (-_confidence(str(item["confidence"])), str(item["kind"])))
+        return sorted(
+            findings, key=lambda item: (-_confidence(str(item["confidence"])), str(item["kind"]))
+        )
 
     @staticmethod
     def _capabilities(
@@ -408,7 +441,9 @@ class CaseAggregator:
                     else f"The app declares permission to access {android_item.data_type.replace('_', ' ')}; use was not established."
                 ),
             }
-            if not current or _confidence(android_item.confidence) > _confidence(str(current["confidence"])):
+            if not current or _confidence(android_item.confidence) > _confidence(
+                str(current["confidence"])
+            ):
                 result[android_item.data_type] = candidate
         if platform == Platform.WINDOWS:
             for exfil_item in exfil_events:
@@ -449,9 +484,7 @@ class CaseAggregator:
         return sorted(grouped.values(), key=lambda item: (str(item["value"]), item["port"] or 0))
 
     @staticmethod
-    def _provenance(
-        links: list[ProvenanceLink], platform: Platform
-    ) -> list[dict[str, Any]]:
+    def _provenance(links: list[ProvenanceLink], platform: Platform) -> list[dict[str, Any]]:
         if platform == Platform.ANDROID:
             return [
                 {
@@ -483,6 +516,7 @@ class CaseAggregator:
         stages: list[AnalysisStage],
         has_platform: bool,
         has_c2: bool,
+        requires_c2: bool = True,
     ) -> Verdict:
         platform_stage = next(
             (item for item in stages if item.stage_type == StageType.PLATFORM_ANALYSIS), None
@@ -491,23 +525,31 @@ class CaseAggregator:
             return Verdict.FAILED
         for finding in findings:
             details = finding.get("details") or {}
-            configured_malicious = details.get("verdict") == "malicious" or details.get("malicious") is True
+            configured_malicious = (
+                details.get("verdict") == "malicious" or details.get("malicious") is True
+            )
             if finding["confidence"] == "confirmed" and (
                 finding["kind"] in MALICIOUS_KINDS or configured_malicious
             ):
                 return Verdict.MALICIOUS
         if any(_confidence(str(item["confidence"])) >= _confidence("weak") for item in findings):
             return Verdict.SUSPICIOUS
-        if not has_platform or not has_c2 or NEGATIVE_BLOCKING_CAVEATS.intersection(caveats):
+        if (
+            not has_platform
+            or (requires_c2 and not has_c2)
+            or NEGATIVE_BLOCKING_CAVEATS.intersection(caveats)
+        ):
             return Verdict.INCONCLUSIVE
         mandatory = {
             StageType.PLATFORM_ANALYSIS,
-            StageType.C2_ANALYSIS,
             StageType.PLATFORM_ADAPTATION,
-            StageType.C2_ADAPTATION,
         }
+        if requires_c2:
+            mandatory.update({StageType.C2_ANALYSIS, StageType.C2_ADAPTATION})
         completed = {
-            item.stage_type for item in stages if item.state in {StageState.COMPLETED, StageState.PARTIAL}
+            item.stage_type
+            for item in stages
+            if item.state in {StageState.COMPLETED, StageState.PARTIAL}
         }
         return (
             Verdict.NO_MALICIOUS_ACTIVITY_OBSERVED

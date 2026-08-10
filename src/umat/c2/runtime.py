@@ -35,6 +35,8 @@ class C2Runtime(Protocol):
 
 
 class SubprocessC2Runtime:
+    _OUTPUT_TAIL_BYTES = 64 * 1024
+
     def __init__(
         self,
         runtime_root: Path,
@@ -171,8 +173,35 @@ class SubprocessC2Runtime:
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
         )
+        stdout_tail = bytearray()
+        stderr_tail = bytearray()
+
+        def drain(stream: Any, tail: bytearray) -> None:
+            try:
+                while chunk := stream.read(8192):
+                    tail.extend(chunk)
+                    if len(tail) > self._OUTPUT_TAIL_BYTES:
+                        del tail[: -self._OUTPUT_TAIL_BYTES]
+            finally:
+                stream.close()
+
+        drainers = [
+            threading.Thread(
+                target=drain,
+                args=(process.stdout, stdout_tail),
+                daemon=True,
+                name="c2-stdout-drain",
+            ),
+            threading.Thread(
+                target=drain,
+                args=(process.stderr, stderr_tail),
+                daemon=True,
+                name="c2-stderr-drain",
+            ),
+        ]
+        for drainer in drainers:
+            drainer.start()
         deadline = time.monotonic() + self.timeout_seconds
         while process.poll() is None:
             if stop_requested and stop_requested.is_set():
@@ -192,8 +221,10 @@ class SubprocessC2Runtime:
                     process.wait(timeout=10)
                 raise C2RuntimeError("C2 runtime exceeded its configured timeout")
             time.sleep(0.25)
-        stdout, stderr = process.communicate()
+        for drainer in drainers:
+            drainer.join(timeout=10)
         if process.returncode:
+            stderr = stderr_tail.decode(errors="replace")
             raise C2RuntimeError(
                 f"C2 runtime failed with exit {process.returncode}: {stderr[-2000:]}"
             )
