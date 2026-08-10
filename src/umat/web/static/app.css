@@ -161,3 +161,27 @@ tbody tr:hover { background: rgba(139,92,246,.06); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+
+/* --- case queue filters, multi-run selection, diagnostics ---------------- */
+.field-grid .field.full { grid-column: 1 / -1; }
+.checkbox-field { display: flex; align-items: center; gap: .6rem; }
+.checkbox-field input { width: auto; }
+.case-row.active { border-color: var(--accent, #7c5cff); box-shadow: 0 0 0 1px var(--accent, #7c5cff) inset; }
+.case-row small.muted { display: block; margin-top: .35rem; line-height: 1.4; }
+.tab[aria-selected="true"] { font-weight: 600; }
+.stage-track-spaced { gap: .75rem; flex-wrap: wrap; }
+.card-title + .case-list { margin-top: .75rem; }
+
+/* Caveats carry the analysis's limitations. They must read as prose and stay
+   legible, not be squeezed into a single truncated line. */
+.data-item strong { display: block; line-height: 1.45; }
+.data-item small { display: block; margin-top: .3rem; opacity: .7; }
+
+/* Visible keyboard focus — the console is operated by officers who may be
+   keyboard-only, and the default outline was being suppressed by the reset. */
+a:focus-visible, button:focus-visible, select:focus-visible,
+input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent, #7c5cff);
+  outline-offset: 2px;
+}
