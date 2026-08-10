@@ -652,7 +652,7 @@ function renderFindings(content, report) {
   const technical = report?.technical;
   if (!technical) { content.append(node("div", "notice notice-error", "Technical findings require analyst access.")); return; }
   content.append(node("h3", "section-title", "Normalized findings"));
-  content.append(table(["Finding", "Source", "Confidence", "Evidence", "MITRE ATT&CK"], technical.findings, (item) => [item.summary, `${item.source} · ${human(item.kind)}`, human(item.confidence), human(item.evidence_level), (item.mitre_technique_ids || []).join(", ") || "—"]));
+  content.append(table(["Finding", "Source", "Confidence", "Evidence", "Security mappings"], technical.findings, (item) => [item.summary, `${item.source} · ${human(item.kind)}`, human(item.confidence), human(item.evidence_level), (item.security_mappings || item.mitre_technique_ids || []).join(", ") || "—"]));
   content.append(node("h3", "section-title", "Indicators of compromise"));
   content.append(table(["Type", "Value", "Confidence", "Source", "Traffic"], technical.iocs, (item) => [item.type, item.value, human(item.confidence), item.source, item.seen_in_traffic ? "Observed" : "Static"]));
   content.append(node("h3", "section-title", "Unified timeline"));

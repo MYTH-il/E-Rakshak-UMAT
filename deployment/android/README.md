@@ -11,6 +11,11 @@ It uses BinderFS, a disposable writable `/data`, a writable container-backed
 `/system`, root operations through `su 0`, and container-local packet capture.
 The API-30 AOSP x86_64 emulator remains an optional higher-fidelity fallback.
 
+UMAT imports MobSF's native security mappings from the signed static report. Code findings retain
+OWASP MASVS/MSTG, OWASP Mobile and CWE references, while MobSF behavior labels are retained as the
+Android TTP-equivalent taxonomy. These are displayed as security mappings with source provenance;
+UMAT does not fabricate Mobile ATT&CK identifiers that MobSF did not assert.
+
 Host prerequisites are Docker, BinderFS, Java, Android platform tools,
 command-line tools, the Android emulator, `socat`, KVM access, and
 `system-images;android-30;default;x86_64` for the fallback profile.

@@ -8,6 +8,7 @@ from umat.windows.cape import (
     CapeClient,
     cape_filename_for_package,
     cape_package_for_sample,
+    cape_static_prior,
     normalize_cape_evidence,
 )
 
@@ -128,3 +129,28 @@ def test_cape_evidence_is_format_neutral_and_bounded() -> None:
     assert len(evidence["signatures"]) == 1000
     assert "processes" not in evidence["behavior"]
     assert evidence["network"]["domains"][0]["domain"] == "example.test"
+
+
+def test_cape_static_prior_uses_cape_evidence_for_iocs_signatures_and_ttps() -> None:
+    prior = cape_static_prior(
+        {
+            "network": {
+                "hosts": ["198.51.100.7"],
+                "domains": [{"domain": "C2.EXAMPLE."}],
+                "http": [{"uri": "https://c2.example/check-in"}],
+            },
+            "signatures": [{"name": "beacon", "severity": 3}],
+            "ttps": [{"signature": "beacon", "ttps": ["T1071.001", "T1059"]}],
+        },
+        "run-id",
+        "a" * 64,
+    )
+    assert prior["source"] == "cape-evidence.json"
+    assert prior["signatures"] == [{"name": "beacon", "severity": 3}]
+    assert prior["ttps"] == [{"signature": "beacon", "ttps": ["T1071.001", "T1059"]}]
+    assert prior["capabilities"] == ["T1059", "T1071.001"]
+    assert {(item["type"], item["value"]) for item in prior["iocs"]} == {
+        ("ip", "198.51.100.7"),
+        ("domain", "c2.example"),
+        ("url", "https://c2.example/check-in"),
+    }

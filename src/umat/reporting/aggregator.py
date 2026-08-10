@@ -379,7 +379,18 @@ class CaseAggregator:
                     "summary": item.summary,
                     "details": item.details,
                     "mitre_technique_ids": _unique(
-                        [item.details.get("mitre_technique_id"), item.details.get("ttp")]
+                        [
+                            item.details.get("mitre_technique_id"),
+                            item.details.get("ttp"),
+                            *(item.details.get("mitre_technique_ids") or []),
+                        ]
+                    ),
+                    "security_mappings": _unique(
+                        [
+                            *(item.details.get("mitre_technique_ids") or []),
+                            item.details.get("mitre_technique_id"),
+                            item.details.get("ttp"),
+                        ]
                     ),
                     "evidence_artifact_ids": artifact_map.get(adaptation.stage_id, []),
                     "caveats": [],
@@ -405,6 +416,9 @@ class CaseAggregator:
                             android_item.details.get("mitre_technique_id"),
                             android_item.details.get("masvs"),
                         ]
+                    ),
+                    "security_mappings": _unique(
+                        android_item.details.get("security_mappings") or []
                     ),
                     "evidence_artifact_ids": artifact_map.get(adaptation.stage_id, []),
                     "caveats": [],
@@ -437,6 +451,7 @@ class CaseAggregator:
                     ),
                     "details": c2_item.details,
                     "mitre_technique_ids": _unique([c2_item.details.get("mitre_technique_id")]),
+                    "security_mappings": _unique([c2_item.details.get("mitre_technique_id")]),
                     "evidence_artifact_ids": artifact_map.get(c2_item.stage_id, []),
                     "caveats": _unique([c2_item.capped_by_caveat]),
                 }
@@ -656,8 +671,7 @@ class CaseAggregator:
             if where:
                 return f"This sample contacted {where}."
             return (
-                f"Confirmed malicious behaviour was detected during the "
-                f"{platform_name} analysis."
+                f"Confirmed malicious behaviour was detected during the {platform_name} analysis."
             )
 
         if verdict == Verdict.SUSPICIOUS:

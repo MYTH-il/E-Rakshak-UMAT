@@ -261,6 +261,35 @@ class WindowsAdapter:
                         details=signature,
                     )
                 )
+        ttps = report.get("ttps", [])
+        for item in ttps if isinstance(ttps, list) else []:
+            if not isinstance(item, dict):
+                continue
+            techniques = sorted(
+                {
+                    str(value).upper()
+                    for value in item.get("ttps", [])
+                    if isinstance(value, str) and value.upper().startswith("T")
+                }
+            )
+            if not techniques:
+                continue
+            signature = str(item.get("signature") or "CAPE behavioral mapping")
+            db.add(
+                WindowsFinding(
+                    adaptation_id=adaptation_id,
+                    analysis_run_id=run_id,
+                    category="attack_mapping",
+                    kind=signature[:128],
+                    confidence="strong",
+                    summary=(f"CAPE mapped {signature} to ATT&CK {', '.join(techniques)}."),
+                    details={
+                        **item,
+                        "source": "cape-evidence.json",
+                        "mitre_technique_ids": techniques,
+                    },
+                )
+            )
         for hypothesis in sample_meta.get("static_hypotheses", []):
             db.add(
                 WindowsFinding(

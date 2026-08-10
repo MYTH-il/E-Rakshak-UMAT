@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import httpx
 
@@ -86,6 +87,61 @@ def normalize_cape_evidence(report: dict[str, Any]) -> dict[str, Any]:
             key: _bounded_list(suricata.get(key), 10000)
             for key in ("alerts", "dns", "http", "tls", "files")
         },
+    }
+
+
+def cape_static_prior(
+    evidence: dict[str, Any], analysis_run_id: str, sample_sha256: str
+) -> dict[str, Any]:
+    """Build the C2/static prior from the same immutable CAPE evidence UMAT adapts."""
+    indicators: set[tuple[str, str]] = set()
+    network = _mapping(evidence.get("network"))
+    for host in _bounded_list(network.get("hosts"), 10000):
+        value = host.get("ip") if isinstance(host, dict) else host
+        if value:
+            indicators.add(("ip", str(value)))
+    for domain in _bounded_list(network.get("domains"), 10000):
+        value = (
+            domain.get("domain") or domain.get("request") if isinstance(domain, dict) else domain
+        )
+        if value:
+            indicators.add(("domain", str(value).rstrip(".").lower()))
+    for request in _bounded_list(network.get("http"), 10000):
+        if not isinstance(request, dict):
+            continue
+        value = request.get("uri") or request.get("url")
+        if value:
+            indicators.add(("url", str(value)))
+            hostname = urlparse(str(value)).hostname
+            if hostname:
+                indicators.add(("domain", hostname.rstrip(".").lower()))
+
+    signatures = [
+        item for item in _bounded_list(evidence.get("signatures"), 1000) if isinstance(item, dict)
+    ]
+    ttp_records = [
+        item for item in _bounded_list(evidence.get("ttps"), 2000) if isinstance(item, dict)
+    ]
+    techniques = sorted(
+        {
+            str(technique).upper()
+            for item in ttp_records
+            for technique in (item.get("ttps") or [])
+            if isinstance(technique, str) and technique.upper().startswith("T")
+        }
+    )
+    return {
+        "schema_version": "1.0",
+        "analysis_run_id": analysis_run_id,
+        "sample_sha256": sample_sha256,
+        "source": "cape-evidence.json",
+        "iocs": [
+            {"type": kind, "value": value, "confidence": "strong"}
+            for kind, value in sorted(indicators)
+        ],
+        "signatures": signatures,
+        "ttps": ttp_records,
+        "capabilities": techniques,
     }
 
 

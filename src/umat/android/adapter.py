@@ -99,12 +99,18 @@ class AndroidAdapter:
         if not run or run.platform != Platform.ANDROID:
             raise AndroidAdaptationError("Android analysis run not found")
         stage = await db.scalar(
-            select(AnalysisStage).where(
+            select(AnalysisStage)
+            .where(
                 AnalysisStage.analysis_run_id == run.id,
                 AnalysisStage.stage_type == StageType.PLATFORM_ADAPTATION,
-            ).with_for_update()
+            )
+            .with_for_update()
         )
-        if not stage or stage.state not in {StageState.QUEUED, StageState.RUNNING, StageState.COMPLETED}:
+        if not stage or stage.state not in {
+            StageState.QUEUED,
+            StageState.RUNNING,
+            StageState.COMPLETED,
+        }:
             raise AndroidAdaptationError("Android adaptation stage is not ready")
         artifact = await db.scalar(
             select(Artifact)
@@ -279,8 +285,13 @@ class AndroidAdapter:
         self._iocs(db, adaptation.id, run.id, static, dynamic)
         observations = list(network_activity.get("observations", [])[:5000])
         seen: set[tuple[str | None, str | None, int | None]] = {
-            (item.get("destination_domain"), item.get("destination_ip"), item.get("destination_port"))
-            for item in observations if isinstance(item, dict)
+            (
+                item.get("destination_domain"),
+                item.get("destination_ip"),
+                item.get("destination_port"),
+            )
+            for item in observations
+            if isinstance(item, dict)
         }
         captured_at = (manifest.get("analysis_window") or {}).get("ended_at")
         domains = dynamic.get("domains") or {}
@@ -293,42 +304,59 @@ class AndroidAdapter:
                 if domain_key in seen:
                     continue
                 seen.add(domain_key)
-                observations.append({
-                    "observed_at": captured_at, "destination_domain": domain_key[0],
-                    "destination_ip": address, "destination_port": None,
-                    "protocol": "https_proxy", "source": "mobsf_dynamic_proxy",
-                })
+                observations.append(
+                    {
+                        "observed_at": captured_at,
+                        "destination_domain": domain_key[0],
+                        "destination_ip": address,
+                        "destination_port": None,
+                        "protocol": "https_proxy",
+                        "source": "mobsf_dynamic_proxy",
+                    }
+                )
         urls = dynamic.get("urls") or []
         for raw in urls if isinstance(urls, list) else []:
-            value = raw if isinstance(raw, str) else raw.get("url") if isinstance(raw, dict) else None
+            value = (
+                raw if isinstance(raw, str) else raw.get("url") if isinstance(raw, dict) else None
+            )
             parsed = urlparse(str(value)) if value else None
             if not parsed or not parsed.hostname:
                 continue
-            port = parsed.port or (443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None)
+            port = parsed.port or (
+                443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+            )
             url_key = (parsed.hostname.lower(), None, port)
             if url_key in seen:
                 continue
             seen.add(url_key)
-            observations.append({
-                "observed_at": captured_at, "destination_domain": url_key[0],
-                "destination_ip": None, "destination_port": port,
-                "protocol": parsed.scheme.lower() or "proxy", "source": "mobsf_dynamic_proxy",
-            })
+            observations.append(
+                {
+                    "observed_at": captured_at,
+                    "destination_domain": url_key[0],
+                    "destination_ip": None,
+                    "destination_port": port,
+                    "protocol": parsed.scheme.lower() or "proxy",
+                    "source": "mobsf_dynamic_proxy",
+                }
+            )
         for sequence, item in enumerate(observations[:5000]):
             if not isinstance(item, dict):
                 continue
-            db.add(NetworkObservation(
-                adaptation_id=adaptation.id,
-                analysis_run_id=run.id,
-                source_event_id=f"android-pcap-{sequence:06d}",
-                destination_ip=item.get("destination_ip"),
-                destination_port=item.get("destination_port"),
-                destination_domain=item.get("destination_domain"),
-                protocol=item.get("protocol"),
-                observed_at=datetime.fromisoformat(item["observed_at"])
-                if item.get("observed_at") else utcnow(),
-                details={"source": item.get("source") or "android_executor_pcap_summary"},
-            ))
+            db.add(
+                NetworkObservation(
+                    adaptation_id=adaptation.id,
+                    analysis_run_id=run.id,
+                    source_event_id=f"android-pcap-{sequence:06d}",
+                    destination_ip=item.get("destination_ip"),
+                    destination_port=item.get("destination_port"),
+                    destination_domain=item.get("destination_domain"),
+                    protocol=item.get("protocol"),
+                    observed_at=datetime.fromisoformat(item["observed_at"])
+                    if item.get("observed_at")
+                    else utcnow(),
+                    details={"source": item.get("source") or "android_executor_pcap_summary"},
+                )
+            )
         return adaptation
 
     @staticmethod
@@ -350,6 +378,7 @@ class AndroidAdapter:
         sources = (
             ("static", "manifest", static.get("manifest_analysis")),
             ("static", "code", static.get("code_analysis")),
+            ("static", "behavior", static.get("behaviour")),
             ("static", "certificate", static.get("certificate_analysis")),
             ("dynamic", "runtime", dynamic.get("appsec") or dynamic.get("runtime_dependencies")),
             ("dynamic", "tls", dynamic.get("tls_tests")),
@@ -376,7 +405,13 @@ class AndroidAdapter:
                         confidence=confidence,
                         evidence_level="observed" if phase == "dynamic" else "possible",
                         summary=summary[:4000],
-                        details=item,
+                        details={
+                            **item,
+                            "security_mappings": AndroidAdapter._security_mappings(item),
+                            "source": "mobsf_static_report"
+                            if phase == "static"
+                            else "mobsf_dynamic_report",
+                        },
                     )
                 )
 
@@ -388,11 +423,42 @@ class AndroidAdapter:
             results: list[dict[str, Any]] = []
             for key, item in value.items():
                 if isinstance(item, dict):
-                    results.append({"name": str(key), **item})
+                    # MobSF code analysis wraps rules in {"findings": {rule: ...}}
+                    # and stores standards under each rule's "metadata" object.
+                    if key in {"findings", "manifest_findings", "network_findings"}:
+                        results.extend(AndroidAdapter._finding_items(item))
+                    else:
+                        metadata = item.get("metadata")
+                        results.append(
+                            {
+                                "name": str(key),
+                                **item,
+                                **(metadata if isinstance(metadata, dict) else {}),
+                            }
+                        )
                 elif isinstance(item, list):
                     results.extend(child for child in item if isinstance(child, dict))
             return results
         return []
+
+    @staticmethod
+    def _security_mappings(item: dict[str, Any]) -> list[str]:
+        mappings: set[str] = set()
+        for key, prefix in (
+            ("masvs", "OWASP MASVS/MSTG"),
+            ("owasp-mobile", "OWASP Mobile"),
+            ("cwe", "CWE"),
+            ("label", "MobSF behavior"),
+        ):
+            raw = item.get(key)
+            values = raw if isinstance(raw, list) else [raw]
+            for value in values:
+                text = str(value or "").strip()
+                if text:
+                    mappings.add(
+                        text if text.upper().startswith(prefix.upper()) else f"{prefix}: {text}"
+                    )
+        return sorted(mappings)
 
     @staticmethod
     def _capabilities(
@@ -439,12 +505,15 @@ class AndroidAdapter:
         dynamic: dict[str, Any],
     ) -> None:
         values: set[tuple[str, str]] = set()
-        dynamic_hosts = {
-            str(value).rstrip(".").lower()
-            for value in (dynamic.get("domains") or {})
-        } if isinstance(dynamic.get("domains"), dict) else set()
+        dynamic_hosts = (
+            {str(value).rstrip(".").lower() for value in (dynamic.get("domains") or {})}
+            if isinstance(dynamic.get("domains"), dict)
+            else set()
+        )
         excluded_hosts = {
-            "github.com", "reports.exodus-privacy.eu.org", "firebase.google.com",
+            "github.com",
+            "reports.exodus-privacy.eu.org",
+            "firebase.google.com",
         }
         for document in (static, dynamic):
             serialized = json.dumps(document, sort_keys=True)
@@ -473,7 +542,8 @@ class AndroidAdapter:
                     confidence="weak",
                     source="mobsf",
                     seen_in_traffic=(
-                        value.lower() in dynamic_hosts if ioc_type == "domain"
+                        value.lower() in dynamic_hosts
+                        if ioc_type == "domain"
                         else (urlparse(value).hostname or "").lower() in dynamic_hosts
                     ),
                     first_seen_at=None,

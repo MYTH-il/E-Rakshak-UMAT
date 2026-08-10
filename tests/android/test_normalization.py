@@ -26,7 +26,9 @@ def test_android_normalization_separates_declared_and_observed_evidence() -> Non
             "android.permission.READ_CONTACTS": {"status": "dangerous"},
             "android.permission.CAMERA": {"status": "dangerous"},
         },
-        "manifest_analysis": [{"rule": "exported_activity", "severity": "high", "title": "Exported activity"}],
+        "manifest_analysis": [
+            {"rule": "exported_activity", "severity": "high", "title": "Exported activity"}
+        ],
         "urls": ["https://api.example.test/path"],
     }
     dynamic = {"api_monitor": [{"class": "ContactsContract", "method": "query"}]}
@@ -45,10 +47,59 @@ def test_android_normalization_separates_declared_and_observed_evidence() -> Non
     assert ("domain", "api.example.test") in {(item.ioc_type, item.value) for item in iocs}
 
 
+def test_android_imports_mobsf_security_and_behavior_mappings() -> None:
+    session = RecordingSession()
+    AndroidAdapter._findings(  # noqa: SLF001
+        session,
+        uuid4(),
+        uuid4(),
+        {
+            "code_analysis": {
+                "findings": {
+                    "android_hardcoded": {
+                        "files": {"Example.java": "10"},
+                        "metadata": {
+                            "description": "Hardcoded secret",
+                            "severity": "warning",
+                            "masvs": "MSTG-STORAGE-14",
+                            "owasp-mobile": "M9: Reverse Engineering",
+                            "cwe": "CWE-312: Cleartext Storage of Sensitive Information",
+                        },
+                    }
+                }
+            },
+            "behaviour": {
+                "00030": {
+                    "files": {"Example.java": "20"},
+                    "metadata": {
+                        "description": "Connect to a remote server",
+                        "severity": "info",
+                        "label": ["network"],
+                    },
+                }
+            },
+        },
+        {},
+    )
+    findings = [item for item in session.rows if isinstance(item, AndroidFinding)]
+    assert len(findings) == 2
+    code = next(item for item in findings if item.category == "code")
+    assert code.kind == "android_hardcoded"
+    assert code.details["security_mappings"] == [
+        "CWE-312: Cleartext Storage of Sensitive Information",
+        "OWASP MASVS/MSTG: MSTG-STORAGE-14",
+        "OWASP Mobile: M9: Reverse Engineering",
+    ]
+    behavior = next(item for item in findings if item.category == "behavior")
+    assert behavior.details["security_mappings"] == ["MobSF behavior: network"]
+
+
 def test_android_ioc_normalization_drops_tool_references_and_placeholders() -> None:
     session = RecordingSession()
     AndroidAdapter._iocs(  # noqa: SLF001
-        session, uuid4(), uuid4(),
+        session,
+        uuid4(),
+        uuid4(),
         {
             "urls": [
                 "https://uklivemy.gq/USK/rat.php",
@@ -61,7 +112,8 @@ def test_android_ioc_normalization_drops_tool_references_and_placeholders() -> N
     )
     iocs = [item for item in session.rows if isinstance(item, StaticIOC)]
     assert {(item.ioc_type, item.value) for item in iocs} == {
-        ("domain", "uklivemy.gq"), ("url", "https://uklivemy.gq/USK/rat.php")
+        ("domain", "uklivemy.gq"),
+        ("url", "https://uklivemy.gq/USK/rat.php"),
     }
     assert all(item.seen_in_traffic for item in iocs)
 
@@ -80,7 +132,8 @@ def test_dynamic_quality_accepts_api_monitor_events(tmp_path: Any) -> None:
     monitor = tmp_path / "api.json"
     monitor.write_text('{"data":[{"class":"android.content.ContentResolver"}]}')
     quality = AndroidExecutor._dynamic_quality(  # noqa: SLF001
-        {"domains": {}}, {"api_monitor": monitor},
+        {"domains": {}},
+        {"api_monitor": monitor},
         {"frida": {"status": "ok"}, "stimulation": {"package_process_ids": ["123"]}},
     )
     assert quality["api_monitor_event_count"] == 1
@@ -88,24 +141,34 @@ def test_dynamic_quality_accepts_api_monitor_events(tmp_path: Any) -> None:
 
 
 def test_network_summary_merges_proxy_checkpoint_when_final_report_is_empty(
-    tmp_path: Any, monkeypatch: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
 ) -> None:
     pcap = tmp_path / "capture.pcap"
     pcap.write_bytes(b"immutable-pcap")
     destination = tmp_path / "network.json"
     monkeypatch.setattr(
-        subprocess, "run",
+        subprocess,
+        "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, b"", b""),
     )
     AndroidExecutor._network_summary(  # noqa: SLF001
-        object.__new__(AndroidExecutor), pcap, "172.30.0.2", destination,
+        object.__new__(AndroidExecutor),
+        pcap,
+        "172.30.0.2",
+        destination,
         {"domains": {}, "urls": []},
-        {"checkpoints": [{
-            "status": "ok", "captured_at": "2026-08-10T12:00:00Z",
-            "reason": "before_tls_test",
-            "domains": {"api.example.test": {"geolocation": {"ip": "203.0.113.8"}}},
-            "urls": ["https://api.example.test/path"],
-        }]},
+        {
+            "checkpoints": [
+                {
+                    "status": "ok",
+                    "captured_at": "2026-08-10T12:00:00Z",
+                    "reason": "before_tls_test",
+                    "domains": {"api.example.test": {"geolocation": {"ip": "203.0.113.8"}}},
+                    "urls": ["https://api.example.test/path"],
+                }
+            ]
+        },
     )
     document = json.loads(destination.read_text())
     assert document["proxy_checkpoint_count"] == 2

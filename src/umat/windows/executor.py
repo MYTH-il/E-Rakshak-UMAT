@@ -23,7 +23,7 @@ from umat.windows.bundle import (
     WindowsBundleBuilder,
     sha256_file,
 )
-from umat.windows.cape import CapeClient
+from umat.windows.cape import CapeClient, cape_static_prior
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -222,7 +222,7 @@ class WindowsExecutor:
                     cape_evidence=cape_evidence,
                 )
                 self._upload(claim, bundle.archive_path, "windows_bundle", "application/zip")
-                self._upload_native_inputs(claim, native_root)
+                self._upload_native_inputs(claim, native_root, cape_evidence, workspace)
             complete = common | {
                 "outcome": "completed",
                 "detail": "WinST/DT bundle validated and registered",
@@ -334,12 +334,27 @@ class WindowsExecutor:
             time.sleep(poll_seconds)
         raise RuntimeError("WinST/DT handoff was not published before the readiness deadline")
 
-    def _upload_native_inputs(self, claim: dict[str, Any], native: Path) -> None:
+    def _upload_native_inputs(
+        self,
+        claim: dict[str, Any],
+        native: Path,
+        cape_evidence: dict[str, Any],
+        workspace: Path,
+    ) -> None:
+        prior_path = workspace / "cape-static-prior.json"
+        prior_path.write_text(
+            json.dumps(
+                cape_static_prior(cape_evidence, claim["analysis_run_id"], claim["sample_sha256"]),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
         candidates = [
             (native / "manifest.json", "platform_manifest", "application/json"),
             (native / "network/capture.pcapng", "pcap", "application/vnd.tcpdump.pcap"),
             (native / "behavior/access_events.json", "access_events", "application/json"),
-            (native / "analysis/c2-static-prior.json", "static_prior", "application/json"),
+            (prior_path, "static_prior", "application/json"),
             (native / "behavior/trace.etl", "raw_etl", "application/octet-stream"),
         ]
         for path, kind, media_type in candidates:

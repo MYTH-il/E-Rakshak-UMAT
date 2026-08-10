@@ -12,8 +12,9 @@ Phase 3 connects the control plane to the pinned WinST/DT and CAPE runtime. The 
 4. Polls CAPE while renewing its lease.
 5. Validates the handoff, access-event, and sample-metadata schemas and locked digests.
 6. Seals the untouched handoff in a signed UMAT Windows bundle.
-7. Registers the PCAP, manifest, normalized access events, static prior, and raw ETL with
-   appropriate analyst access.
+7. Builds the static prior directly from the immutable `cape-evidence.json`, retaining CAPE
+   domains, signatures, and ATT&CK technique/sub-technique mappings, then registers it alongside
+   the PCAP, manifest, normalized access events, and raw ETL with appropriate analyst access.
 8. Completes the platform stage. The run either queues shared offline C2 analysis or proceeds
    directly to platform adaptation according to its independent `c2_analysis_enabled` policy.
 
@@ -25,9 +26,9 @@ profiles can be selected by users. Every run stores an immutable snapshot, and d
 the CAPE machine while retaining the profile record for custody and reproducibility.
 
 The adapter validates the complete bundle again, binds it to the run, sample, executor key, CAPE
-task and selected profile, then imports CAPE signatures, YARA/static findings, host-access
+task and selected profile, then imports CAPE signatures, CAPE ATT&CK mappings, YARA/static findings, host-access
 capabilities, IOCs, telemetry state and Windows metadata. CAPE's large native report is reduced to
-a bounded evidence document while retaining malscore, signatures, YARA/static data, IOCs and
+a bounded evidence document while retaining malscore, signatures, TTPs, YARA/static data, IOCs and
 network observations. Re-adaptation supersedes prior active rows without deleting them. The
 adapter works whether C2 is enabled or skipped and never discards platform findings merely because
 C2 evidence is absent.
