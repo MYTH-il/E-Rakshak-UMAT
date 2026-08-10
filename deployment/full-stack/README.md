@@ -96,9 +96,12 @@ Profiles clone the approved baseline and may enlarge, but cannot shrink, its vir
 smaller disks require rebuilding a VMCloak template from the licensed ISO. Deletion is rejected
 while CAPE has the machine locked or libvirt reports it running.
 
-`umat-deploy status` exits nonzero until pinned source revisions, images, CAPE baseline/snapshot,
-all UMAT services, and local health endpoints are present. This is intentional: a partial legacy
-installation is reported as incomplete rather than promoted.
+`umat-deploy status` classifies each gate as required or optional. A failed required gate marks the
+deployment unhealthy and exits nonzero; a failed optional gate keeps the required deployment
+healthy but marks it degraded. Pinned source revisions, required images and runtimes, the CAPE
+baseline/snapshot, all UMAT services, and local health endpoints are required. The AOSP AVD is an
+optional fallback; the qualified ReDroid runtime is required. This makes a partial installation
+fail closed without allowing optional tooling drift to misrepresent the supported baseline.
 
 ## Running an analysis
 

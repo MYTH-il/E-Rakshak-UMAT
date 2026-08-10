@@ -51,7 +51,7 @@
       "license": "GNU General Public License v3.0",
       "license_evidence": "upstream LICENSE",
       "redistribution_allowed": true,
-      "runtime_status": "static_validated_dynamic_boot_gate_failed"
+      "runtime_status": "redroid_runtime_qualified_aosp_avd_optional"
     },
     {
       "name": "C2 Exfil analyzer",

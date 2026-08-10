@@ -19,9 +19,9 @@ UMAT does not fabricate Mobile ATT&CK identifiers that MobSF did not assert.
 Host prerequisites are Docker, BinderFS, Java, Android platform tools,
 command-line tools, the Android emulator, `socat`, KVM access, and
 `system-images;android-30;default;x86_64` for the fallback profile.
-This workstation installs the SDK under `/usr/lib/android-sdk`.
-Runtime validation used Android emulator 37.1.11; Ubuntu's packaged 34.1.19
-must be upgraded with `sdkmanager emulator` before acceptance testing.
+The required ReDroid tooling uses Android platform tools under `/usr/lib/android-sdk`. The optional
+AVD fallback is pinned separately to emulator 34.1.19 under `/opt/android-sdk-34`; a newer distro
+emulator may coexist but does not replace that fallback identity.
 
 Build the pinned MobSF image:
 
@@ -46,7 +46,7 @@ uv run umat-android-executor run \
   --mobsf-url http://127.0.0.1:8001 \
   --mobsf-api-key "$MOBSF_API_KEY" \
   --avdmanager /usr/bin/avdmanager \
-  --emulator /usr/lib/android-sdk/emulator/emulator \
+  --emulator /opt/android-sdk-34/emulator/emulator \
   --adb /usr/bin/adb \
   --adb-relay /usr/bin/socat \
   --adb-relay-bind-address 172.17.0.1 \
@@ -74,7 +74,7 @@ workers must be isolated from production/user networks before hostile samples
 are executed.
 
 ReDroid is qualified by full acceptance run
-`019fe8ab-37c7-7eca-b139-167f2b8052ea`. It completed dynamic analysis, system
+`019fec3b-c602-7b05-aa9d-b72ee7bc0d73`. It completed dynamic analysis, system
 CA installation, Frida injection, PCAP capture, C2 processing, both adaptation
 stages, aggregation, and report generation. ARM images are not provisioned.
 

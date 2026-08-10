@@ -11,7 +11,9 @@ from umat.deployment.cli import (
     CommandRunner,
     DeploymentError,
     load_manifest,
+    new_status_report,
     path_exists,
+    record_status_check,
     selected_components,
 )
 from umat.windows.executor import app as windows_executor_app
@@ -33,10 +35,41 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
     )
     assert components["cape"]["commit"] == winstdt["cape"]["commit"]
     assert components["android"]["commit"] == android["commit"]
+    assert components["android"]["repository"] == android["repository"]
+    assert components["android"]["tree_sha256"] == android["tree_sha256"]
     assert components["android"]["patch_series_sha256"] == android["patch_series_sha256"]
-    assert (
-        components["android"]["emulator_version"] == (android["tool_versions"]["android_emulator"])
+    assert components["android"]["image"] == android["container_image"]
+    assert components["android"]["image_digest"] == android["container_image_digest"]
+    assert components["android"]["default_runtime"] == android["runtime_policy"]["default"]
+    runtimes = components["android"]["runtimes"]
+    required = {name for name, runtime in runtimes.items() if runtime["required"]}
+    optional = {name for name, runtime in runtimes.items() if not runtime["required"]}
+    assert required == set(android["runtime_policy"]["required"])
+    assert optional == set(android["runtime_policy"]["optional"])
+    assert runtimes["redroid"]["image"] == android["tool_versions"]["redroid_image"]
+    assert runtimes["redroid"]["architecture"] == (
+        android["tool_versions"]["redroid_architecture"]
     )
+    assert runtimes["redroid"]["guest_abi"] == android["tool_versions"]["redroid_guest_abi"]
+    assert runtimes["aosp_avd"]["emulator_version"] == (
+        android["tool_versions"]["android_emulator"]
+    )
+    assert runtimes["aosp_avd"]["system_image"] == (
+        f"system-images;android-{android['tool_versions']['android_api']};"
+        f"{android['tool_versions']['android_system_image']}"
+    )
+    assert runtimes["aosp_avd"]["guest_abi"] == android["tool_versions"]["android_guest_abi"]
+    qualification = runtimes["redroid"]["qualification"]
+    assert qualification == {
+        key: android["validation"][key]
+        for key in ("status", "validated_at", "evidence_run_id")
+    }
+    assert android["validation"]["runtime"] == "redroid"
+    executor_source = (ROOT / "src/umat/android/executor.py").read_text()
+    schemas_source = (ROOT / "src/umat/android/schemas.py").read_text()
+    assert runtimes["redroid"]["image"] in executor_source
+    assert runtimes["redroid"]["image"] in schemas_source
+    assert runtimes["aosp_avd"]["emulator_version"] in schemas_source
     assert components["c2"]["commit"] == c2["commit"]
     assert components["c2"]["patch_series_sha256"] == c2["patch_series_sha256"]
     assert components["umat_postgres"]["image"] == (
@@ -58,6 +91,37 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
         android_patch_digest.update(patch_path.read_bytes())
     assert android_patch_digest.hexdigest() == android["patch_series_sha256"]
     assert sorted(declared_paths) == sorted((ROOT / "deployment/windows/patches").glob("*.patch"))
+
+
+def test_status_fails_required_gates_but_only_degrades_optional_gates() -> None:
+    optional_report = new_status_report()
+    record_status_check(
+        optional_report,
+        "android_runtime:aosp_avd",
+        False,
+        "version drift",
+        required=False,
+    )
+    assert optional_report["healthy"] is True
+    assert optional_report["degraded"] is True
+    assert optional_report["checks"]["android_runtime:aosp_avd"] == {
+        "passed": False,
+        "requirement": "optional",
+        "status": "degraded",
+        "detail": "version drift",
+    }
+
+    required_report = new_status_report()
+    record_status_check(
+        required_report,
+        "android_runtime:redroid",
+        False,
+        "digest mismatch",
+        required=True,
+    )
+    assert required_report["healthy"] is False
+    assert required_report["degraded"] is False
+    assert required_report["checks"]["android_runtime:redroid"]["status"] == "failed"
 
 
 def test_dry_run_never_executes_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,6 +227,7 @@ def test_all_executor_units_use_isolated_environment_files() -> None:
         )
     )
     assert "--enroll-only" in enrollment
+    assert "UMAT_ANDROID_EMULATOR=/opt/android-sdk-34/emulator/emulator" in installer
 
 
 def test_guest_firewall_is_installed_and_fail_closed() -> None:

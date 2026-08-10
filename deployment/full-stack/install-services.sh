@@ -181,7 +181,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     'UMAT_MOBSF_URL=http://127.0.0.1:8001' \
     "MOBSF_API_KEY=$mobsf_api_key" \
     'UMAT_ANDROID_AVDMANAGER=/usr/bin/avdmanager' \
-    'UMAT_ANDROID_EMULATOR=/usr/lib/android-sdk/emulator/emulator' \
+    'UMAT_ANDROID_EMULATOR=/opt/android-sdk-34/emulator/emulator' \
     'UMAT_ANDROID_ADB=/usr/bin/adb' \
     'UMAT_ANDROID_ADB_RELAY=/usr/bin/socat' \
     'UMAT_ANDROID_ADB_RELAY_BIND_ADDRESS=172.17.0.1' \

@@ -604,16 +604,48 @@ def install(
     typer.echo("deployment complete" if execute else "dry-run complete; no host changes made")
 
 
+def new_status_report() -> dict[str, Any]:
+    return {
+        "schema_version": "1.1",
+        "healthy": True,
+        "degraded": False,
+        "summary": {"passed": 0, "degraded": 0, "failed": 0},
+        "checks": {},
+    }
+
+
+def record_status_check(
+    report: dict[str, Any],
+    name: str,
+    passed: bool,
+    detail: Any,
+    *,
+    required: bool = True,
+) -> None:
+    status_value = "passed" if passed else "failed" if required else "degraded"
+    report["checks"][name] = {
+        "passed": passed,
+        "requirement": "required" if required else "optional",
+        "status": status_value,
+        "detail": detail,
+    }
+    report["summary"][status_value] += 1
+    if not passed and required:
+        report["healthy"] = False
+    if not passed and not required:
+        report["degraded"] = True
+
+
 @app.command("status")
 def status() -> None:
     manifest = load_manifest()
     paths = manifest["paths"]
-    results: dict[str, Any] = {"schema_version": "1.0", "healthy": True, "checks": {}}
+    results = new_status_report()
 
-    def check(name: str, passed: bool, detail: Any) -> None:
-        results["checks"][name] = {"passed": passed, "detail": detail}
-        if not passed:
-            results["healthy"] = False
+    def check(
+        name: str, passed: bool, detail: Any, *, required: bool = True
+    ) -> None:
+        record_status_check(results, name, passed, detail, required=required)
 
     locations = {
         "winstdt": paths["winstdt_checkout"],
@@ -694,7 +726,8 @@ def status() -> None:
         == 0
     )
     check("windows_baseline_snapshot", snapshot_present, snapshot)
-    image = manifest["components"]["android"]["image"]
+    android = manifest["components"]["android"]
+    image = android["image"]
     image_id = subprocess.run(  # noqa: S603
         [
             command("sudo"),
@@ -712,10 +745,47 @@ def status() -> None:
     ).stdout.strip()
     check(
         "android_image",
-        image_id == manifest["components"]["android"]["image_digest"],
-        {"expected": manifest["components"]["android"]["image_digest"], "observed": image_id},
+        image_id == android["image_digest"],
+        {"expected": android["image_digest"], "observed": image_id},
     )
-    emulator = Path("/usr/lib/android-sdk/emulator/emulator")
+
+    redroid = android["runtimes"]["redroid"]
+    redroid_inspection = subprocess.run(  # noqa: S603
+        [
+            command("sudo"),
+            "-n",
+            command("docker"),
+            "image",
+            "inspect",
+            redroid["image"],
+            "--format",
+            "{{json .RepoDigests}}|{{.Architecture}}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    redroid_observed = redroid_inspection.stdout.strip()
+    expected_repo_digest = redroid["image"].removeprefix("docker.io/")
+    redroid_present = (
+        redroid_inspection.returncode == 0
+        and expected_repo_digest in redroid_observed
+        and redroid_observed.endswith(f"|{redroid['architecture']}")
+    )
+    check(
+        "android_runtime:redroid",
+        redroid_present,
+        {
+            "expected_image": redroid["image"],
+            "expected_architecture": redroid["architecture"],
+            "observed": redroid_observed or redroid_inspection.stderr.strip()[:500],
+            "qualification": redroid["qualification"],
+        },
+        required=bool(redroid["required"]),
+    )
+
+    avd = android["runtimes"]["aosp_avd"]
+    emulator = Path(avd["emulator_path"])
     emulator_output = (
         subprocess.run(  # noqa: S603
             [str(emulator), "-version"], check=False, capture_output=True, text=True
@@ -723,11 +793,42 @@ def status() -> None:
         if emulator.is_file()
         else ""
     )
-    expected_emulator = manifest["components"]["android"]["emulator_version"]
+    expected_emulator = avd["emulator_version"]
+    observed_emulator = next(
+        (
+            line
+            for line in emulator_output.splitlines()
+            if line.startswith("Android emulator version ")
+        ),
+        "unavailable",
+    )
     check(
-        "android_emulator",
+        "android_runtime:aosp_avd",
         f"Android emulator version {expected_emulator}" in emulator_output,
-        emulator_output.splitlines()[0] if emulator_output else "unavailable",
+        {
+            "path": str(emulator),
+            "expected_version": expected_emulator,
+            "observed": observed_emulator,
+            "qualification": avd["qualification"],
+        },
+        required=bool(avd["required"]),
+    )
+    android_executor_environment = Path("/etc/umat/android-executor.env")
+    configured_emulator = "unavailable"
+    if path_exists(android_executor_environment):
+        configured_emulator = next(
+            (
+                line.split("=", 1)[1]
+                for line in read_environment_text(android_executor_environment).splitlines()
+                if line.startswith("UMAT_ANDROID_EMULATOR=")
+            ),
+            "unavailable",
+        )
+    check(
+        "android_runtime:aosp_avd_executor",
+        configured_emulator == str(emulator),
+        {"expected": str(emulator), "observed": configured_emulator},
+        required=bool(avd["required"]),
     )
     runtime_manifest_path = Path(locations["c2_runtime"]) / "runtime-manifest.json"
     runtime_manifest = (

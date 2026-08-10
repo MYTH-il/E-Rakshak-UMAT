@@ -45,12 +45,31 @@
       "tree_sha256": "9c554d1e1e2c7c5e70cf3d5b6504a28bc37ed62b81ddc0b0f3007b4bec2c58fa",
       "patch_series_sha256": "da607f7d284c2718c0cf8ef402836c82d0e9042ad149d0b99f7818af23b5de94",
       "image": "umat-mobsf:6462901d",
-      "image_digest": "sha256:f9ca4f7c08d979ed0cb130abb2af5b7bbf0ada349431f4c602e90c0230d06d0a",
-      "emulator_version": "34.1.19",
+      "image_digest": "sha256:d194b0783bd6550d24248df0b22cef93a60946e37349649a9da2e3f4856b1212",
       "default_runtime": "redroid",
-      "redroid_image": "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d",
-      "redroid_architecture": "amd64",
-      "redroid_guest_abi": "x86_64"
+      "runtimes": {
+        "redroid": {
+          "required": true,
+          "image": "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d",
+          "architecture": "amd64",
+          "guest_abi": "x86_64",
+          "qualification": {
+            "status": "qualified",
+            "validated_at": "2026-08-10",
+            "evidence_run_id": "019fec3b-c602-7b05-aa9d-b72ee7bc0d73"
+          }
+        },
+        "aosp_avd": {
+          "required": false,
+          "emulator_path": "/opt/android-sdk-34/emulator/emulator",
+          "emulator_version": "34.1.19",
+          "system_image": "system-images;android-30;default;x86_64",
+          "guest_abi": "x86_64",
+          "qualification": {
+            "status": "fallback_unqualified"
+          }
+        }
+      }
     },
     "umat_postgres": {
       "image": "postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636",

@@ -12,7 +12,13 @@
   },
   "tree_sha256": "9c554d1e1e2c7c5e70cf3d5b6504a28bc37ed62b81ddc0b0f3007b4bec2c58fa",
   "patch_series_sha256": "da607f7d284c2718c0cf8ef402836c82d0e9042ad149d0b99f7818af23b5de94",
+  "container_image": "umat-mobsf:6462901d",
   "container_image_digest": "sha256:d194b0783bd6550d24248df0b22cef93a60946e37349649a9da2e3f4856b1212",
+  "runtime_policy": {
+    "default": "redroid",
+    "required": ["redroid"],
+    "optional": ["aosp_avd"]
+  },
   "tool_versions": {
     "mobsf": "4.5.1",
     "poetry": "2.4.1",
@@ -20,12 +26,15 @@
     "android_api": 30,
     "android_system_image": "default;x86_64",
     "android_emulator": "34.1.19",
+    "android_guest_abi": "x86_64",
     "redroid_image": "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d",
+    "redroid_architecture": "amd64",
     "redroid_guest_abi": "x86_64",
     "postgres": "16"
   },
   "validation": {
     "status": "qualified",
+    "runtime": "redroid",
     "validated_at": "2026-08-10",
     "evidence_run_id": "019fec3b-c602-7b05-aa9d-b72ee7bc0d73",
     "result": "IRATA completed end to end on ReDroid Android 11/API 30 with 626 persisted Frida API-monitor events, attributable runtime network traffic, rooted deterministic stimulation, PCAP capture, C2 analysis, adaptations, aggregation, and final report generation."
