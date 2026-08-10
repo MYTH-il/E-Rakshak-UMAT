@@ -377,9 +377,10 @@ class AndroidExecutor:
             if bool(profile.get("android_interactive")):
                 if not isinstance(avd, RedroidManager):
                     raise RuntimeError("interactive Android analysis requires ReDroid")
-                stimulation = self._interactive_session(
-                    claim, common, avd, scan_hash, static, running.guest_ip, check_stop
+                stimulation, interactive_evidence = self._interactive_session(
+                    claim, common, avd, scan_hash, static, running.guest_ip, workspace, check_stop
                 )
+                evidence.update(interactive_evidence)
             else:
                 stimulation = avd.stimulate(self.stimulation_seconds, self.stimulation_actions)
             check_stop()
@@ -431,6 +432,9 @@ class AndroidExecutor:
                 f"Android analysis did not produce a non-empty PCAP{detail}"
             ) from analysis_error
         evidence["pcap"] = pcap
+        network_activity = workspace / "network-activity.json"
+        self._network_summary(pcap, running.guest_ip if running else None, network_activity)
+        evidence["network_activity"] = network_activity
         dynamic_path: Path | None = None
         if dynamic is not None:
             dynamic_path = workspace / "mobsf-dynamic.json"
@@ -473,6 +477,9 @@ class AndroidExecutor:
             ("smali_source", evidence.get("smali_source"), "application/zip"),
             ("application_data", evidence.get("application_data"), "application/x-tar"),
             ("android_scan_logs", evidence.get("scan_logs"), "application/json"),
+            ("analyst_session", evidence.get("analyst_session"), "application/json"),
+            ("analyst_screenshots", evidence.get("analyst_screenshots"), "application/zip"),
+            ("network_activity", evidence.get("network_activity"), "application/json"),
         ):
             if artifact_path and artifact_path.is_file():
                 self._upload(claim, artifact_path, kind, media_type)
@@ -509,8 +516,9 @@ class AndroidExecutor:
         scan_hash: str,
         static: dict[str, Any],
         guest_ip: str | None,
+        workspace: Path,
         check_stop: Any,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Path]]:
         path = f"/api/internal/v1/stages/{claim['stage_id']}/android-session/ready"
         body = common | {
             "scan_hash": scan_hash,
@@ -522,6 +530,9 @@ class AndroidExecutor:
         response = self.mutate(path, body, claim["lease_token"])
         response.raise_for_status()
         completed = 0
+        records: list[dict[str, Any]] = []
+        captures = workspace / "analyst-screenshots"
+        captures.mkdir(mode=0o700)
         while True:
             check_stop()
             poll_path = f"/api/internal/v1/stages/{claim['stage_id']}/android-session/poll"
@@ -548,6 +559,17 @@ class AndroidExecutor:
                     completed += 1
                 except Exception as exc:
                     success, result = False, {"error": str(exc)[:2000]}
+                recorded = dict(result)
+                encoded_image = recorded.pop("image_base64", None)
+                if encoded_image and command["type"] in {"screenshot", "activity_test"}:
+                    capture = captures / f"{completed:04d}-{command['type']}.png"
+                    capture.write_bytes(base64.b64decode(encoded_image, validate=True))
+                    recorded["screenshot"] = capture.name
+                records.append({
+                    "sequence": completed, "command_type": command["type"],
+                    "payload": command["payload"], "success": success, "result": recorded,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                })
                 complete_path = (
                     f"/api/internal/v1/stages/{claim['stage_id']}"
                     "/android-session/complete-command"
@@ -562,11 +584,52 @@ class AndroidExecutor:
             if value.get("finalize"):
                 break
             time.sleep(0.35)
+        journal = workspace / "analyst-session.json"
+        self._json(journal, {"schema_version": "1.0", "commands": records})
+        session_evidence = {"analyst_session": journal}
+        if any(captures.iterdir()):
+            session_evidence["analyst_screenshots"] = Path(
+                shutil.make_archive(str(workspace / "analyst-screenshots"), "zip", captures)
+            )
         return {
             "strategy": "interactive_analyst_v1",
             "actions_completed": completed,
             "complete": True,
-        }
+        }, session_evidence
+
+    def _network_summary(self, pcap: Path, guest_ip: str | None, destination: Path) -> None:
+        display_filter = (
+            f"ip.src == {guest_ip} && !(mdns) && !(tcp.srcport == 5555)"
+            if guest_ip else "ip && !(mdns)"
+        )
+        command = [
+            "/usr/bin/tshark", "-r", str(pcap), "-Y", display_filter, "-T", "fields",
+            "-E", "separator=/t", "-E", "occurrence=f",
+            "-e", "frame.time_epoch", "-e", "ip.dst", "-e", "ipv6.dst",
+            "-e", "tcp.dstport", "-e", "udp.dstport", "-e", "dns.qry.name",
+            "-e", "_ws.col.Protocol",
+        ]
+        result = subprocess.run(command, capture_output=True, timeout=120, check=False)  # noqa: S603
+        observations: list[dict[str, Any]] = []
+        for line in result.stdout.decode(errors="replace").splitlines()[:5000]:
+            fields = (line.split("\t") + [""] * 7)[:7]
+            timestamp, ipv4, ipv6, tcp_port, udp_port, domain, protocol = fields
+            if not (ipv4 or ipv6 or domain):
+                continue
+            observations.append({
+                "observed_at": datetime.fromtimestamp(float(timestamp), timezone.utc).isoformat()
+                if timestamp else None,
+                "destination_ip": ipv4 or ipv6 or None,
+                "destination_port": int(tcp_port or udp_port) if (tcp_port or udp_port).isdigit() else None,
+                "destination_domain": domain.rstrip(".").lower() or None,
+                "protocol": protocol.lower() or None,
+            })
+        self._json(destination, {
+            "schema_version": "1.0", "guest_ip": guest_ip,
+            "capture_size_bytes": pcap.stat().st_size, "observations": observations,
+            "parser_status": "ok" if result.returncode == 0 else "partial",
+            "parser_error": result.stderr.decode(errors="replace")[:2000] or None,
+        })
 
     def _execute_interactive_command(
         self,
@@ -591,7 +654,31 @@ class AndroidExecutor:
         elif command_type == "text":
             avd.input_text(str(payload["text"]))
         elif command_type == "start_activity":
-            return self.mobsf.start_activity(scan_hash, str(payload["activity"]))
+            activity = str(payload["activity"])
+            if package_name and activity.startswith("."):
+                component = f"{package_name}/{package_name}{activity}"
+            elif "/" in activity:
+                component = activity
+            elif package_name:
+                component = f"{package_name}/{activity}"
+            else:
+                raise RuntimeError("package name is unavailable")
+            assert package_name is not None
+            # Start from a stopped package so the requested activity lifecycle is
+            # reproducible.  A warm launcher task can otherwise hide onCreate
+            # behavior such as the sample's network initialization.
+            avd._adb(  # noqa: SLF001 - executor owns the isolated manager
+                "-s", avd.adb_address, "shell", "am", "force-stop", package_name,
+                check=False,
+            )
+            activity_process = avd._adb(  # noqa: SLF001 - executor owns the isolated manager
+                "-s", avd.adb_address, "shell", "am", "start", "-W", "-n", component,
+                check=False,
+            )
+            output = (activity_process.stdout + activity_process.stderr).decode(errors="replace")
+            if activity_process.returncode != 0 or "Error:" in output:
+                raise RuntimeError(output[:2000])
+            return {"status": "ok", "component": component, "output": output[:8192]}
         elif command_type == "deeplink":
             value = str(payload["url"])
             result = avd._adb(  # noqa: SLF001 - executor owns the isolated manager

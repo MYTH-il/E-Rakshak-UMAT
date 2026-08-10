@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -30,6 +31,7 @@ from umat.db.models import (
     Artifact,
     BundleImport,
     Executor,
+    NetworkObservation,
     Platform,
     StageState,
     StageType,
@@ -220,6 +222,11 @@ class AndroidAdapter:
         static = _object(_descriptor_path(root, manifest["mobsf_reports"]["static"]))
         dynamic_descriptor = manifest["mobsf_reports"].get("dynamic")
         dynamic = _object(_descriptor_path(root, dynamic_descriptor))
+        network_descriptor = next(
+            (item for item in manifest["artifacts"] if item.get("kind") == "network_activity"),
+            None,
+        )
+        network_activity = _object(_descriptor_path(root, network_descriptor))
         adaptation = AdaptationRecord(
             analysis_run_id=run.id,
             stage_id=stage.id,
@@ -255,6 +262,21 @@ class AndroidAdapter:
         self._findings(db, adaptation.id, run.id, static, dynamic)
         self._capabilities(db, adaptation.id, run.id, static, dynamic)
         self._iocs(db, adaptation.id, run.id, static, dynamic)
+        for sequence, item in enumerate(network_activity.get("observations", [])[:5000]):
+            if not isinstance(item, dict):
+                continue
+            db.add(NetworkObservation(
+                adaptation_id=adaptation.id,
+                analysis_run_id=run.id,
+                source_event_id=f"android-pcap-{sequence:06d}",
+                destination_ip=item.get("destination_ip"),
+                destination_port=item.get("destination_port"),
+                destination_domain=item.get("destination_domain"),
+                protocol=item.get("protocol"),
+                observed_at=datetime.fromisoformat(item["observed_at"])
+                if item.get("observed_at") else utcnow(),
+                details={"source": "android_executor_pcap_summary"},
+            ))
         return adaptation
 
     @staticmethod
