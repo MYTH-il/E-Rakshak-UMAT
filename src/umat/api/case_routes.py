@@ -144,12 +144,12 @@ async def create_case(
     try:
         if platform == Platform.ANDROID and windows_profile_id:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "a Windows VM profile cannot be selected for an APK",
             )
         if platform == Platform.WINDOWS and android_profile_id:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "an Android profile cannot be selected for a Windows sample",
             )
         windows_profile = (
@@ -168,7 +168,7 @@ async def create_case(
             and not android_profile.system_image.startswith("docker.io/redroid/")
         ):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "isolated Android runs require the ReDroid profile",
             )
         duplicate_query = (
@@ -459,7 +459,7 @@ async def create_run(
             and not android_profile.system_image.startswith("docker.io/redroid/")
         ):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "isolated Android runs require the ReDroid profile",
             )
         db.add(

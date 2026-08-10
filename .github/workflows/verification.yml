@@ -1,0 +1,118 @@
+name: Verification
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+        env:
+          POSTGRES_USER: umat_test
+          POSTGRES_PASSWORD: verification-only
+          POSTGRES_DB: umat_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U umat_test -d umat_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      UMAT_DATABASE_URL: postgresql+asyncpg://umat_test:verification-only@127.0.0.1:55432/umat_test
+      UMAT_TEST_DATABASE_URL: postgresql+asyncpg://umat_test:verification-only@127.0.0.1:55432/umat_test
+      UMAT_MIGRATION_DATABASE_URL: postgresql+asyncpg://umat_test:verification-only@127.0.0.1:55432/umat_migration
+      UMAT_QUARANTINE_ROOT: ${{ github.workspace }}/var/ci-quarantine
+      UMAT_ARTIFACT_ROOT: ${{ github.workspace }}/var/ci-artifacts
+      UMAT_SESSION_SECRET: ci-session-secret-not-for-production
+      UMAT_EXECUTOR_ENROLLMENT_SECRET: ci-enrollment-secret-not-for-production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.3"
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: |
+          uv sync --frozen --extra test
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare disposable databases
+        run: |
+          uv run python - <<'PY'
+          import psycopg
+
+          with psycopg.connect(
+              "postgresql://umat_test:verification-only@127.0.0.1:55432/umat_test",
+              autocommit=True,
+          ) as connection:
+              connection.execute("CREATE DATABASE umat_migration")
+          PY
+          uv run alembic upgrade head
+          uv run umat-admin create-user --username admin --role administrator \
+            --password verification-only-admin-password --non-interactive
+          uv run umat-admin seed-android-profiles --admin admin
+
+      - name: Static verification
+        run: |
+          uv run ruff check src tests
+          uv run mypy src/umat
+          npm run lint:js
+
+      - name: Python test suite
+        run: |
+          uv run pytest -q | tee "$RUNNER_TEMP/pytest.log"
+          if grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/pytest.log"; then
+            echo "CI must execute every collected Python test without skips."
+            exit 1
+          fi
+
+      - name: Seed browser fixtures
+        run: uv run python tests/browser/seed.py
+
+      - name: Browser workflows and accessibility
+        run: |
+          uv run umat-api > "$RUNNER_TEMP/umat-api.log" 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/health/ready; then
+              npm run test:browser
+              exit $?
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/umat-api.log"
+          exit 1
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+            ${{ runner.temp }}/umat-api.log
+          if-no-files-found: ignore

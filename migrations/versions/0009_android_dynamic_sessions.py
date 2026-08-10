@@ -14,10 +14,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "analysis_runs",
-        sa.Column("android_interactive", sa.Boolean(), nullable=False, server_default=sa.false()),
+    conn = op.get_bind()
+    interactive_column = conn.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'analysis_runs' AND column_name = 'android_interactive'"
+        )
     )
+    if interactive_column.fetchone() is None:
+        op.add_column(
+            "analysis_runs",
+            sa.Column(
+                "android_interactive", sa.Boolean(), nullable=False, server_default=sa.false()
+            ),
+        )
     op.create_table(
         "android_dynamic_sessions",
         sa.Column("id", sa.Uuid(), nullable=False),

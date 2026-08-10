@@ -37,6 +37,10 @@ def test_full_upgrade_downgrade_and_role_seed() -> None:
         "0003_windows",
         "0004_unified_reports",
         "0005_android",
+        "0006_android_profiles",
+        "0007_run_network_mode",
+        "0008_decouple_c2_policy",
+        "0009_android_sessions",
     ]
     alembic("downgrade", "base")
     for revision in revisions:

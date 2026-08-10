@@ -328,44 +328,44 @@ async def android_workflow(
 
 def _validate_command(command_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     if command_type not in _COMMANDS:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unsupported Android operation")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "unsupported Android operation")
     clean: dict[str, Any] = {}
     if command_type == "tap":
         clean = {"x": int(payload.get("x", -1)), "y": int(payload.get("y", -1))}
         if not 0 <= clean["x"] <= 4096 or not 0 <= clean["y"] <= 4096:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "tap coordinates are invalid")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "tap coordinates are invalid")
     elif command_type == "swipe":
         for name in ("x1", "y1", "x2", "y2"):
             clean[name] = int(payload.get(name, -1))
             if not 0 <= clean[name] <= 4096:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "swipe coordinates are invalid")
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "swipe coordinates are invalid")
         clean["duration_ms"] = min(max(int(payload.get("duration_ms", 300)), 50), 3000)
     elif command_type == "key":
         clean = {"keycode": int(payload.get("keycode", 0))}
         if not 1 <= clean["keycode"] <= 400:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "keycode is invalid")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "keycode is invalid")
     elif command_type == "text":
         clean = {"text": str(payload.get("text", ""))[:2000]}
     elif command_type in {"start_activity", "deeplink"}:
         key = "activity" if command_type == "start_activity" else "url"
         clean = {key: str(payload.get(key, ""))[:2048]}
         if not clean[key]:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{key} is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{key} is required")
     elif command_type == "activity_test":
         test = str(payload.get("test", ""))
         if test not in {"exported", "all_activities"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "activity test is invalid")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "activity test is invalid")
         clean = {"test": test}
     elif command_type in {"proxy", "root_ca"}:
         action = str(payload.get("action", ""))
         allowed = {"set", "unset"} if command_type == "proxy" else {"install", "remove"}
         if action not in allowed:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "operation action is invalid")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "operation action is invalid")
         clean = {"action": action}
     elif command_type == "frida":
         action = str(payload.get("action", "spawn"))
         if action not in {"spawn", "session", "ps", "get"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Frida action is invalid")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Frida action is invalid")
         default_allowlist = {
             "api_monitor", "ssl_pinning_bypass", "root_bypass",
             "debugger_check_bypass", "dump_clipboard",
@@ -383,7 +383,7 @@ def _validate_command(command_type: str, payload: dict[str, Any]) -> dict[str, A
             if value.strip()
         }
         if not default_hooks <= default_allowlist or not auxiliary_hooks <= auxiliary_allowlist:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Frida hook selection is invalid")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Frida hook selection is invalid")
         clean = {
             "action": action,
             "pid": str(payload.get("pid", ""))[:16],
@@ -396,17 +396,17 @@ def _validate_command(command_type: str, payload: dict[str, Any]) -> dict[str, A
             "frida_code": str(payload.get("frida_code", ""))[:65536],
         }
         if "enum_methods" in auxiliary_hooks and not clean["class_name"]:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Class name is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Class name is required")
         if "search_class" in auxiliary_hooks and not clean["class_search"]:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Class search is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Class search is required")
         if "trace_class" in auxiliary_hooks and not clean["class_trace"]:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Class trace is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Class trace is required")
     elif command_type == "list_files":
         clean = {"path": str(payload.get("path", "/data/data"))[:1024]}
     elif command_type == "read_file":
         clean = {"path": str(payload.get("path", ""))[:1024]}
         if not clean["path"]:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "file path is required")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "file path is required")
     return clean
 
 

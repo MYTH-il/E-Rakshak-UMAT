@@ -73,7 +73,7 @@ def create_app(manager: ProfileManager | None = None) -> FastAPI:
     )
     def delete_machine(label: str) -> MachineResult:
         if not label.startswith("umat-") or not label.replace("-", "").isalnum():
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid machine label")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid machine label")
         return manager.delete(label)
 
     return application

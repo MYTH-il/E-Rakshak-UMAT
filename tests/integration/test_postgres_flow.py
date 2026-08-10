@@ -26,7 +26,14 @@ from umat.c2.bundle import ResultBundleBuilder, sha256_file  # noqa: E402
 from umat.c2.input_builder import C2InputBuilder  # noqa: E402
 from umat.c2.models import InputArtifact  # noqa: E402
 from umat.c2.runtime import FixtureC2Runtime  # noqa: E402
-from umat.db.models import C2Finding, ExecutorEnrollmentToken, Role, User  # noqa: E402
+from umat.db.models import (  # noqa: E402
+    AnalysisStage,
+    C2Finding,
+    ExecutorEnrollmentToken,
+    Role,
+    StageType,
+    User,
+)
 from umat.db.session import session_factory  # noqa: E402
 from umat.executors.security import signature_message  # noqa: E402
 
@@ -114,12 +121,23 @@ async def test_postgres_intake_duplicate_and_executor_protocol(tmp_path: Path) -
         first = await client.post(
             "/api/v1/cases",
             headers=auth_headers,
-            data={"title": "integration"},
+            data={"title": "integration", "c2_analysis_enabled": "true"},
             files={"file": ("sample.bin", content, "application/octet-stream")},
         )
         assert first.status_code == 201, first.text
         assert first.json()["platform"] == "android"
         assert first.json()["status"] == "queued"
+        target_run_id = uuid.UUID(first.json()["analysis_run_id"])
+        async with session_factory() as db:
+            target_stage = await db.scalar(
+                select(AnalysisStage).where(
+                    AnalysisStage.analysis_run_id == target_run_id,
+                    AnalysisStage.stage_type == StageType.PLATFORM_ANALYSIS,
+                )
+            )
+            assert target_stage is not None
+            target_stage.priority = 10_000
+            await db.commit()
         second = await client.post(
             "/api/v1/cases",
             headers=auth_headers,
@@ -246,6 +264,16 @@ async def test_postgres_intake_duplicate_and_executor_protocol(tmp_path: Path) -
         replay = await client.post(complete_path, json=complete_body, headers=complete_headers)
         assert replay.status_code == 200
         assert replay.json() == completed.json()
+        async with session_factory() as db:
+            target_c2_stage = await db.scalar(
+                select(AnalysisStage).where(
+                    AnalysisStage.analysis_run_id == target_run_id,
+                    AnalysisStage.stage_type == StageType.C2_ANALYSIS,
+                )
+            )
+            assert target_c2_stage is not None
+            target_c2_stage.priority = 10_000
+            await db.commit()
 
         c2_private = Ed25519PrivateKey.generate()
         c2_public = c2_private.public_key().public_bytes(

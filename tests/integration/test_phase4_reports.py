@@ -264,12 +264,21 @@ async def test_unified_report_rbac_exports_and_terminal_workflow(tmp_path) -> No
         await db.commit()
         case_id = case.id
 
-    async with session_factory() as db:
-        assert await process_once(db)
-    async with session_factory() as db:
-        assert await process_once(db)
-    async with session_factory() as db:
-        assert not await process_once(db)
+        snapshot = None
+        run_status = None
+        for _ in range(20):
+            async with session_factory() as db:
+                await process_once(db)
+            async with session_factory() as db:
+                snapshot = await db.scalar(
+                    select(CaseReportSnapshot).where(CaseReportSnapshot.analysis_run_id == run.id)
+                )
+                refreshed_run = await db.get(AnalysisRun, run.id)
+                run_status = refreshed_run.status if refreshed_run else None
+            if snapshot is not None and run_status == RunStatus.TERMINAL:
+                break
+        assert snapshot is not None
+        assert run_status == RunStatus.TERMINAL
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"

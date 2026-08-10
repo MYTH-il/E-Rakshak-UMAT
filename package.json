@@ -1,0 +1,16 @@
+{
+  "name": "umat-verification",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint:js": "eslint src/umat/web/static/app.js tests/browser playwright.config.js",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
+    "eslint": "10.8.1",
+    "globals": "17.9.0"
+  }
+}

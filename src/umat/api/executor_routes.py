@@ -184,7 +184,7 @@ async def register_executor(
             raise ValueError
     except ValueError as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "public_key must be a base64 Ed25519 public key"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "public_key must be a base64 Ed25519 public key"
         ) from exc
     executor = Executor(
         name=body.name,
@@ -332,7 +332,7 @@ async def complete_windows_profile_operation(
         x_umat_lease_token,
     )
     if body.operation_id != operation_id:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "operation identity mismatch")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "operation identity mismatch")
     record, replay = await signed_request(
         db=db,
         executor=executor,
@@ -1189,7 +1189,7 @@ async def upload_artifact(
         metadata = ArtifactEnvelope.model_validate_json(envelope)
     except ValueError as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid artifact envelope"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid artifact envelope"
         ) from exc
     body = metadata.model_dump(mode="json")
     stage, _, _, record, replay = await verify_stage_mutation(
@@ -1226,7 +1226,7 @@ async def upload_artifact(
             payload={"reason": str(exc)},
         )
         await db.commit()
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     run = await db.get(AnalysisRun, stage.analysis_run_id)
     artifact = Artifact(
         analysis_run_id=stage.analysis_run_id,
@@ -1345,7 +1345,7 @@ async def complete_stage(
         return record.response_json
     requested_state = StageState(body.outcome)
     if requested_state not in {StageState.COMPLETED, StageState.PARTIAL, StageState.UNSUPPORTED}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid completion outcome")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid completion outcome")
     now = datetime.now(timezone.utc)
     stage.state = requested_state
     attempt.state = AttemptState.COMPLETED

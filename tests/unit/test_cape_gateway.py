@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi.testclient import TestClient
+import httpx
+import pytest
 
 from umat.cape_gateway.app import create_app
 from umat.cape_gateway.manager import CapeProfileManager
@@ -47,44 +48,58 @@ def profile() -> dict[str, object]:
     }
 
 
-def test_gateway_requires_bearer_token(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.asyncio
+async def test_gateway_requires_bearer_token(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("UMAT_CAPE_GATEWAY_TOKEN", TOKEN)
-    client = TestClient(create_app(FakeManager()))
-    assert client.post("/api/v1/machines", json=profile()).status_code == 401
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(FakeManager())),
+        base_url="http://testserver",
+    ) as client:
+        assert (await client.post("/api/v1/machines", json=profile())).status_code == 401
 
 
-def test_gateway_forwards_validated_profile(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.asyncio
+async def test_gateway_forwards_validated_profile(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("UMAT_CAPE_GATEWAY_TOKEN", TOKEN)
     manager = FakeManager()
-    client = TestClient(create_app(manager))
-    response = client.post(
-        "/api/v1/machines", json=profile(), headers={"Authorization": f"Bearer {TOKEN}"}
-    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(manager)), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/machines", json=profile(), headers={"Authorization": f"Bearer {TOKEN}"}
+        )
     assert response.status_code == 201
     assert manager.created is not None
     assert manager.created.user_profile.username == "analyst"
 
 
-def test_gateway_rejects_deletion_outside_managed_namespace(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.asyncio
+async def test_gateway_rejects_deletion_outside_managed_namespace(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("UMAT_CAPE_GATEWAY_TOKEN", TOKEN)
     manager = FakeManager()
-    client = TestClient(create_app(manager))
-    response = client.delete(
-        "/api/v1/machines/winstdt-win10-22h2",
-        headers={"Authorization": f"Bearer {TOKEN}"},
-    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(manager)), base_url="http://testserver"
+    ) as client:
+        response = await client.delete(
+            "/api/v1/machines/winstdt-win10-22h2",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
     assert response.status_code == 422
     assert manager.deleted is None
 
 
-def test_gateway_rejects_architecture_not_provided_by_baseline(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.asyncio
+async def test_gateway_rejects_architecture_not_provided_by_baseline(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("UMAT_CAPE_GATEWAY_TOKEN", TOKEN)
-    client = TestClient(create_app(FakeManager()))
-    response = client.post(
-        "/api/v1/machines",
-        json=profile() | {"architecture": "x86"},
-        headers={"Authorization": f"Bearer {TOKEN}"},
-    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(FakeManager())),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/machines",
+            json=profile() | {"architecture": "x86"},
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
     assert response.status_code == 422
 
 

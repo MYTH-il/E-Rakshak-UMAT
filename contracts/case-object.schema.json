@@ -156,8 +156,12 @@
     "platform",
     "status",
     "result",
+    "network_mode",
+    "c2_analysis_enabled",
+    "android_interactive",
     "stages",
-    "windows_profile"
+    "windows_profile",
+    "android_profile"
    ],
    "additionalProperties": false,
    "properties": {
@@ -199,6 +203,18 @@
       null
      ]
     },
+    "network_mode": {
+     "enum": [
+      "isolated_simulated",
+      "real_world_egress"
+     ]
+    },
+    "c2_analysis_enabled": {
+     "type": "boolean"
+    },
+    "android_interactive": {
+     "type": "boolean"
+    },
     "stages": {
      "type": "array",
      "items": {
@@ -206,6 +222,12 @@
      }
     },
     "windows_profile": {
+     "type": [
+      "object",
+      "null"
+     ]
+    },
+    "android_profile": {
      "type": [
       "object",
       "null"
@@ -395,6 +417,8 @@
     "analysis_run_id",
     "sample_sha256",
     "platform",
+    "network_mode",
+    "c2_analysis_enabled",
     "generated_at",
     "verdict",
     "headline",
@@ -424,6 +448,15 @@
       "windows",
       "android"
      ]
+    },
+    "network_mode": {
+     "enum": [
+      "isolated_simulated",
+      "real_world_egress"
+     ]
+    },
+    "c2_analysis_enabled": {
+     "type": "boolean"
     },
     "generated_at": {
      "type": "string",

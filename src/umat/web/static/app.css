@@ -219,7 +219,7 @@ tbody tr:hover { background: rgba(139,92,246,.06); }
 .checkbox-field input { width: auto; }
 .case-row.active { border-color: var(--accent, #7c5cff); box-shadow: 0 0 0 1px var(--accent, #7c5cff) inset; }
 .case-row small.muted { display: block; margin-top: .35rem; line-height: 1.4; }
-.tab[aria-selected="true"] { font-weight: 600; }
+.tab[aria-pressed="true"] { font-weight: 600; }
 .stage-track-spaced { gap: .75rem; flex-wrap: wrap; }
 .card-title + .case-list { margin-top: .75rem; }
 

@@ -158,10 +158,8 @@ function shell(title, content) {
   append(brandCopy, node("strong", "", "UMAT"), node("small", "", "Analysis console"));
   brand.append(brandCopy);
   sidebar.append(brand, node("div", "nav-label", "Workspace"));
-  sidebar.append(
-    navItem("Case queue", "/cases", path === "/cases" || path.startsWith("/cases/")),
-    navItem("New analysis", "/submit", path === "/submit")
-  );
+  sidebar.append(navItem("Case queue", "/cases", path === "/cases" || path.startsWith("/cases/")));
+  if (canSubmit()) sidebar.append(navItem("New analysis", "/submit", path === "/submit"));
   if (state.session.roles.includes("administrator")) {
     sidebar.append(node("div", "nav-label", "Administration"));
     sidebar.append(navItem("Windows profiles", "/admin/windows", path === "/admin/windows"));
@@ -180,8 +178,12 @@ function shell(title, content) {
   const topbar = node("header", "topbar");
   const menu = button("Menu", "btn btn-ghost mobile-menu");
   menu.addEventListener("click", () => sidebar.classList.toggle("open"));
-  append(topbar, append(node("div", "top-actions"), menu, node("h1", "", title)), link("New analysis", "/submit", "btn btn-primary"));
-  const main = node("main", "content"); main.id = "main"; main.append(content);
+  append(
+    topbar,
+    append(node("div", "top-actions"), menu, node("h1", "", title)),
+    canSubmit() ? link("New analysis", "/submit", "btn btn-primary") : null,
+  );
+  const main = node("main", "content"); main.id = "main"; main.tabIndex = -1; main.append(content);
   column.append(topbar, main); root.append(sidebar, column);
   app.replaceChildren(root);
 }
@@ -196,7 +198,7 @@ function pageHead(eyebrow, title, description, action) {
 
 async function renderLogin() {
   if (state.session) { go("/cases"); return; }
-  const page = node("main", "login-page");
+  const page = node("main", "login-page"); page.id = "main"; page.tabIndex = -1;
   const wrapper = node("div", "login-card");
   const identity = node("div", "login-brand");
   append(identity, node("span", "brand-mark", "U"), node("h1", "", "UMAT"), node("p", "", "Unified malware analysis and triage"));
@@ -340,7 +342,7 @@ async function renderSubmit() {
     items.forEach((item) => { const option = node("option", "", `${item.display_name} · API ${item.api_level} · ${item.architecture} · ${item.ram_mb} MiB`); option.value = item.id; androidProfiles.append(option); });
   } catch (_) { /* profile selection can remain default */ }
   append(androidProfileWrap, androidProfileLabel, androidProfiles);
-  const networkWrap = node("div", "field full"); const networkLabel = node("label", "", "Analysis network"); const networkMode = node("select"); networkMode.name = "network_mode";
+  const networkWrap = node("div", "field full"); const networkLabel = node("label", "", "Analysis network"); networkLabel.htmlFor = "intake-network-mode"; const networkMode = node("select"); networkMode.name = "network_mode"; networkMode.id = "intake-network-mode";
   [["Isolated / simulated (recommended)", "isolated_simulated"], ["Real-world network egress (not containment-qualified)", "real_world_egress"]].forEach(([label, value]) => { const option = node("option", "", label); option.value = value; networkMode.append(option); }); append(networkWrap, networkLabel, networkMode);
   const c2Wrap = node("label", "field full checkbox-field"); const c2Enabled = node("input"); c2Enabled.type = "checkbox"; c2Enabled.name = "c2_analysis_enabled"; append(c2Wrap, c2Enabled, node("span", "", "Run C2 analyzer on captured traffic (guest remains governed by the selected network mode)"));
   const interactiveWrap = node("label", "field full checkbox-field"); const androidInteractive = node("input"); androidInteractive.type = "checkbox"; androidInteractive.name = "android_interactive"; androidInteractive.checked = true; append(interactiveWrap, androidInteractive, node("span", "", "Hold Android guests for an interactive analyst session (ignored for non-APKs; automatically finalized after 15 minutes)"));
@@ -440,8 +442,8 @@ function rerunCard(caseData, run) {
   const grid = node("div", "field-grid");
 
   const sampleWrap = node("div", "field full");
-  const sampleLabel = node("label", "", "Sample");
-  const sample = node("select"); sample.name = "submission_id";
+  const sampleLabel = node("label", "", "Sample"); sampleLabel.htmlFor = "rerun-submission";
+  const sample = node("select"); sample.name = "submission_id"; sample.id = "rerun-submission";
   submissions.forEach((item) => {
     const option = node("option", "", `${item.original_filename} · ${item.sample_sha256.slice(0, 16)}`);
     option.value = item.id; sample.append(option);
@@ -449,8 +451,8 @@ function rerunCard(caseData, run) {
   append(sampleWrap, sampleLabel, sample);
 
   const networkWrap = node("div", "field");
-  const networkLabel = node("label", "", "Analysis network");
-  const network = node("select"); network.name = "network_mode";
+  const networkLabel = node("label", "", "Analysis network"); networkLabel.htmlFor = "rerun-network-mode";
+  const network = node("select"); network.name = "network_mode"; network.id = "rerun-network-mode";
   [["Isolated / simulated (recommended)", "isolated_simulated"],
    ["Real-world egress (not containment-qualified)", "real_world_egress"]]
     .forEach(([label, value]) => { const option = node("option", "", label); option.value = value; network.append(option); });
@@ -555,7 +557,7 @@ async function renderCase(caseId, preserveTab = false) {
   if (report?.technical) availableTabs.splice(1, 0, ["findings", "L2 Findings"]);
   availableTabs.forEach(([key, label]) => {
     const tab = button(label, `tab${state.activeTab === key ? " active" : ""}`);
-    tab.setAttribute("aria-selected", state.activeTab === key ? "true" : "false");
+    tab.setAttribute("aria-pressed", state.activeTab === key ? "true" : "false");
     tab.addEventListener("click", () => { state.activeTab = key; renderCase(caseId, true); });
     tabs.append(tab);
   });
