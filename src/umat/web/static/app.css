@@ -240,3 +240,13 @@ input:focus-visible, [tabindex]:focus-visible {
    the officer's screen; it must not look like every other row. */
 .data-item-alert { border-left: 3px solid var(--danger, #ff5c7a); padding-left: .8rem; }
 .alert-text { color: var(--danger, #ff5c7a); display: block; margin-top: .3rem; }
+
+/* Severity is the analyst's primary sort. It must be readable at a glance and
+   consistent across Windows (CAPE 1-3) and Android (MobSF words). */
+.badge-sev-high          { background: rgba(255,92,122,.16); color: #ff8ba0; }
+.badge-sev-medium        { background: rgba(255,176,92,.16); color: #ffc27a; }
+.badge-sev-low           { background: rgba(124,92,255,.16);  color: #b0a0ff; }
+.badge-sev-informational { background: rgba(120,200,255,.12); color: #8fd0ff; }
+.badge-sev-unrated       { background: rgba(160,160,180,.12); color: #b9b9c9; }
+.card-title + .actions-row { margin-bottom: .75rem; }
+.table-wrap + .card-title  { margin-top: 1.2rem; }

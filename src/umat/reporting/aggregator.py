@@ -283,7 +283,9 @@ class CaseAggregator:
                     }
                     for item in adaptations
                 ],
-                "platform_details": self._platform_details(windows_metadata, android_metadata),
+                "platform_details": self._platform_details(
+                    windows_metadata, android_metadata, finding_items
+                ),
             },
         }
         evidence_document = dict(report)
@@ -745,9 +747,20 @@ class CaseAggregator:
     def _platform_details(
         windows: WindowsAnalysisMetadata | None,
         android: AndroidAnalysisMetadata | None,
+        findings: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
+        """Platform panel for the analyst view.
+
+        Carries the run's identity AND a summary of the platform evidence, so
+        the report is a malware analysis report rather than a network report
+        with metadata attached. Both platforms are summarised the same way —
+        severity spread, categories, techniques — so the UI renders one
+        component regardless of which backend produced the case.
+        """
+        detail: dict[str, Any] | None = None
         if windows:
-            return {
+            detail = {
+                "platform": "windows",
                 "cape_task_id": windows.cape_task_id,
                 "cape_package": windows.cape_package,
                 "detected_type": windows.detected_type,
@@ -755,8 +768,13 @@ class CaseAggregator:
                 "network_mode": windows.network_mode,
                 "telemetry_degraded": windows.telemetry_degraded,
             }
-        if android:
-            return {
+            extra = windows.details if isinstance(windows.details, dict) else {}
+            for key in ("malscore", "process_tree", "dropped_files", "cape_package_detected"):
+                if extra.get(key) is not None:
+                    detail[key] = extra[key]
+        elif android:
+            detail = {
+                "platform": "android",
                 "package_name": android.package_name,
                 "app_name": android.app_name,
                 "version_name": android.version_name,
@@ -768,4 +786,70 @@ class CaseAggregator:
                 "dynamic_completed": android.dynamic_completed,
                 "stimulation": android.stimulation,
             }
-        return None
+            extra = android.details if isinstance(android.details, dict) else {}
+            for key in ("permissions", "trackers", "certificate", "security_score"):
+                if extra.get(key) is not None:
+                    detail[key] = extra[key]
+        if detail is None:
+            return None
+        detail["evidence_summary"] = CaseAggregator._evidence_summary(findings or [])
+        return detail
+
+    @staticmethod
+    def _evidence_summary(findings: list[dict[str, Any]]) -> dict[str, Any]:
+        """Severity/category/technique rollup, identical for either platform.
+
+        Severity lives in AndroidFinding as a column and in WindowsFinding's
+        details payload, so it is read from both places and normalised.
+        """
+        by_source: dict[str, int] = {}
+        by_category: dict[str, int] = {}
+        by_severity: dict[str, int] = {}
+        techniques: set[str] = set()
+        for item in findings:
+            source = str(item.get("source") or "unknown")
+            by_source[source] = by_source.get(source, 0) + 1
+            category = str(item.get("category") or "uncategorised")
+            by_category[category] = by_category.get(category, 0) + 1
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            raw = item.get("severity", details.get("severity"))
+            label = CaseAggregator._severity_label(raw)
+            by_severity[label] = by_severity.get(label, 0) + 1
+            for technique in item.get("mitre_technique_ids") or []:
+                techniques.add(str(technique))
+        return {
+            "total_findings": len(findings),
+            "by_source": dict(sorted(by_source.items())),
+            "by_category": dict(sorted(by_category.items(), key=lambda kv: (-kv[1], kv[0]))),
+            "by_severity": {
+                key: by_severity[key]
+                for key in ("high", "medium", "low", "informational", "unrated")
+                if key in by_severity
+            },
+            "mitre_technique_ids": sorted(techniques),
+            "mitre_technique_count": len(techniques),
+        }
+
+    @staticmethod
+    def _severity_label(raw: Any) -> str:
+        """CAPE uses 1-3 numerics; MobSF uses words. Normalise to one scale."""
+        if isinstance(raw, bool) or raw is None:
+            return "unrated"
+        if isinstance(raw, (int, float)):
+            if raw >= 3:
+                return "high"
+            if raw == 2:
+                return "medium"
+            if raw >= 1:
+                return "low"
+            return "informational"
+        text = str(raw).strip().lower()
+        if text in {"high", "critical", "dangerous"}:
+            return "high"
+        if text in {"medium", "warning", "moderate"}:
+            return "medium"
+        if text in {"low", "minor"}:
+            return "low"
+        if text in {"info", "informational", "secure", "good"}:
+            return "informational"
+        return "unrated"

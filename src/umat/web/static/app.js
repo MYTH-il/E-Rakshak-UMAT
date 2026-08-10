@@ -685,15 +685,144 @@ function listCard(title, items, mapper) {
   card.append(list); return card;
 }
 
+// --- platform evidence panel -------------------------------------------
+// Rendered identically for Windows and Android. The tool analyses both, so the
+// analyst view must not privilege one backend's vocabulary over the other.
+const PLATFORM_FIELDS = {
+  windows: [
+    ["CAPE task", "cape_task_id"], ["Package", "cape_package"],
+    ["Detected type", "detected_type"], ["Analysis machine", "machine_label"],
+    ["Network mode", "network_mode"], ["CAPE malware score", "malscore"]
+  ],
+  android: [
+    ["Package name", "package_name"], ["Application", "app_name"],
+    ["Version", "version_name"], ["Version code", "version_code"],
+    ["API level", "api_level"], ["Emulator", "avd_name"],
+    ["MobSF scan", "mobsf_scan_hash"], ["MobSF score", "security_score"]
+  ]
+};
+
+function severityBadge(label, count) {
+  return node("span", `badge badge-sev-${label}`, `${count} ${label}`);
+}
+
+function platformPanel(details, platform) {
+  if (!details) return null;
+  const kind = details.platform || platform;
+  const card = node("section", "card card-body");
+  card.append(node("h3", "card-title", `${kind === "android" ? "Android" : "Windows"} analysis`));
+
+  const facts = node("ul", "data-list");
+  (PLATFORM_FIELDS[kind] || []).forEach(([label, key]) => {
+    const value = details[key];
+    if (value === undefined || value === null || value === "") return;
+    const row = node("li", "data-item");
+    const copy = node("div");
+    append(copy, node("strong", "", String(value)), node("small", "", label));
+    row.append(copy); facts.append(row);
+  });
+  if (details.telemetry_degraded) facts.append(node("li", "data-item", "Host telemetry was incomplete for this run."));
+  if (details.dynamic_completed === false) facts.append(node("li", "data-item", "Dynamic analysis did not complete."));
+  if (facts.childElementCount) card.append(facts);
+
+  const summary = details.evidence_summary;
+  if (summary) {
+    card.append(node("h4", "card-title", `Evidence collected (${summary.total_findings} findings)`));
+    const sev = node("div", "actions-row");
+    Object.entries(summary.by_severity || {}).forEach(([label, count]) => sev.append(severityBadge(label, count)));
+    if (summary.mitre_technique_count) sev.append(node("span", "badge", `${summary.mitre_technique_count} ATT&CK techniques`));
+    Object.entries(summary.by_source || {}).forEach(([src, count]) => sev.append(node("span", "badge", `${count} from ${human(src)}`)));
+    card.append(sev);
+    const cats = Object.entries(summary.by_category || {});
+    if (cats.length) {
+      card.append(node("h4", "card-title", "By category"));
+      card.append(table(["Category", "Findings"], cats, (entry) => [human(entry[0]), String(entry[1])]));
+    }
+  }
+
+  // Windows process tree / dropped files, Android permissions / trackers.
+  if (Array.isArray(details.process_tree) && details.process_tree.length) {
+    card.append(node("h4", "card-title", "Process tree"));
+    card.append(table(["Process", "PID", "Command line"], details.process_tree,
+      (item) => [item.name || item.process_name || "—", String(item.pid ?? "—"), item.command_line || item.commandline || "—"]));
+  }
+  if (Array.isArray(details.dropped_files) && details.dropped_files.length) {
+    card.append(node("h4", "card-title", `Files written to disk (${details.dropped_files.length})`));
+    card.append(table(["Name", "Type", "SHA-256"], details.dropped_files.slice(0, 50),
+      (item) => [Array.isArray(item.name) ? item.name.join(", ") : (item.name || "—"), item.type || "—", (item.sha256 || "").slice(0, 24)]));
+  }
+  if (Array.isArray(details.permissions) && details.permissions.length) {
+    card.append(node("h4", "card-title", `Permissions requested (${details.permissions.length})`));
+    card.append(table(["Permission", "Status", "Description"], details.permissions.slice(0, 60),
+      (item) => [item.name || item.permission || "—", human(item.status), item.description || "—"]));
+  }
+  if (Array.isArray(details.trackers) && details.trackers.length) {
+    card.append(node("h4", "card-title", `Trackers (${details.trackers.length})`));
+    card.append(table(["Tracker", "Categories"], details.trackers,
+      (item) => [item.name || "—", (item.categories || []).join(", ") || "—"]));
+  }
+  return card;
+}
+
 function renderFindings(content, report) {
   const technical = report?.technical;
   if (!technical) { content.append(node("div", "notice notice-error", "Technical findings require analyst access.")); return; }
-  content.append(node("h3", "section-title", "Normalized findings"));
-  content.append(table(["Finding", "Source", "Confidence", "Evidence", "Security mappings"], technical.findings, (item) => [item.summary, `${item.source} · ${human(item.kind)}`, human(item.confidence), human(item.evidence_level), (item.security_mappings || item.mitre_technique_ids || []).join(", ") || "—"]));
+  const panel = platformPanel(report.platform_details, report.platform);
+  if (panel) content.append(panel);
+
+  const findings = technical.findings || [];
+  content.append(node("h3", "section-title", `Analysis findings (${findings.length})`));
+  const filters = node("div", "actions-row");
+  const sources = [...new Set(findings.map((f) => f.source).filter(Boolean))].sort();
+  let activeSource = "";
+  const listWrap = node("div");
+
+  function paintFindings() {
+    const rows = findings
+      .filter((f) => !activeSource || f.source === activeSource)
+      .sort((a, b) => severityRank(b) - severityRank(a));
+    listWrap.replaceChildren(table(
+      ["Finding", "Source", "Severity", "Confidence", "Evidence", "Security mappings"],
+      rows,
+      (item) => [
+        item.summary || human(item.kind),
+        `${human(item.source)} · ${human(item.category)}`,
+        human(severityOf(item)),
+        human(item.confidence),
+        human(item.evidence_level),
+        (item.security_mappings || item.mitre_technique_ids || []).join(", ") || "—"
+      ]));
+  }
+  [["All sources", ""], ...sources.map((src) => [human(src), src])].forEach(([label, value]) => {
+    const chip = button(label, `tab${value === activeSource ? " active" : ""}`);
+    chip.addEventListener("click", () => {
+      activeSource = value;
+      [...filters.children].forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      paintFindings();
+    });
+    filters.append(chip);
+  });
+  content.append(filters, listWrap);
+  paintFindings();
+
   content.append(node("h3", "section-title", "Indicators of compromise"));
-  content.append(table(["Type", "Value", "Confidence", "Source", "Traffic"], technical.iocs, (item) => [item.type, item.value, human(item.confidence), item.source, item.seen_in_traffic ? "Observed" : "Static"]));
+  content.append(table(["Type", "Value", "Confidence", "Source", "Traffic"], technical.iocs,
+    (item) => [item.type, item.value, human(item.confidence), item.source, item.seen_in_traffic ? "Observed" : "Static"]));
   content.append(node("h3", "section-title", "Unified timeline"));
-  content.append(table(["Time", "Actor", "Event", "MITRE"], technical.timeline, (item) => [formatDate(item.occurred_at), item.actor, item.description, item.mitre_technique_id || "—"]));
+  content.append(table(["Time", "Actor", "Event", "MITRE"], technical.timeline,
+    (item) => [formatDate(item.occurred_at), item.actor, item.description, item.mitre_technique_id || "—"]));
+}
+
+function severityOf(item) {
+  const raw = item.severity ?? item.details?.severity;
+  if (raw === undefined || raw === null) return "unrated";
+  if (typeof raw === "number") return raw >= 3 ? "high" : raw === 2 ? "medium" : raw >= 1 ? "low" : "informational";
+  return String(raw).toLowerCase();
+}
+
+function severityRank(item) {
+  return { high: 4, medium: 3, low: 2, informational: 1, unrated: 0 }[severityOf(item)] ?? 0;
 }
 
 function table(headers, rows, mapper) {
