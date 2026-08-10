@@ -222,6 +222,17 @@ class AndroidAdapter:
         static = _object(_descriptor_path(root, manifest["mobsf_reports"]["static"]))
         dynamic_descriptor = manifest["mobsf_reports"].get("dynamic")
         dynamic = _object(_descriptor_path(root, dynamic_descriptor))
+        api_descriptor = next(
+            (item for item in manifest["artifacts"] if item.get("kind") == "api_monitor"),
+            None,
+        )
+        api_monitor = _object(_descriptor_path(root, api_descriptor))
+        activation_descriptor = next(
+            (item for item in manifest["artifacts"] if item.get("kind") == "activation"),
+            None,
+        )
+        activation = _object(_descriptor_path(root, activation_descriptor))
+        dynamic_evidence = dynamic | {"umat_api_monitor": api_monitor}
         network_descriptor = next(
             (item for item in manifest["artifacts"] if item.get("kind") == "network_activity"),
             None,
@@ -256,11 +267,15 @@ class AndroidAdapter:
                 guest_ip=manifest["emulator"].get("guest_ip"),
                 dynamic_completed=dynamic_descriptor is not None,
                 stimulation=manifest["stimulation"],
-                details={"analysis_window": manifest["analysis_window"]},
+                details={
+                    "analysis_window": manifest["analysis_window"],
+                    "activation": activation,
+                    "dynamic_quality": manifest.get("stimulation", {}).get("quality", {}),
+                },
             )
         )
-        self._findings(db, adaptation.id, run.id, static, dynamic)
-        self._capabilities(db, adaptation.id, run.id, static, dynamic)
+        self._findings(db, adaptation.id, run.id, static, dynamic_evidence)
+        self._capabilities(db, adaptation.id, run.id, static, dynamic_evidence)
         self._iocs(db, adaptation.id, run.id, static, dynamic)
         observations = list(network_activity.get("observations", [])[:5000])
         seen: set[tuple[str | None, str | None, int | None]] = {
@@ -424,14 +439,30 @@ class AndroidAdapter:
         dynamic: dict[str, Any],
     ) -> None:
         values: set[tuple[str, str]] = set()
+        dynamic_hosts = {
+            str(value).rstrip(".").lower()
+            for value in (dynamic.get("domains") or {})
+        } if isinstance(dynamic.get("domains"), dict) else set()
+        excluded_hosts = {
+            "github.com", "reports.exodus-privacy.eu.org", "firebase.google.com",
+        }
         for document in (static, dynamic):
             serialized = json.dumps(document, sort_keys=True)
             for url in URL_RE.findall(serialized):
                 clean = url.rstrip(".,);]\\")
+                parsed = urlparse(clean)
+                host = parsed.hostname
+                if (
+                    not host
+                    or host.lower() in excluded_hosts
+                    or "%" in clean
+                    or "invalid-url" in clean.lower()
+                    or "/auth/" in parsed.path
+                    or "owasp-mstg" in clean.lower()
+                ):
+                    continue
                 values.add(("url", clean))
-                host = urlparse(clean).hostname
-                if host:
-                    values.add(("domain", host.lower()))
+                values.add(("domain", host.lower()))
         for ioc_type, value in sorted(values)[:2000]:
             db.add(
                 StaticIOC(
@@ -441,7 +472,10 @@ class AndroidAdapter:
                     value=value,
                     confidence="weak",
                     source="mobsf",
-                    seen_in_traffic=False,
+                    seen_in_traffic=(
+                        value.lower() in dynamic_hosts if ioc_type == "domain"
+                        else (urlparse(value).hostname or "").lower() in dynamic_hosts
+                    ),
                     first_seen_at=None,
                 )
             )

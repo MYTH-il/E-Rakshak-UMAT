@@ -65,10 +65,19 @@ class MobSFClient:
         return self._post("/api/v1/android/start_activity", {"hash": scan_hash, "activity": activity})
 
     def instrument(self, scan_hash: str) -> dict[str, Any]:
-        return self._post(
+        result = self._post(
             "/api/v1/frida/instrument",
-            {"hash": scan_hash, "default_hooks": "api_monitor", "auxiliary_hooks": "", "frida_code": ""},
+            {
+                "hash": scan_hash,
+                "frida_action": "spawn",
+                "default_hooks": "api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass",
+                "auxiliary_hooks": "",
+                "frida_code": "",
+            },
         )
+        if result.get("status") != "ok":
+            raise RuntimeError(f"MobSF Frida instrumentation failed: {result.get('message')}")
+        return result
 
     def stop_dynamic(self, scan_hash: str) -> dict[str, Any]:
         return self._post("/api/v1/dynamic/stop_analysis", {"hash": scan_hash})

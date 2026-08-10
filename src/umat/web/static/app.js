@@ -7,6 +7,8 @@ const CAVEAT_TEXT = {
   analysis_timed_out: "The analysis ran out of time before finishing. Behaviour that occurs later than the time allowed would not have been seen.",
   android_api_monitoring_failed: "Monitoring of the app's activity on the device did not work, so its behaviour was only partly recorded.",
   android_dynamic_stop_failed: "The device did not shut down cleanly after the test, so the final part of the recording may be incomplete.",
+  android_package_process_not_observed: "The application package was installed, but its process was not running when activation was checked. Runtime conclusions are incomplete.",
+  android_runtime_behavior_not_observed: "The application ran, but no package-attributable API activity, data access, or destination was recorded. This is an inconclusive dynamic result, not a clean result.",
   explicit_activity_launch_failed: "An optional request to launch a specific activity failed. The application may still have launched through its normal entry point.",
   application_data_collection_failed: "The application ran, but its private files could not be archived at the end of the session.",
   c2_analysis_failed: "The examination of network traffic failed, even though the rest of the analysis completed. Any servers contacted are not reported here.",
@@ -480,9 +482,10 @@ function renderAndroidStatic(content, workflow, report) {
 
 function renderAndroidDynamic(content, workflow, report) {
   const stimulation = workflow.metadata?.stimulation || {};
+  const quality = stimulation.quality || workflow.metadata?.details?.dynamic_quality || {};
   const terminal = workflow.run.status === "terminal";
   const sessionEnded = ["ended", "expired", "cancelled"].includes(workflow.interactive_session?.state);
-  const dynamicState = workflow.metadata?.dynamic_completed ? "Complete" : terminal ? "Unavailable" : "Pending";
+  const dynamicState = quality.runtime_behavior_observed ? "Validated" : workflow.metadata?.dynamic_completed ? "Insufficient evidence" : terminal ? "Unavailable" : "Pending";
   const actionState = stimulation.actions_attempted || stimulation.actions_total
     ? `${stimulation.actions_completed || 0}/${stimulation.actions_attempted || stimulation.actions_total}`
     : terminal ? "Not recorded" : "0/?";
@@ -491,6 +494,14 @@ function renderAndroidDynamic(content, workflow, report) {
   const status = node("div", "grid grid-4");
   [[dynamicState, "MobSF dynamic report"], [actionState, "Stimulation actions"], [coverageState, "Stimulation coverage"], [guestState, "Guest lifecycle"]].forEach(([value, label]) => { const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "", value)); status.append(card); });
   content.append(status);
+  if (workflow.metadata?.dynamic_completed && !quality.runtime_behavior_observed) content.append(node("div", "notice notice-warn", "MobSF generated a report, but UMAT did not observe behavior attributable to the analyzed package. This run is incomplete evidence, not a clean result."));
+  if (Object.keys(quality).length) content.append(table(["Dynamic validation check", "Result"], [
+    ["Package process observed", quality.package_process_observed],
+    ["Frida instrumentation started", quality.frida_instrumentation_started],
+    ["API monitor events", quality.api_monitor_event_count || 0],
+    ["Attributable destinations", (quality.attributable_domains || []).join(", ") || "None"],
+    ["Populated runtime sections", (quality.populated_runtime_sections || []).join(", ") || "None"],
+  ], (item) => [item[0], typeof item[1] === "boolean" ? (item[1] ? "Yes" : "No") : item[1]]));
   if (terminal && !workflow.metadata?.dynamic_completed) content.append(node("div", "notice notice-warn", "This run ended without a MobSF dynamic report. Static findings and surviving evidence remain available, but runtime behavior must not be interpreted as complete."));
   const session = workflow.interactive_session;
   if (session?.state === "ready") renderLiveAndroidSession(content, workflow);

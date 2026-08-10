@@ -363,18 +363,28 @@ class AndroidExecutor:
             self.mobsf.start_dynamic(scan_hash)
             dynamic_started = True
             activity = self._main_activity(static)
-            if activity:
-                try:
-                    self.mobsf.start_activity(scan_hash, activity)
-                except Exception:
-                    # MobSF already installs and launches the package during
-                    # start_analysis. Some reports expose an activity format
-                    # rejected by the optional start_activity endpoint.
-                    caveats.append("explicit_activity_launch_failed")
+            package_name = str(static.get("package_name") or static.get("package") or "")
+            activation: dict[str, Any] = {
+                "schema_version": "1.0", "package_name": package_name,
+                "main_activity": activity,
+            }
+            if package_name and isinstance(avd, RedroidManager):
+                activation["guest_preparation"] = avd.prepare_analysis(
+                    package_name, self._requested_permissions(static)
+                )
             try:
-                self.mobsf.instrument(scan_hash)
-            except Exception:
+                activation["frida"] = self.mobsf.instrument(scan_hash)
+                time.sleep(3)
+            except Exception as exc:
+                activation["frida"] = {"status": "failed", "error": str(exc)[:2000]}
                 caveats.append("android_api_monitoring_failed")
+            if package_name and isinstance(avd, RedroidManager):
+                activation["stimulation"] = avd.stimulate_package(package_name, activity)
+                if not activation["stimulation"].get("package_process_ids"):
+                    caveats.append("android_package_process_not_observed")
+            activation_path = workspace / "android-activation.json"
+            self._json(activation_path, activation)
+            evidence["activation"] = activation_path
             if bool(profile.get("android_interactive")):
                 if not isinstance(avd, RedroidManager):
                     raise RuntimeError("interactive Android analysis requires ReDroid")
@@ -384,10 +394,10 @@ class AndroidExecutor:
                 evidence.update(interactive_evidence)
             else:
                 stimulation = avd.stimulate(self.stimulation_seconds, self.stimulation_actions)
+            stimulation["activation"] = activation
             check_stop()
             if not stimulation.get("complete"):
                 caveats.append("stimulation_incomplete")
-            package_name = str(static.get("package_name") or static.get("package") or "")
             if package_name and isinstance(avd, RedroidManager):
                 try:
                     evidence["application_data"] = avd.collect_app_data(
@@ -442,6 +452,12 @@ class AndroidExecutor:
         if dynamic is not None:
             dynamic_path = workspace / "mobsf-dynamic.json"
             self._json(dynamic_path, dynamic)
+        quality = self._dynamic_quality(dynamic, evidence, activation if dynamic_started else {})
+        stimulation["quality"] = quality
+        if not quality["runtime_behavior_observed"]:
+            caveats.append("android_runtime_behavior_not_observed")
+        if evidence.get("activation"):
+            self._json(evidence["activation"], activation | {"quality": quality})
         ended = datetime.now(timezone.utc)
         emulator_metadata = {
             "api_level": int(profile.get("api_level") or 30),
@@ -480,17 +496,75 @@ class AndroidExecutor:
             ("smali_source", evidence.get("smali_source"), "application/zip"),
             ("application_data", evidence.get("application_data"), "application/x-tar"),
             ("android_scan_logs", evidence.get("scan_logs"), "application/json"),
+            ("android_activation", evidence.get("activation"), "application/json"),
             ("analyst_session", evidence.get("analyst_session"), "application/json"),
             ("analyst_screenshots", evidence.get("analyst_screenshots"), "application/zip"),
             ("network_activity", evidence.get("network_activity"), "application/json"),
         ):
             if artifact_path and artifact_path.is_file():
                 self._upload(claim, artifact_path, kind, media_type)
-        return (
-            ("partial", "Static analysis completed; dynamic evidence is incomplete")
-            if dynamic is None
-            else ("completed", "MobSF static/dynamic analysis bundle validated and registered")
-        )
+        if dynamic is None:
+            return "partial", "Static analysis completed; dynamic evidence is incomplete"
+        if not quality["runtime_behavior_observed"]:
+            return "partial", "Dynamic execution completed without attributable runtime behavior"
+        if not quality["instrumentation_evidence_observed"]:
+            return "partial", "Dynamic behavior observed, but runtime instrumentation produced no evidence"
+        return "completed", "MobSF static/dynamic analysis bundle validated with runtime evidence"
+
+    @staticmethod
+    def _requested_permissions(report: dict[str, Any]) -> list[str]:
+        permissions = report.get("permissions") or {}
+        if isinstance(permissions, dict):
+            return [str(value) for value in permissions]
+        if isinstance(permissions, list):
+            return [
+                str(item.get("permission") or item.get("name"))
+                if isinstance(item, dict) else str(item)
+                for item in permissions
+            ]
+        return []
+
+    @staticmethod
+    def _dynamic_quality(
+        dynamic: dict[str, Any] | None,
+        evidence: dict[str, Path],
+        activation: dict[str, Any],
+    ) -> dict[str, Any]:
+        baseline_domains = {
+            "connectivitycheck.gstatic.com", "play.googleapis.com", "www.google.com",
+        }
+        domains = dynamic.get("domains") if isinstance(dynamic, dict) else {}
+        observed_domains = sorted(str(value).lower() for value in domains) if isinstance(domains, dict) else []
+        attributable_domains = [value for value in observed_domains if value not in baseline_domains]
+        populated_sections: list[str] = []
+        for name in ("clipboard", "emails", "sqlite", "runtime_dependencies", "xml", "base64_strings"):
+            value = dynamic.get(name) if isinstance(dynamic, dict) else None
+            if value:
+                populated_sections.append(name)
+        api_events = 0
+        api_path = evidence.get("api_monitor")
+        if api_path and api_path.is_file():
+            try:
+                api_document = json.loads(api_path.read_text())
+                api_events = len(api_document.get("data") or []) if isinstance(api_document, dict) else 0
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+        stimulation = activation.get("stimulation") or {}
+        process_ids = stimulation.get("package_process_ids") or []
+        frida_ok = (activation.get("frida") or {}).get("status") == "ok"
+        runtime_behavior = bool(attributable_domains or populated_sections or api_events)
+        instrumentation_evidence = bool(populated_sections or api_events)
+        return {
+            "dynamic_report_available": dynamic is not None,
+            "package_process_observed": bool(process_ids),
+            "frida_instrumentation_started": frida_ok,
+            "api_monitor_event_count": api_events,
+            "observed_domains": observed_domains,
+            "attributable_domains": attributable_domains,
+            "populated_runtime_sections": populated_sections,
+            "runtime_behavior_observed": runtime_behavior,
+            "instrumentation_evidence_observed": instrumentation_evidence,
+        }
 
     def _export_mobsf_sources(self, scan_hash: str, workspace: Path) -> dict[str, Path]:
         exports: dict[str, Path] = {}

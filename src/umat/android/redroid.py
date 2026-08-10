@@ -202,6 +202,135 @@ class RedroidManager:
             "complete": completed == max_actions,
         }
 
+    def prepare_analysis(self, package_name: str, permissions: list[str]) -> dict[str, Any]:
+        """Prepare deterministic, synthetic victim state without exposing host data."""
+        grantable = {
+            "android.permission.ACCESS_COARSE_LOCATION",
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.CALL_PHONE",
+            "android.permission.CAMERA",
+            "android.permission.GET_ACCOUNTS",
+            "android.permission.READ_CALL_LOG",
+            "android.permission.READ_CONTACTS",
+            "android.permission.READ_EXTERNAL_STORAGE",
+            "android.permission.READ_PHONE_STATE",
+            "android.permission.READ_SMS",
+            "android.permission.RECEIVE_SMS",
+            "android.permission.RECORD_AUDIO",
+            "android.permission.SEND_SMS",
+            "android.permission.WRITE_CALL_LOG",
+            "android.permission.WRITE_CONTACTS",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
+        }
+        granted: list[str] = []
+        grant_failures: dict[str, str] = {}
+        for permission in sorted(set(permissions) & grantable):
+            result = self._adb(
+                "-s", self.adb_address, "shell", "pm", "grant",
+                package_name, permission, check=False,
+            )
+            if result.returncode == 0:
+                granted.append(permission)
+            else:
+                grant_failures[permission] = (
+                    result.stderr or result.stdout
+                ).decode(errors="replace")[:500]
+
+        fixtures: dict[str, Any] = {}
+        if "android.permission.READ_SMS" in permissions:
+            fixtures["sms"] = self._seed_content(
+                "content://sms/inbox",
+                [
+                    "--bind", "address:s:+15550102020",
+                    "--bind", "body:s:UMAT_SYNTHETIC_OTP_482913",
+                    "--bind", "read:i:0",
+                ],
+            )
+        if "android.permission.READ_CONTACTS" in permissions:
+            raw = self._seed_content(
+                "content://com.android.contacts/raw_contacts",
+                ["--bind", "account_type:s:org.umat.fixture", "--bind", "account_name:s:UMAT"],
+            )
+            fixtures["contact"] = raw
+            query = self._adb(
+                "-s", self.adb_address, "shell", "su", "0", "content", "query", "--uri",
+                "content://com.android.contacts/raw_contacts", "--projection", "_id",
+                "--sort", "_id DESC", check=False,
+            )
+            raw_id = ""
+            output = query.stdout.decode(errors="replace")
+            if "_id=" in output:
+                raw_id = output.split("_id=", 1)[1].split(",", 1)[0].splitlines()[0].strip()
+            if raw_id.isdigit():
+                fixtures["contact_name"] = self._seed_content(
+                    "content://com.android.contacts/data",
+                    [
+                        "--bind", f"raw_contact_id:i:{raw_id}", "--bind",
+                        "mimetype:s:vnd.android.cursor.item/name", "--bind",
+                        "data1:s:UMAT Synthetic Contact",
+                    ],
+                )
+                fixtures["contact_phone"] = self._seed_content(
+                    "content://com.android.contacts/data",
+                    [
+                        "--bind", f"raw_contact_id:i:{raw_id}", "--bind",
+                        "mimetype:s:vnd.android.cursor.item/phone_v2", "--bind",
+                        "data1:s:+15550102021",
+                    ],
+                )
+        return {
+            "schema_version": "1.0",
+            "package_name": package_name,
+            "requested_permissions": sorted(set(permissions)),
+            "granted_permissions": granted,
+            "grant_failures": grant_failures,
+            "synthetic_fixtures": fixtures,
+        }
+
+    def stimulate_package(self, package_name: str, main_activity: str | None) -> dict[str, Any]:
+        actions: list[dict[str, Any]] = []
+        if main_activity:
+            component = (
+                f"{package_name}/{package_name}{main_activity}"
+                if main_activity.startswith(".") else f"{package_name}/{main_activity}"
+            )
+            actions.append(self._shell_action(
+                "launch_main", "am", "start", "-W", "-n", component
+            ))
+        for name, command in (
+            ("boot_completed", ("am", "broadcast", "-a", "android.intent.action.BOOT_COMPLETED", "-p", package_name)),
+            ("user_present", ("am", "broadcast", "-a", "android.intent.action.USER_PRESENT", "-p", package_name)),
+            ("connectivity_change", ("am", "broadcast", "-a", "android.net.conn.CONNECTIVITY_CHANGE", "-p", package_name)),
+        ):
+            # Protected system broadcasts are rejected for adb's shell UID on
+            # Android 11. ReDroid is disposable and rooted specifically for
+            # analysis, so deliver these stimuli as root and retain the result.
+            actions.append(self._shell_action(name, "su", "0", *command))
+        pid = self._adb(
+            "-s", self.adb_address, "shell", "pidof", package_name, check=False
+        ).stdout.decode(errors="replace").strip()
+        return {"actions": actions, "package_process_ids": pid.split() if pid else []}
+
+    def _seed_content(self, uri: str, arguments: list[str]) -> dict[str, Any]:
+        result = self._adb(
+            "-s", self.adb_address, "shell", "su", "0", "content", "insert", "--uri", uri,
+            *arguments, check=False,
+        )
+        return {
+            "success": result.returncode == 0,
+            "output": (result.stdout + result.stderr).decode(errors="replace")[:1000],
+        }
+
+    def _shell_action(self, name: str, *arguments: str) -> dict[str, Any]:
+        result = self._adb(
+            "-s", self.adb_address, "shell", *arguments, check=False,
+        )
+        return {
+            "name": name,
+            "success": result.returncode == 0,
+            "output": (result.stdout + result.stderr).decode(errors="replace")[:2000],
+        }
+
     def collect(self, destination: Path) -> dict[str, Path]:
         destination.mkdir(parents=True, exist_ok=True)
         logcat, screenshot = destination / "logcat.txt", destination / "screenshot.png"

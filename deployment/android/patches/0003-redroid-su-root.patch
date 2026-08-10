@@ -81,21 +81,31 @@
                      logger.error('Please start the AVD as per '
 --- a/mobsf/DynamicAnalyzer/views/android/frida_core.py
 +++ b/mobsf/DynamicAnalyzer/views/android/frida_core.py
-@@ -181,13 +181,14 @@
-             # 3. Push to /data/local/tmp on Redroid and make executable
-             logger.info('Pushing frida-server to Redroid...')
-             subprocess.run(adb + ['push', str(local_path), '/data/local/tmp/frida-server'], check=True)
+@@ -184 +184 @@
 -            subprocess.run(adb + ['shell', 'chmod', '755', '/data/local/tmp/frida-server'], check=True)
 +            subprocess.run(adb + ['shell', 'su', '0', 'chmod', '755', '/data/local/tmp/frida-server'], check=True)
-
-             # 4. Run in background (kill any hung processes first)
-             logger.info('Starting frida-server in background...')
+@@ -188 +188 @@
 -            subprocess.run(adb + ['shell', 'killall', '-9', 'frida-server'], stderr=subprocess.DEVNULL)
 +            subprocess.run(adb + ['shell', 'su', '0', 'killall', '-9', 'frida-server'], stderr=subprocess.DEVNULL)
-             # nohup detaches the process so it runs in the background
+@@ -190 +190,2 @@
 -            subprocess.Popen(adb + ['shell', 'nohup /data/local/tmp/frida-server >/dev/null 2>&1 &'])
 +            subprocess.Popen(adb + ['shell', "su 0 sh -c 'nohup "
 +                                    "/data/local/tmp/frida-server >/dev/null 2>&1 &'"])
-
-             time.sleep(3) # Give the server a few seconds to bind to the port
-             logger.info('Custom Frida server setup complete.')
+@@ -242,9 +243,0 @@
+-                try:
+-                    front = device.get_frontmost_application()
+-                    if front and front.pid != _FPID:
+-                        # Not the front most app.
+-                        # Get the pid of the front most app
+-                        logger.warning('Front most app has PID %s', front.pid)
+-                        _FPID = front.pid
+-                except Exception:
+-                    pass
+@@ -268 +260,6 @@
+-                sys.stdin.read()
++                # MobSF runs without interactive stdin in its container. Reading
++                # stdin therefore returned EOF immediately and unloaded every
++                # hook while the API still reported instrumentation success.
++                while any(process.pid == _FPID
++                          for process in device.enumerate_processes()):
++                    time.sleep(1)
