@@ -631,7 +631,14 @@ function renderOverview(content, report, run) {
   grid.append(listCard("Information accessed", report.information_accessed, (item) => [human(item.data_type), `${human(item.evidence_level)} · ${human(item.confidence)}`]));
   grid.append(destinationsCard(report.destinations));
   content.append(grid);
-  content.append(node("h3", "section-title", "Important provenance"), listCard(null, report.provenance, (item) => [item.statement, [human(item.item_type), item.destination].filter(Boolean).join(" · ")]));
+  content.append(node("h3", "section-title", "What was taken and where it went"));
+  if (report.provenance?.length) {
+    content.append(listCard(null, report.provenance, (item) =>
+      [item.statement, [human(item.item_type), item.destination].filter(Boolean).join(" · ")]));
+  } else {
+    content.append(node("div", "card empty",
+      "No specific item could be linked to a specific destination. This requires host activity and network traffic to be matched on a shared clock; see the analysis limitations below."));
+  }
   content.append(node("h3", "section-title", "Analysis limitations"));
   if (report.caveats.length) content.append(listCard(null, report.caveats.map((value) => ({ value })), (item) => [CAVEAT_TEXT[item.value] || human(item.value), human(item.value)]));
   else content.append(node("div", "notice", "No material analysis limitations were recorded."));
@@ -756,6 +763,29 @@ function platformPanel(details, platform) {
     card.append(table(["Permission", "Status", "Description"], details.permissions.slice(0, 60),
       (item) => [item.name || item.permission || "—", human(item.status), item.description || "—"]));
   }
+  const quality = details.stimulation?.quality;
+  if (quality) {
+    card.append(node("h4", "card-title", "How thoroughly the app was exercised"));
+    const q = node("ul", "data-list");
+    const row = (primary, secondary) => {
+      const li = node("li", "data-item"); const copy = node("div");
+      append(copy, node("strong", "", primary), node("small", "", secondary));
+      li.append(copy); return li;
+    };
+    if (quality.package_process_observed !== undefined)
+      q.append(row(quality.package_process_observed ? "The app was seen running" : "The app was never seen running",
+                   "Whether the installed package actually started"));
+    if (quality.api_monitor_event_count !== undefined)
+      q.append(row(`${quality.api_monitor_event_count} API events recorded`,
+                   quality.api_monitor_event_count ? "Runtime behaviour was captured"
+                     : "No runtime behaviour was captured — findings below are from inspecting the app, not watching it run"));
+    if (Array.isArray(quality.observed_domains))
+      q.append(row(`${quality.observed_domains.length} domains contacted`, quality.observed_domains.join(", ") || "none"));
+    if (Array.isArray(quality.attributable_domains))
+      q.append(row(`${quality.attributable_domains.length} attributable to this app`,
+                   quality.attributable_domains.join(", ") || "none — the rest may be normal device traffic"));
+    card.append(q);
+  }
   if (Array.isArray(details.trackers) && details.trackers.length) {
     card.append(node("h4", "card-title", `Trackers (${details.trackers.length})`));
     card.append(table(["Tracker", "Categories"], details.trackers,
@@ -767,7 +797,7 @@ function platformPanel(details, platform) {
 function renderFindings(content, report) {
   const technical = report?.technical;
   if (!technical) { content.append(node("div", "notice notice-error", "Technical findings require analyst access.")); return; }
-  const panel = platformPanel(report.platform_details, report.platform);
+  const panel = platformPanel(technical.platform_details || report.platform_details, report.platform);
   if (panel) content.append(panel);
 
   const findings = technical.findings || [];
@@ -810,8 +840,13 @@ function renderFindings(content, report) {
   content.append(table(["Type", "Value", "Confidence", "Source", "Traffic"], technical.iocs,
     (item) => [item.type, item.value, human(item.confidence), item.source, item.seen_in_traffic ? "Observed" : "Static"]));
   content.append(node("h3", "section-title", "Unified timeline"));
-  content.append(table(["Time", "Actor", "Event", "MITRE"], technical.timeline,
-    (item) => [formatDate(item.occurred_at), item.actor, item.description, item.mitre_technique_id || "—"]));
+  if (technical.timeline?.length) {
+    content.append(table(["Time", "Actor", "Event", "MITRE"], technical.timeline,
+      (item) => [formatDate(item.occurred_at), item.actor, item.description, item.mitre_technique_id || "—"]));
+  } else {
+    content.append(node("div", "card empty",
+      "No ordered timeline was produced for this run. Host-activity timing is required to build one, and it was not available."));
+  }
 }
 
 function severityOf(item) {
