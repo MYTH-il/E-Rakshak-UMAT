@@ -79,6 +79,10 @@ def create_app() -> FastAPI:
                 "img-src 'self' data:; font-src 'self'; connect-src 'self'; "
                 "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
             )
+            if request.url.path.startswith("/assets/"):
+                # The console is deployed directly from the working tree. Stale CSS paired
+                # with newer JavaScript can make an otherwise valid analyst UI unusable.
+                response.headers["Cache-Control"] = "no-store"
             return response
         finally:
             structlog.contextvars.clear_contextvars()

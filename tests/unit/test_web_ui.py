@@ -24,6 +24,8 @@ async def test_web_shell_and_assets_are_local_and_hardened() -> None:
         css = await client.get("/assets/app.css")
         javascript = await client.get("/assets/app.js")
         assert css.status_code == javascript.status_code == 200
+        assert css.headers["cache-control"] == "no-store"
+        assert javascript.headers["cache-control"] == "no-store"
         assert "innerHTML" not in javascript.text
         assert "http://" not in javascript.text and "https://" not in javascript.text
 
