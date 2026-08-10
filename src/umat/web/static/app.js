@@ -26,7 +26,7 @@ const CAVEAT_TEXT = {
   tls_pinning: "The file used encryption we could not read. We can see who it contacted and how often, but not the contents of what was sent."
 };
 
-const state = { session: null, cases: [], pollTimer: null, activeTab: "overview", androidTab: "static" };
+const state = { session: null, cases: [], pollTimer: null, activeTab: "overview", androidTab: "static", androidLiveCleanup: null };
 const app = document.querySelector("#app");
 
 function node(tag, className, text) {
@@ -111,6 +111,7 @@ function toast(message, error = false) {
 }
 
 function go(path) {
+  if (state.androidLiveCleanup) { state.androidLiveCleanup(); state.androidLiveCleanup = null; }
   history.pushState({}, "", path);
   renderRoute();
 }
@@ -422,6 +423,7 @@ function compactJson(value) {
 }
 
 async function renderAndroidWorkflow(runId, quiet = false) {
+  if (state.androidLiveCleanup) { state.androidLiveCleanup(); state.androidLiveCleanup = null; }
   let workflow;
   try { workflow = await api(`/api/v1/analysis-runs/${runId}/android-workflow`); }
   catch (failure) {
@@ -456,7 +458,7 @@ async function renderAndroidWorkflow(runId, quiet = false) {
   else if (state.androidTab === "network") renderAndroidNetwork(content, workflow);
   else renderAndroidArtifacts(content, workflow);
   shell("Android analysis", content);
-  if (run.status !== "terminal") state.pollTimer = window.setTimeout(() => renderAndroidWorkflow(runId, true), 3000);
+  if (run.status !== "terminal" && workflow.interactive_session?.state !== "ready") state.pollTimer = window.setTimeout(() => renderAndroidWorkflow(runId, true), 3000);
 }
 
 function renderAndroidStatic(content, workflow, report) {
@@ -511,8 +513,26 @@ async function androidCommand(runId, type, payload = {}, timeoutMs = 120000) {
 
 function renderLiveAndroidSession(content, workflow) {
   const runId = workflow.run.id; const session = workflow.interactive_session;
-  const workspace = node("div", "android-live-grid");
+  const toolbar = node("div", "android-dynamic-toolbar");
+  const toolDefinitions = [
+    ["Stop screen", "screen-toggle"], ["Remove root CA", "remove-ca"],
+    ["Unset HTTP(S) proxy", "unset-proxy"], ["TLS/SSL security tester", "tls"],
+    ["Exported activity tester", "exported"], ["Activity tester", "activities"],
+    ["Get dependencies", "dependencies"], ["Take screenshot", "screenshot"],
+    ["Logcat stream", "logcat-toggle"], ["Generate report", "finalize"],
+  ];
+  const workspace = node("div", "android-dynamic-workspace");
+  const navigation = node("nav", "card android-dynamic-nav");
+  navigation.append(node("h3", "", "Dynamic Analyzer"));
+  const sections = [
+    ["device", "Live device"], ["frida", "Frida instrumentation"],
+    ["tls", "TLS/SSL tester"], ["proxy", "HTTPS proxy & CA"],
+    ["activities", "Activity tester"], ["dependencies", "Runtime dependencies"],
+    ["files", "Application files"], ["logs", "Live logs"],
+  ];
+  sections.forEach(([target, label]) => { const item = button(label, "android-dynamic-nav-item"); item.addEventListener("click", () => document.querySelector(`[data-android-section='${target}']`)?.scrollIntoView({ behavior: "smooth", block: "start" })); navigation.append(item); });
   const device = node("section", "card card-body android-device-panel");
+  device.dataset.androidSection = "device";
   const deviceHead = node("div", "android-panel-head"); append(deviceHead, node("div", ""), node("h3", "card-title", "Live ReDroid device"), badge(session.state), node("span", "mono muted", `Expires ${formatDate(session.expires_at)}`)); device.append(deviceHead);
   const screenWrap = node("div", "android-live-screen-wrap"); const screen = node("img", "android-live-screen"); screen.alt = "Live Android guest screen"; screen.draggable = false; screenWrap.append(screen); device.append(screenWrap);
   const keys = node("div", "actions-row android-device-keys");
@@ -520,36 +540,45 @@ function renderLiveAndroidSession(content, workflow) {
   const textInput = node("input", "android-inline-input"); textInput.placeholder = "Type into focused field"; const sendText = button("Send text", "btn btn-small"); sendText.addEventListener("click", () => perform("text", { text: textInput.value })); append(keys, textInput, sendText); device.append(keys);
   const statusLine = node("div", "mono android-live-status", "Connecting to guest…"); device.append(statusLine);
 
-  const tools = node("section", "card card-body android-tools-panel"); tools.append(node("h3", "card-title", "Dynamic analysis controls"));
-  const quick = node("div", "android-tool-grid");
-  const quickActions = [
-    ["Screenshot", "screenshot", {}], ["Logcat", "logcat", {}], ["API monitor", "api_monitor", {}],
-    ["Frida logs", "frida_logs", {}], ["Exported activities", "activity_test", { test: "exported" }],
-    ["All activities", "activity_test", { test: "all_activities" }], ["TLS tests", "tls_test", {}],
-    ["Dependencies", "dependencies", {}], ["Set proxy", "proxy", { action: "set" }],
-    ["Collect app data", "app_data", {}],
-    ["Unset proxy", "proxy", { action: "unset" }], ["Install root CA", "root_ca", { action: "install" }],
-    ["Remove root CA", "root_ca", { action: "remove" }],
-  ];
-  quickActions.forEach(([label, type, payload]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform(type, payload, true)); quick.append(item); }); tools.append(quick);
-  const activity = node("div", "android-control-group"); activity.append(node("h4", "", "Launch component or deep link")); const activityInput = node("input"); activityInput.placeholder = session.main_activity || "package/.Activity"; const launch = button("Start activity", "btn btn-small"); launch.addEventListener("click", () => perform("start_activity", { activity: activityInput.value || session.main_activity }, true)); const deepLink = node("input"); deepLink.placeholder = "Application deep link"; const launchLink = button("Open deep link", "btn btn-small"); launchLink.addEventListener("click", () => perform("deeplink", { url: deepLink.value }, true)); append(activity, activityInput, launch, deepLink, launchLink); tools.append(activity);
-  const frida = node("div", "android-control-group"); frida.append(node("h4", "", "Frida instrumentation")); const hooks = node("div", "actions-row"); const hookValues = {}; [["API monitor", "api_monitor"], ["SSL pinning bypass", "ssl_pinning_bypass"], ["Root detection bypass", "root_bypass"], ["Debugger check bypass", "debugger_check_bypass"], ["Clipboard monitor", "clipboard"]].forEach(([label, value]) => { const wrap = node("label", "checkbox-field compact"); const input = node("input"); input.type = "checkbox"; input.checked = value === "api_monitor"; hookValues[value] = input; append(wrap, input, node("span", "", label)); hooks.append(wrap); }); frida.append(hooks); const className = node("input"); className.placeholder = "Class name to enumerate"; const classSearch = node("input"); classSearch.placeholder = "Search loaded classes"; const classTrace = node("input"); classTrace.placeholder = "Class or method trace pattern"; append(frida, className, classSearch, classTrace); const editor = node("textarea", "frida-editor"); editor.rows = 9; editor.placeholder = "Java.perform(function () {\n  // analyst Frida code\n});"; frida.append(editor); const fridaButtons = node("div", "actions-row"); [["Spawn", "spawn"], ["Inject", "session"], ["Processes", "ps"], ["Injected code", "get"]].forEach(([label, action]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform("frida", { action, default_hooks: Object.entries(hookValues).filter(([, input]) => input.checked).map(([value]) => value).join(","), auxiliary_hooks: "", class_name: className.value, class_search: classSearch.value, class_trace: classTrace.value, frida_code: editor.value }, true, 180000)); fridaButtons.append(item); }); frida.append(fridaButtons); tools.append(frida);
-  const files = node("div", "android-control-group"); files.append(node("h4", "", "Application data browser")); const filePath = node("input"); filePath.value = `/data/data/${session.package_name || ""}`; const listFiles = button("List files", "btn btn-small"); listFiles.addEventListener("click", () => perform("list_files", { path: filePath.value }, true)); append(files, filePath, listFiles); tools.append(files);
-  const output = node("pre", "android-command-output", "Operation results appear here."); tools.append(output);
-  const sessionActions = node("div", "actions-row"); const extend = button("Extend 5 minutes", "btn"); extend.addEventListener("click", async () => { try { await api(`/api/v1/analysis-runs/${runId}/android-commands`, { method: "POST", body: { command_type: "extend", payload: {} } }); toast("Session extended within the 30-minute hard limit."); renderAndroidWorkflow(runId, true); } catch (failure) { toast(failure.message, true); } }); const finish = button("Finalize and generate report", "btn btn-danger"); finish.addEventListener("click", async () => { if (!window.confirm("Finalize this session and destroy the Android guest?")) return; await perform("finalize", {}, false); renderAndroidWorkflow(runId, true); }); append(sessionActions, extend, finish); tools.append(sessionActions);
-  workspace.append(device, tools); content.append(workspace);
+  const tools = node("div", "android-analysis-column");
+  function panel(section, title, description = "") { const value = node("section", "card card-body android-analysis-panel"); value.dataset.androidSection = section; append(value, node("h3", "card-title", title), description ? node("p", "muted", description) : null); tools.append(value); return value; }
+  const live = panel("logs", "Live runtime output", "Logcat and Frida/API-monitor output remain visible throughout the session and update while the guest runs.");
+  const liveTabs = node("div", "tabs android-console-tabs"); const logcatTab = button("Logcat", "tab active"); const fridaTab = button("Frida / API monitor", "tab"); liveTabs.append(logcatTab, fridaTab);
+  const logcatOutput = node("pre", "android-command-output android-live-console", "Waiting for Logcat…"); const fridaOutput = node("pre", "android-command-output android-live-console hidden", "Waiting for Frida output…");
+  function showConsole(which) { const logs = which === "logcat"; logcatTab.classList.toggle("active", logs); fridaTab.classList.toggle("active", !logs); logcatOutput.classList.toggle("hidden", !logs); fridaOutput.classList.toggle("hidden", logs); }
+  logcatTab.addEventListener("click", () => showConsole("logcat")); fridaTab.addEventListener("click", () => showConsole("frida")); append(live, liveTabs, logcatOutput, fridaOutput);
 
-  let busy = false; let screenTimer = null;
-  async function perform(type, payload, showResult = false, timeout = 120000) {
-    if (busy) { toast("Wait for the current Android operation to finish.", true); return null; }
+  const frida = panel("frida", "Frida instrumentation", "Spawn or attach with runtime hooks before exercising the application."); const hooks = node("div", "android-hook-grid"); const hookValues = {}; [["API monitor", "api_monitor"], ["SSL pinning bypass", "ssl_pinning_bypass"], ["Root detection bypass", "root_bypass"], ["Debugger check bypass", "debugger_check_bypass"], ["Clipboard monitor", "clipboard"]].forEach(([label, value]) => { const wrap = node("label", "checkbox-field compact"); const input = node("input"); input.type = "checkbox"; input.checked = ["api_monitor", "ssl_pinning_bypass"].includes(value); hookValues[value] = input; append(wrap, input, node("span", "", label)); hooks.append(wrap); }); frida.append(hooks); const className = node("input"); className.placeholder = "Class name to enumerate"; const classSearch = node("input"); classSearch.placeholder = "Search loaded classes"; const classTrace = node("input"); classTrace.placeholder = "Class or method trace pattern"; append(frida, className, classSearch, classTrace); const editor = node("textarea", "frida-editor"); editor.rows = 8; editor.placeholder = "Java.perform(function () {\n  // analyst Frida code\n});"; frida.append(editor); const fridaButtons = node("div", "actions-row"); [["Spawn with hooks", "spawn"], ["Attach / inject", "session"], ["List processes", "ps"], ["Get injected code", "get"]].forEach(([label, action]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform("frida", { action, default_hooks: Object.entries(hookValues).filter(([, input]) => input.checked).map(([value]) => value).join(","), auxiliary_hooks: "", class_name: className.value, class_search: classSearch.value, class_trace: classTrace.value, frida_code: editor.value }, true, 180000)); fridaButtons.append(item); }); frida.append(fridaButtons);
+
+  const tls = panel("tls", "TLS/SSL security tester", "Run MobSF TLS misconfiguration, pinning/certificate-transparency, and transport-security checks against the live app."); const tlsResult = node("pre", "android-command-output", "No TLS test has run yet."); const runTls = button("Run TLS/SSL tests", "btn btn-primary"); runTls.addEventListener("click", async () => { const result = await perform("tls_test", {}, false, 180000); if (result) tlsResult.textContent = JSON.stringify(result, null, 2); }); append(tls, runTls, tlsResult);
+
+  const proxy = panel("proxy", "HTTPS proxy and trusted root CA", "Control MobSF interception explicitly. These controls affect only the disposable Android guest."); const proxyState = node("div", "android-state-strip"); append(proxyState, badge("proxy unknown"), badge("CA unknown")); const proxyActions = node("div", "actions-row"); [["Set HTTP(S) proxy", "proxy", { action: "set" }], ["Unset HTTP(S) proxy", "proxy", { action: "unset" }], ["Install MobSF root CA", "root_ca", { action: "install" }], ["Remove root CA", "root_ca", { action: "remove" }]].forEach(([label, type, payload]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", async () => { const result = await perform(type, payload, true); if (result) proxyState.firstChild.textContent = `${human(type)} ${payload.action}`; }); proxyActions.append(item); }); append(proxy, proxyState, proxyActions);
+
+  const activity = panel("activities", "Activity and deep-link tester"); const activityInput = node("input"); activityInput.placeholder = session.main_activity || "package/.Activity"; const launch = button("Start activity", "btn btn-small"); launch.addEventListener("click", () => perform("start_activity", { activity: activityInput.value || session.main_activity }, true)); const deepLink = node("input"); deepLink.placeholder = "Application deep link or custom URI scheme"; const launchLink = button("Open deep link", "btn btn-small"); launchLink.addEventListener("click", () => perform("deeplink", { url: deepLink.value }, true)); const activityButtons = node("div", "actions-row"); [["Test exported activities", "exported"], ["Test all activities", "all_activities"]].forEach(([label, test]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform("activity_test", { test }, true, 180000)); activityButtons.append(item); }); append(activity, activityInput, launch, deepLink, launchLink, activityButtons);
+  const dependencies = panel("dependencies", "Runtime dependencies"); const dependencyResult = node("pre", "android-command-output", "No dependency scan has run yet."); const getDependencies = button("Get dependencies", "btn"); getDependencies.addEventListener("click", async () => { const result = await perform("dependencies", {}, false); if (result) dependencyResult.textContent = JSON.stringify(result, null, 2); }); append(dependencies, getDependencies, dependencyResult);
+  const files = panel("files", "Application data browser"); const filePath = node("input"); filePath.value = `/data/data/${session.package_name || ""}`; const listFiles = button("List files", "btn btn-small"); listFiles.addEventListener("click", () => perform("list_files", { path: filePath.value }, true)); append(files, filePath, listFiles);
+  const output = node("pre", "android-command-output", "Operation results appear here."); files.append(output);
+  const sessionActions = node("div", "actions-row"); const extend = button("Extend 5 minutes", "btn"); extend.addEventListener("click", async () => { try { await api(`/api/v1/analysis-runs/${runId}/android-commands`, { method: "POST", body: { command_type: "extend", payload: {} } }); toast("Session extended within the 30-minute hard limit."); renderAndroidWorkflow(runId, true); } catch (failure) { toast(failure.message, true); } }); const finish = button("Finalize and generate report", "btn btn-danger"); finish.addEventListener("click", async () => { if (!window.confirm("Finalize this session and destroy the Android guest?")) return; await perform("finalize", {}, false); renderAndroidWorkflow(runId, true); }); append(sessionActions, extend, finish); tools.append(sessionActions);
+  workspace.append(navigation, device, tools); content.append(toolbar, workspace);
+
+  let busy = false; let screenTimer = null; let logTimer = null; let screenRunning = true; let logsRunning = true; let stopped = false;
+  async function perform(type, payload, showResult = false, timeout = 120000, quietFailure = false) {
+    if (busy && quietFailure) return null;
+    const waitDeadline = Date.now() + 5000;
+    while (busy && Date.now() < waitDeadline) await new Promise((resolve) => window.setTimeout(resolve, 75));
+    if (busy) { toast("The current Android operation is still finishing. Try again.", true); return null; }
     busy = true; statusLine.textContent = `Running ${human(type)}…`;
-    try { const result = await androidCommand(runId, type, payload, timeout); if (result.image_base64) screen.src = `data:image/png;base64,${result.image_base64}`; if (showResult) output.textContent = JSON.stringify(result, null, 2); statusLine.textContent = `${human(type)} completed`; return result; }
-    catch (failure) { statusLine.textContent = failure.message; toast(failure.message, true); return null; }
+    try { const result = await androidCommand(runId, type, payload, timeout); if (result.image_base64) screen.src = `data:image/png;base64,${result.image_base64}`; if (type === "logcat" && result.logcat) logcatOutput.textContent = result.logcat; if (["frida", "frida_logs", "api_monitor"].includes(type)) fridaOutput.textContent = JSON.stringify(result, null, 2); if (showResult) output.textContent = JSON.stringify(result, null, 2); statusLine.textContent = `${human(type)} completed`; return result; }
+    catch (failure) { statusLine.textContent = failure.message; if (!quietFailure) toast(failure.message, true); return null; }
     finally { busy = false; }
   }
   let pointerStart = null; screen.addEventListener("pointerdown", (event) => { pointerStart = { x: event.clientX, y: event.clientY, at: Date.now() }; screen.setPointerCapture(event.pointerId); }); screen.addEventListener("pointerup", async (event) => { if (!pointerStart) return; const rect = screen.getBoundingClientRect(); const scaleX = screen.naturalWidth / rect.width; const scaleY = screen.naturalHeight / rect.height; const start = { x: Math.round((pointerStart.x - rect.left) * scaleX), y: Math.round((pointerStart.y - rect.top) * scaleY) }; const end = { x: Math.round((event.clientX - rect.left) * scaleX), y: Math.round((event.clientY - rect.top) * scaleY) }; const distance = Math.hypot(end.x - start.x, end.y - start.y); const duration = Date.now() - pointerStart.at; pointerStart = null; if (distance > 30) await perform("swipe", { x1: start.x, y1: start.y, x2: end.x, y2: end.y, duration_ms: Math.max(100, duration) }); else await perform("tap", { x: end.x, y: end.y }); scheduleScreen(); });
-  function scheduleScreen() { if (screenTimer) window.clearTimeout(screenTimer); if (location.pathname !== `/analysis/${runId}/android` || state.androidTab !== "dynamic") return; screenTimer = window.setTimeout(async () => { await perform("screen"); scheduleScreen(); }, 1200); }
-  perform("screen").then(scheduleScreen);
+  async function background(type) { if (busy || stopped) return; await perform(type, {}, false, 120000, true); }
+  function scheduleScreen() { if (screenTimer) window.clearTimeout(screenTimer); if (!screenRunning || stopped || location.pathname !== `/analysis/${runId}/android` || state.androidTab !== "dynamic") return; screenTimer = window.setTimeout(async () => { await background("screen"); scheduleScreen(); }, 900); }
+  function scheduleLogs() { if (logTimer) window.clearTimeout(logTimer); if (!logsRunning || stopped || location.pathname !== `/analysis/${runId}/android` || state.androidTab !== "dynamic") return; logTimer = window.setTimeout(async () => { await background("logcat"); if (!busy) await background("frida_logs"); scheduleLogs(); }, 2500); }
+  toolDefinitions.forEach(([label, action]) => { const item = button(label, `btn btn-small${action === "finalize" ? " btn-danger" : ""}`); item.addEventListener("click", async () => { if (action === "screen-toggle") { screenRunning = !screenRunning; item.textContent = screenRunning ? "Stop screen" : "Start screen"; if (screenRunning) scheduleScreen(); } else if (action === "logcat-toggle") { logsRunning = !logsRunning; item.textContent = logsRunning ? "Stop logcat stream" : "Start logcat stream"; if (logsRunning) scheduleLogs(); } else if (action === "remove-ca") await perform("root_ca", { action: "remove" }, true); else if (action === "unset-proxy") await perform("proxy", { action: "unset" }, true); else if (action === "tls") document.querySelector("[data-android-section='tls']")?.scrollIntoView({ behavior: "smooth" }); else if (action === "exported") await perform("activity_test", { test: "exported" }, true, 180000); else if (action === "activities") await perform("activity_test", { test: "all_activities" }, true, 180000); else if (action === "dependencies") getDependencies.click(); else if (action === "screenshot") await perform("screenshot", {}, true); else if (action === "finalize") finish.click(); }); toolbar.append(item); });
+  state.androidLiveCleanup = () => { stopped = true; if (screenTimer) window.clearTimeout(screenTimer); if (logTimer) window.clearTimeout(logTimer); };
+  perform("screen").then(() => { scheduleScreen(); scheduleLogs(); });
 }
 
 function renderAndroidNetwork(content, workflow) {
