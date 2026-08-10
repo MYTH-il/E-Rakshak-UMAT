@@ -52,6 +52,18 @@ def test_isolated_verdict_does_not_require_c2_stages() -> None:
     assert verdict == Verdict.NO_MALICIOUS_ACTIVITY_OBSERVED
 
 
+def test_officer_headline_does_not_claim_destination_received_data() -> None:
+    headline = CaseAggregator._headline(
+        Verdict.MALICIOUS,
+        [],
+        Platform.WINDOWS,
+        [{"data_type": "documents", "evidence_level": "observed", "confidence": "strong"}],
+        [{"value": "example.invalid"}],
+    )
+    assert headline == "This sample accessed personal documents and contacted example.invalid."
+    assert "sent data" not in headline
+
+
 def test_officer_filter_removes_technical_and_restricted_artifacts() -> None:
     report = {
         "technical": {"findings": [{"summary": "analyst detail"}]},

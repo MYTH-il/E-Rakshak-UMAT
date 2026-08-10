@@ -611,11 +611,11 @@ class CaseAggregator:
 
         if verdict == Verdict.MALICIOUS:
             if what and where:
-                return f"This sample accessed {what} and sent data to {where}."
+                return f"This sample accessed {what} and contacted {where}."
             if what:
                 return f"This sample accessed {what} on the analysed system."
             if where:
-                return f"This sample sent data to {where}."
+                return f"This sample contacted {where}."
             return (
                 f"Confirmed malicious behaviour was detected during the "
                 f"{platform_name} analysis."
