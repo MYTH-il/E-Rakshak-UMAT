@@ -359,6 +359,27 @@ async function renderSubmit() {
   card.append(form); content.append(card); shell("New analysis", content);
 }
 
+// A finished run with no report is a failure, not progress. Saying "the report
+// will appear after aggregation" under a terminal run sends the reader away to
+// wait for something that is never coming.
+function statusExplanation(run) {
+  if (!run) return "No analysis run exists for this case yet.";
+  if (run.status === "terminal") {
+    const failed = (run.stages || []).filter((item) => item.state === "failed");
+    if (failed.length) {
+      const first = failed[0];
+      return `This run finished without producing a report. The ${human(first.stage_type)} stage failed`
+        + (first.failure_code ? ` (${first.failure_code})` : "")
+        + ". Open Run progress for the full diagnostics.";
+    }
+    if (run.result === "cancelled") return "This run was cancelled before a report was produced.";
+    return "This run finished without producing a report. Open Run progress to see how far it got.";
+  }
+  if (run.status === "awaiting_confirmation") return "This run is waiting for confirmation before any analysis starts.";
+  if (run.status === "cancelling") return "Cancellation has been requested; the run is stopping.";
+  return "Evidence is being collected and normalized. The report will appear after aggregation.";
+}
+
 function latestRun(caseData) {
   return caseData.analysis_runs?.[caseData.analysis_runs.length - 1] || null;
 }
@@ -496,7 +517,7 @@ async function renderCase(caseId, preserveTab = false) {
   append(heroCopy,
     node("div", "eyebrow", report ? "Unified verdict" : "Analysis status"),
     node("h2", "", report ? human(report.verdict) : human(run?.status || "pending")),
-    node("p", "muted", report?.headline || "Evidence is being collected and normalized. The report will appear after aggregation."));
+    node("p", "muted", report?.headline || statusExplanation(run)));
   const actions = node("div", "actions-row");
   if (report) ["pdf", "json", "csv"].forEach((format) => {
     const exportButton = button(`Export ${format.toUpperCase()}`, "btn btn-small");
@@ -542,7 +563,22 @@ async function renderCase(caseId, preserveTab = false) {
 }
 
 function renderOverview(content, report, run) {
-  if (!report) { content.append(node("div", "card empty", `Current run state: ${human(run?.status || "pending")}. This page refreshes automatically while work is active.`)); return; }
+  if (!report) {
+    const terminal = run?.status === "terminal";
+    const card = node("div", `card ${terminal ? "notice notice-warn" : "empty"}`);
+    append(card,
+      node("strong", "", terminal ? "No report was produced" : `Current run state: ${human(run?.status || "pending")}`),
+      node("p", "", statusExplanation(run)));
+    if (terminal) {
+      const jump = button("Open run progress", "btn btn-small");
+      jump.addEventListener("click", () => { state.activeTab = "progress"; renderCase(run.id ? location.pathname.split("/").pop() : "", true); });
+      card.append(jump);
+    } else {
+      card.append(node("small", "muted", "This page refreshes automatically while work is active."));
+    }
+    content.append(card);
+    return;
+  }
   const grid = node("div", "grid grid-2");
   grid.append(listCard("Information accessed", report.information_accessed, (item) => [human(item.data_type), `${human(item.evidence_level)} · ${human(item.confidence)}`]));
   grid.append(listCard("Destinations and protocols", report.destinations, (item) => [item.value, `${item.protocol || "unknown"}${item.port ? ` · port ${item.port}` : ""}`]));

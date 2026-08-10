@@ -43,16 +43,16 @@ class FakeExecutor:
         self.state_path.write_text(json.dumps(self.state, indent=2) + "\n")
         self.state_path.chmod(0o600)
 
-    def enroll(self, enrollment_token: str, name: str) -> None:
+    def enroll(self, enrollment_token: str, name: str, stage_types: list[str] | None = None) -> None:
         private = Ed25519PrivateKey.generate()
         private_raw = private.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
         public_raw = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         response = self.client.post("/api/internal/v1/executors/register", json={"enrollment_token": enrollment_token, "name": name, "public_key": base64.b64encode(public_raw).decode(), "metadata": {"implementation": "umat-fake-executor"}})
         response.raise_for_status()
         registered = response.json()
-        self.state = {"executor_id": registered["executor_id"], "credential": registered["credential"], "private_key": base64.b64encode(private_raw).decode(), "name": name}
+        self.state = {"executor_id": registered["executor_id"], "credential": registered["credential"], "private_key": base64.b64encode(private_raw).decode(), "name": name, "stage_types": stage_types or ALL_STAGES}
         self.save()
-        response = self.client.post("/api/internal/v1/executors/capabilities", headers=self.auth_headers(), json={"schema_version": "1.0", "runtime_identity": "umat-fake/0.1.0", "supported_stage_types": ALL_STAGES, "capabilities": {"fixture": True, "platforms": ["windows", "android"], "native_event_schema_version": "1.3"}})
+        response = self.client.post("/api/internal/v1/executors/capabilities", headers=self.auth_headers(), json={"schema_version": "1.0", "runtime_identity": "umat-fake/0.1.0", "supported_stage_types": stage_types or ALL_STAGES, "capabilities": {"fixture": True, "platforms": ["windows", "android"], "native_event_schema_version": "1.3"}})
         response.raise_for_status()
 
     def auth_headers(self) -> dict[str, str]:
@@ -75,7 +75,7 @@ class FakeExecutor:
         return self.client.post(path, json=body, headers=self.signed_headers("POST", path, body, lease_token))
 
     def claim(self) -> dict[str, Any] | None:
-        response = self.client.post("/api/internal/v1/executors/claim", json={"stage_types": ALL_STAGES}, headers=self.auth_headers())
+        response = self.client.post("/api/internal/v1/executors/claim", json={"stage_types": self.state.get("stage_types") or ALL_STAGES}, headers=self.auth_headers())
         response.raise_for_status()
         return response.json() if response.content not in {b"", b"null"} else None
 
@@ -129,6 +129,16 @@ def run(
     state_path: Path = typer.Option(Path("var/fake-executor/state.json")),
     enrollment_token: str | None = typer.Option(None),
     name: str = typer.Option("fake-executor"),
+    stage_type: list[str] = typer.Option(
+        None,
+        "--stage-type",
+        help=(
+            "Stage type this executor claims; repeatable. MUST match the scopes the\n"
+            "enrollment token was created with, or the API rejects the capability\n"
+            "announcement with 403. Defaults to all six, which is only correct when\n"
+            "no adapter/report worker is running."
+        ),
+    ),
     mode: str = typer.Option("success", help="success, fail, timeout, or crash-after-native"),
     once: bool = typer.Option(False),
     poll_seconds: float = typer.Option(2.0, min=0.1),
@@ -137,7 +147,7 @@ def run(
     if not executor.state:
         if not enrollment_token:
             raise typer.BadParameter("enrollment-token is required on first run")
-        executor.enroll(enrollment_token, name)
+        executor.enroll(enrollment_token, name, list(stage_type) if stage_type else None)
     while True:
         processed = executor.process_once(mode)
         if once:
