@@ -253,7 +253,7 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         ("UMAT_CAPE_MANAGEMENT_URL", "http://127.0.0.1:8091"),
         ("UMAT_QUARANTINE_ROOT", "/var/lib/umat/quarantine"),
         ("UMAT_ARTIFACT_ROOT", "/var/lib/umat/artifacts"),
-        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/47225ec-winstdt.1"),
+        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/bc5bb681-umat.1"),
         ("UMAT_WINSTDT_SCHEMA_ROOT", "/opt/umat/upstreams/winstdt/schemas"),
     ]
     additions = [f"{key}={value}" for key, value in values if key not in present]
@@ -451,13 +451,12 @@ def install(
             Path(manifest["paths"]["c2_checkout"]),
             manifest["components"]["c2"],
         )
-        if "windows" not in selected:
-            winstdt_checkout = Path(manifest["paths"]["winstdt_checkout"])
-            acquire_checkout(runner, winstdt_checkout, manifest["components"]["winstdt"])
-            c2_setup = [str(winstdt_checkout / "scripts/install-c2-analyzer.sh")]
-            if execute:
-                c2_setup.append("--execute")
-            runner.run(c2_setup, cwd=winstdt_checkout)
+        winstdt_checkout = Path(manifest["paths"]["winstdt_checkout"])
+        acquire_checkout(runner, winstdt_checkout, manifest["components"]["winstdt"])
+        c2_setup = [str(PROJECT_ROOT / "deployment/c2/install-runtime.sh")]
+        if execute:
+            c2_setup.append("--execute")
+        runner.run(c2_setup, cwd=PROJECT_ROOT)
 
     if "windows" in selected:
         checkout = Path(manifest["paths"]["winstdt_checkout"])
@@ -619,7 +618,10 @@ def status() -> None:
     locations = {
         "winstdt": paths["winstdt_checkout"],
         "cape": paths["cape_root"],
-        "c2_runtime": f"{paths['winstdt_runtime_root']}/libexec/c2-exfil/47225ec-winstdt.1",
+        "c2_runtime": (
+            f"{paths['winstdt_runtime_root']}/libexec/c2-exfil/"
+            f"{manifest['components']['c2']['effective_version']}"
+        ),
         "c2_source": paths["c2_checkout"],
         "android": paths["android_checkout"],
     }

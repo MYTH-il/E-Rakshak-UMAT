@@ -83,10 +83,14 @@ def test_c2_runtime_drains_verbose_child_output(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     pipeline = runtime / "source/pipeline"
     pipeline.mkdir(parents=True)
+    runtime_data = runtime / "source/data"
+    runtime_data.mkdir()
+    runtime_data.chmod(0o555)
     (pipeline / "orchestrator.py").write_text(
         """import json
 from pathlib import Path
 print('x' * 200000)
+Path('data/runtime.sqlite').write_bytes(b'runtime-state')
 output = Path('output')
 output.mkdir()
 (output / 'exfil_events.json').write_text('[]')
@@ -135,3 +139,43 @@ output.mkdir()
         context, tmp_path / "work"
     )
     assert result.events == []
+
+
+def test_current_c2_runtime_normalizes_modern_static_prior(tmp_path: Path) -> None:
+    source = tmp_path / "native-static-prior.json"
+    source.write_text(
+        json.dumps(
+            {
+                "sample_sha256": "incorrect-native-value",
+                "family_attribution": {
+                    "family": "RubyJumper",
+                    "evidence": [{"source": "cape"}],
+                },
+                "capa_capabilities": ["T1059"],
+                "iocs": [{"type": "domain", "value": "fixture.invalid"}],
+            }
+        )
+    )
+    artifact = InputArtifact(
+        artifact_id=uuid4(),
+        kind="static_prior",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size,
+        media_type="application/json",
+        source_stage_type="platform_analysis",
+        local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(
+        sample_sha256="a" * 64,
+        static_prior=artifact,
+    )
+    normalized_path = SubprocessC2Runtime._prepare_static_prior(
+        context, tmp_path
+    )
+    normalized = json.loads(normalized_path.read_text())
+    assert normalized == {
+        "sample_sha256": "a" * 64,
+        "family": "RubyJumper",
+        "capabilities": ["T1059"],
+        "c2_indicators": [{"type": "domain", "value": "fixture.invalid"}],
+    }

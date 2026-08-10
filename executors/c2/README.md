@@ -18,9 +18,9 @@ Run against an authorized external checkout pinned to the dependency lock:
 
 ```bash
 umat-c2-executor run \
-  --runtime-root /srv/winstdt/libexec/c2-exfil/47225ec-winstdt.1 \
-  --runtime-commit 47225ecb439936659e55ffa9118db083bb2f56c2 \
-  --runtime-patch-sha256 0d82a65d6ac3d3d829f622b6bb49a8b4a1e66470355bb73ba8cdf8ea70278b57 \
+  --runtime-root /srv/winstdt/libexec/c2-exfil/bc5bb681-umat.1 \
+  --runtime-commit bc5bb681495a02fa0ff2411087e5a00ece5b1ca3 \
+  --runtime-patch-sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
   --enrollment-token TOKEN
 ```
 

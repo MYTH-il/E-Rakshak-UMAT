@@ -128,7 +128,13 @@ class SubprocessC2Runtime:
         ).resolve()
         runtime_data = self.source_root / "data"
         if runtime_data.is_dir():
-            shutil.copytree(runtime_data, workspace / "data")
+            workspace_data = workspace / "data"
+            shutil.copytree(runtime_data, workspace_data)
+            for directory in [workspace_data, *workspace_data.rglob("*")]:
+                if directory.is_dir():
+                    directory.chmod(directory.stat().st_mode | 0o700)
+                elif directory.is_file():
+                    directory.chmod(directory.stat().st_mode | 0o600)
         if context.platform == "android":
             command = [
                 sys.executable,
@@ -142,22 +148,12 @@ class SubprocessC2Runtime:
                 sys.executable,
                 str(self.source_root / "pipeline/orchestrator.py"),
                 str(context.pcap.local_path),
-                "--sample-sha256",
-                context.sample_sha256,
-                "--pcap-sha256",
-                context.pcap.sha256,
             ]
         if context.platform == "windows" and context.access_events:
-            command.extend(
-                [
-                    "--access-events",
-                    str(context.access_events.local_path),
-                    "--access-events-source",
-                    "real",
-                ]
-            )
+            command.append(str(context.access_events.local_path))
         if context.static_prior:
-            command.extend(["--static-prior", str(context.static_prior.local_path)])
+            static_prior = self._prepare_static_prior(context, workspace)
+            command.extend(["--static-prior", str(static_prior)])
         if context.platform == "windows":
             handoff = self._prepare_handoff(context, workspace)
             if handoff:
@@ -240,6 +236,34 @@ class SubprocessC2Runtime:
             runtime_identity=self.identity,
             tool_versions={"python": sys.version.split()[0], "c2_commit": self.expected_commit},
         )
+
+    @staticmethod
+    def _prepare_static_prior(context: C2AnalysisContext, workspace: Path) -> Path:
+        source = context.static_prior
+        if source is None:
+            raise C2RuntimeError("static-prior preparation requested without an artifact")
+        try:
+            raw = json.loads(source.local_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise C2RuntimeError("static prior is not valid JSON") from exc
+        if not isinstance(raw, dict):
+            raise C2RuntimeError("static prior is not a JSON object")
+        attribution = raw.get("family_attribution")
+        family = raw.get("family")
+        if isinstance(attribution, dict) and attribution.get("evidence"):
+            family = attribution.get("family") or family
+        normalized = {
+            "sample_sha256": context.sample_sha256,
+            "family": family,
+            "capabilities": raw.get("capa_capabilities") or raw.get("capabilities") or [],
+            "c2_indicators": raw.get("iocs")
+            if "iocs" in raw
+            else raw.get("c2_indicators") or [],
+        }
+        target = workspace / "static-prior.json"
+        target.write_text(json.dumps(normalized, sort_keys=True))
+        target.chmod(0o400)
+        return target
 
     @staticmethod
     def _json_list(path: Path, required: bool = False) -> list[dict[str, Any]]:
