@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class UserProfileSpec(BaseModel):
@@ -57,3 +57,35 @@ class WindowsProfileResponse(BaseModel):
 class WindowsProfileActionResponse(BaseModel):
     profile: WindowsProfileResponse
     operation_id: UUID
+
+
+class UpdateWindowsProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = Field(default=None, min_length=1, max_length=128)
+    analysis_profile: Literal[
+        "standard", "deep_static", "tls_intercept", "full_memory", "full_investigation"
+    ] | None = None
+    is_default: bool | None = None
+
+    @model_validator(mode="after")
+    def has_change(self) -> UpdateWindowsProfileRequest:
+        if not self.model_fields_set:
+            raise ValueError("at least one profile field must be supplied")
+        return self
+
+
+class WindowsProfileOperationResponse(BaseModel):
+    id: UUID
+    operation_type: str
+    state: str
+    executor_id: UUID | None
+    native_operation_id: str | None
+    result: dict[str, Any]
+    error_detail: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class WindowsProfileDetailResponse(BaseModel):
+    profile: WindowsProfileResponse
+    operations: list[WindowsProfileOperationResponse]

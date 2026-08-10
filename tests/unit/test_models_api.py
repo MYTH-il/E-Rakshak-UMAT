@@ -12,6 +12,8 @@ def test_required_routes_exist() -> None:
         "/api/v1/cases", "/api/v1/cases/{case_id}", "/api/v1/cases/{case_id}/status",
         "/api/v1/cases/{case_id}/analysis-runs", "/api/v1/analysis-runs/{run_id}/confirm",
         "/api/v1/analysis-runs/{run_id}/cancel", "/api/v1/artifacts/{artifact_id}",
+        "/api/v1/cases/{case_id}/submissions", "/api/v1/analysis-runs",
+        "/api/v1/analysis-runs/{run_id}/retry", "/api/v1/admin/workers",
         "/api/v1/analysis-runs/{run_id}/android-workflow",
         "/api/v1/analysis-runs/{run_id}/android-evidence/{evidence_name}",
         "/api/v1/analysis-runs/{run_id}/android-commands",

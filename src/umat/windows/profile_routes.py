@@ -19,7 +19,10 @@ from umat.db.models import (
 )
 from umat.windows.schemas import (
     CreateWindowsProfileRequest,
+    UpdateWindowsProfileRequest,
     WindowsProfileActionResponse,
+    WindowsProfileDetailResponse,
+    WindowsProfileOperationResponse,
     WindowsProfileResponse,
 )
 
@@ -48,6 +51,13 @@ def response(profile: WindowsVMProfile) -> WindowsProfileResponse:
     )
 
 
+async def active_profile(db: AsyncSession, profile_id: UUID) -> WindowsVMProfile:
+    profile = await db.get(WindowsVMProfile, profile_id, with_for_update=True)
+    if not profile or profile.state != WindowsProfileState.ACTIVE:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "active Windows profile not found")
+    return profile
+
+
 @router.get("", response_model=list[WindowsProfileResponse])
 async def list_profiles(
     include_inactive: bool = Query(False),
@@ -58,6 +68,86 @@ async def list_profiles(
     if "administrator" not in principal.roles or not include_inactive:
         query = query.where(WindowsVMProfile.state == WindowsProfileState.ACTIVE)
     return [response(item) for item in (await db.scalars(query)).all()]
+
+
+@router.get("/{profile_id}", response_model=WindowsProfileDetailResponse)
+async def get_profile(
+    profile_id: UUID,
+    _: Principal = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> WindowsProfileDetailResponse:
+    profile = await db.get(WindowsVMProfile, profile_id)
+    if not profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Windows profile not found")
+    operations = list(
+        (
+            await db.scalars(
+                select(WindowsProfileOperation)
+                .where(WindowsProfileOperation.profile_id == profile.id)
+                .order_by(WindowsProfileOperation.created_at.desc())
+            )
+        ).all()
+    )
+    return WindowsProfileDetailResponse(
+        profile=response(profile),
+        operations=[
+            WindowsProfileOperationResponse(
+                id=item.id,
+                operation_type=item.operation_type.value,
+                state=item.state.value,
+                executor_id=item.executor_id,
+                native_operation_id=item.native_operation_id,
+                result=item.result,
+                error_detail=item.error_detail,
+                created_at=item.created_at,
+                completed_at=item.completed_at,
+            )
+            for item in operations
+        ],
+    )
+
+
+@router.patch("/{profile_id}", response_model=WindowsProfileResponse)
+async def update_profile(
+    profile_id: UUID,
+    body: UpdateWindowsProfileRequest,
+    principal: Principal = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> WindowsProfileResponse:
+    profile = await active_profile(db, profile_id)
+    before = {
+        "display_name": profile.display_name,
+        "analysis_profile": profile.analysis_profile,
+        "is_default": profile.is_default,
+    }
+    if "display_name" in body.model_fields_set and body.display_name:
+        profile.display_name = body.display_name.strip()
+    if "analysis_profile" in body.model_fields_set and body.analysis_profile:
+        profile.analysis_profile = body.analysis_profile
+    if body.is_default is not None:
+        if body.is_default:
+            await db.execute(
+                update(WindowsVMProfile)
+                .where(WindowsVMProfile.id != profile.id)
+                .values(is_default=False)
+            )
+        profile.is_default = body.is_default
+    after = {
+        "display_name": profile.display_name,
+        "analysis_profile": profile.analysis_profile,
+        "is_default": profile.is_default,
+    }
+    await append_audit(
+        db,
+        actor_type="user",
+        actor_id=str(principal.user.id),
+        action="windows_profile.updated",
+        target_type="windows_vm_profile",
+        target_id=str(profile.id),
+        payload={"before": before, "after": after},
+    )
+    await db.commit()
+    return response(profile)
 
 
 @router.post("", response_model=WindowsProfileActionResponse, status_code=status.HTTP_202_ACCEPTED)

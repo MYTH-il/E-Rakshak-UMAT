@@ -9,6 +9,7 @@ from sqlalchemy import select
 from umat.auth.security import hash_password
 from umat.db.models import (
     AnalysisRun,
+    AnalysisStage,
     Case,
     CaseReportSnapshot,
     CaseSample,
@@ -17,6 +18,8 @@ from umat.db.models import (
     RunResult,
     RunStatus,
     Sample,
+    StageState,
+    StageType,
     Submission,
     User,
     Verdict,
@@ -80,9 +83,63 @@ async def seed() -> None:
                 )
                 db.add(user)
                 await db.flush()
+            else:
+                user.password_hash = hash_password(PASSWORD)
+                user.enabled = True
             users[role_name] = user
 
-        existing = await db.scalar(select(Case).where(Case.reference == "BROWSER-REPORT"))
+        failed_case = await db.scalar(select(Case).where(Case.reference == "BROWSER-FAILED"))
+        if failed_case is None:
+            failed_content = b"MZ browser failed run fixture"
+            failed_sha256 = hashlib.sha256(failed_content).hexdigest()
+            failed_sample = Sample(
+                sha256=failed_sha256,
+                size_bytes=len(failed_content),
+                media_type="application/octet-stream",
+                object_key=f"browser-fixtures/{failed_sha256}",
+            )
+            failed_case = Case(
+                owner_user_id=users["officer"].id,
+                title="Browser failed analysis",
+                reference="BROWSER-FAILED",
+            )
+            db.add_all([failed_sample, failed_case])
+            await db.flush()
+            failed_submission = Submission(
+                case_id=failed_case.id,
+                uploader_user_id=users["officer"].id,
+                sample_sha256=failed_sha256,
+                original_filename="browser-failed.exe",
+            )
+            db.add_all(
+                [
+                    failed_submission,
+                    CaseSample(case_id=failed_case.id, sample_sha256=failed_sha256),
+                ]
+            )
+            await db.flush()
+            failed_run = AnalysisRun(
+                case_id=failed_case.id,
+                submission_id=failed_submission.id,
+                platform=Platform.WINDOWS,
+                status=RunStatus.TERMINAL,
+                result=RunResult.FAILED,
+            )
+            db.add(failed_run)
+            await db.flush()
+            db.add(
+                AnalysisStage(
+                    analysis_run_id=failed_run.id,
+                    stage_type=StageType.PLATFORM_ANALYSIS,
+                    state=StageState.FAILED,
+                    failure_code="browser_fixture_failure",
+                    failure_detail="The backend was unavailable during the fixture run.",
+                )
+            )
+
+        existing = await db.scalar(
+            select(Case).where(Case.title == "Browser report selection")
+        )
         if existing is not None:
             await db.commit()
             return

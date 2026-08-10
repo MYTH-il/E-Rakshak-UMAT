@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CreateAndroidProfileRequest(BaseModel):
@@ -51,3 +51,17 @@ class AndroidProfileResponse(BaseModel):
 class QualifyAndroidProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     evidence_run_id: UUID
+
+
+class UpdateAndroidProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = Field(default=None, min_length=1, max_length=128)
+    vcpus: int | None = Field(default=None, ge=1, le=16)
+    interaction_profile: Literal["deterministic_adb_v1"] | None = None
+    is_default: bool | None = None
+
+    @model_validator(mode="after")
+    def has_change(self) -> UpdateAndroidProfileRequest:
+        if not self.model_fields_set:
+            raise ValueError("at least one profile field must be supplied")
+        return self

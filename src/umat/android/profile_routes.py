@@ -11,6 +11,7 @@ from umat.android.schemas import (
     AndroidProfileResponse,
     CreateAndroidProfileRequest,
     QualifyAndroidProfileRequest,
+    UpdateAndroidProfileRequest,
 )
 from umat.audit import append_audit
 from umat.auth.dependencies import Principal, current_principal, require_roles
@@ -61,6 +62,67 @@ async def list_profiles(
     if "administrator" not in principal.roles or not include_inactive:
         query = query.where(AndroidAnalysisProfile.state == AndroidProfileState.ACTIVE)
     return [response(item) for item in (await db.scalars(query)).all()]
+
+
+@router.get("/{profile_id}", response_model=AndroidProfileResponse)
+async def get_profile(
+    profile_id: UUID,
+    _: Principal = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> AndroidProfileResponse:
+    profile = await db.get(AndroidAnalysisProfile, profile_id)
+    if not profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Android profile not found")
+    return response(profile)
+
+
+@router.patch("/{profile_id}", response_model=AndroidProfileResponse)
+async def update_profile(
+    profile_id: UUID,
+    body: UpdateAndroidProfileRequest,
+    principal: Principal = Depends(require_roles("administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> AndroidProfileResponse:
+    profile = await db.get(AndroidAnalysisProfile, profile_id, with_for_update=True)
+    if not profile or profile.state != AndroidProfileState.ACTIVE:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "active Android profile not found")
+    before = {
+        "display_name": profile.display_name,
+        "vcpus": profile.vcpus,
+        "interaction_profile": profile.interaction_profile,
+        "is_default": profile.is_default,
+    }
+    if "display_name" in body.model_fields_set and body.display_name:
+        profile.display_name = body.display_name.strip()
+    if body.vcpus is not None:
+        profile.vcpus = body.vcpus
+    if body.interaction_profile is not None:
+        profile.interaction_profile = body.interaction_profile
+    if body.is_default is not None:
+        if body.is_default:
+            await db.execute(
+                update(AndroidAnalysisProfile)
+                .where(AndroidAnalysisProfile.id != profile.id)
+                .values(is_default=False)
+            )
+        profile.is_default = body.is_default
+    after = {
+        "display_name": profile.display_name,
+        "vcpus": profile.vcpus,
+        "interaction_profile": profile.interaction_profile,
+        "is_default": profile.is_default,
+    }
+    await append_audit(
+        db,
+        actor_type="user",
+        actor_id=str(principal.user.id),
+        action="android_profile.updated",
+        target_type="android_analysis_profile",
+        target_id=str(profile.id),
+        payload={"before": before, "after": after},
+    )
+    await db.commit()
+    return response(profile)
 
 
 @router.post("", response_model=AndroidProfileResponse, status_code=status.HTTP_201_CREATED)

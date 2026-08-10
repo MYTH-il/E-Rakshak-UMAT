@@ -20,7 +20,7 @@ The authoritative design remains the
 | Phase 1 control plane | Implemented | Authentication/RBAC, intake, custody, deduplication, PostgreSQL models/migrations, immutable local artifacts, leases, signed executor mutations, audit chain, and fake executor. |
 | Phase 2 shared C2 service | Implemented with runtime gates | Isolated executor, input/result validation, adapters, recovery, and Windows/Android inputs exist. The executable runtime is pinned to upstream schema-v1.3 commit `bc5bb681` as effective runtime `bc5bb681-umat.1`. |
 | Phase 3 Windows/CAPE | Operational end to end | Submission-format normalization, CAPE execution and recovery, full JSON evidence import, WinST/DT handoff validation, adapters, aggregation, and reporting have completed real LNK-in-ZIP malware runs. CAPE itself is operational; the current UMAT UI does not expose every supported workflow and profile parameter. |
-| Phase 4 API and UI | Backend implemented; operator console partial | Case/run APIs, L1/L2/L3 views, aggregation, verdict policy, report worker, JSON/PDF/CSV exports, network mode, optional C2 policy, case filtering, multi-run selection/reruns, diagnostics, and profile administration exist. The remaining workflow surfaces are listed under **Current UI limitations**. |
+| Phase 4 API and UI | Operations console implemented | Case/run APIs, L1/L2/L3 views, aggregation, exports, case editing and in-case intake, server-filtered run history, immutable retries, diagnostic progress, worker inventory, and profile administration are available through the role-aware console. |
 | Phase 5 Android/MobSF | Implemented and runtime-validated | The default pinned Android 11/API-30 x86_64 ReDroid profile supports unattended analysis and a brokered interactive analyst session with live screen/input, activities, Frida, TLS/proxy controls, logs, scoped file access, evidence capture, adaptation, aggregation, and reporting. The AOSP AVD is retained as a fallback; ARM profiles are out of scope. |
 | Phase 5.5 hardening | Implemented | Scheduler timeouts/retries, cancellation propagation, capability matching, administrative controls, migration/security tests, fail-closed isolated guest networks, and a host guest-firewall service. |
 | Phase 6 hardening and operations | **Pending** | See the dedicated section below. |
@@ -40,8 +40,9 @@ C2 processing, adaptation, aggregation, and reporting. The AOSP x86_64 AVD is re
 fallback profile. ARM/CPU-emulation profiles are intentionally out of scope and must not be
 implemented or enabled without an explicit future decision.
 
-These backend capabilities are currently ahead of the web interface. API/worker execution is the
-authoritative operational path until the UI backlog below is completed.
+The web console now covers routine submission, rerun/retry, diagnosis, worker health, profile,
+Android interactive-session, evidence, and report operations. Native CAPE and raw UMAT APIs remain
+engineering interfaces rather than requirements for routine operation.
 
 ## Verification evidence
 
@@ -49,12 +50,13 @@ As of 2026-08-10:
 
 - Ruff passes for `src` and `tests`.
 - Strict mypy passes for the application source tree.
-- The default offline suite passes: **105 passed, 8 skipped**. The skipped tests require explicitly
+- The default offline suite passes: **105 passed, 9 skipped**. The skipped tests require explicitly
   configured disposable PostgreSQL integration/migration databases.
 - CI starts disposable, digest-pinned PostgreSQL 18.4 databases and passes the complete Python
-  suite with **113 passed, 0 skipped**, including migration downgrade/re-upgrade tests. It also
-  runs three Playwright workflow groups covering authentication, intake, duplicate confirmation,
-  reruns, cancellation, report selection, exports, role restrictions, and automated accessibility.
+  suite with **114 passed, 0 skipped**, including migration downgrade/re-upgrade tests. It also
+  runs four Playwright workflow groups covering authentication, intake, duplicate confirmation,
+  reruns, retries, cancellation, case editing, in-case submission, run diagnosis, worker inventory,
+  report selection, exports, role restrictions, and automated accessibility.
 - JavaScript ESLint, Ruff, and strict mypy checks pass using committed dependency locks.
 - CAPE, WinST/DT, Android, and C2 source/runtime revisions match the committed pins.
 - The pinned Android image digest matches its dependency lock.
@@ -113,33 +115,11 @@ networking; see the [network architecture and real-egress target](docs/network-a
 
 ## Current UI limitations
 
-The present UI can authenticate, create cases/runs, search and filter the case queue, select and
-rerun existing samples, show progress and diagnostics, administer basic Windows/Android profiles,
-and render role-filtered results. It is not yet a complete operations console. It still needs:
-
-- editing of permitted case metadata and adding a new submission to an existing case;
-- a recent-analysis list with status, platform, profile, submitter, timestamps, verdict, network
-  policy, C2 policy, retry/failure state, and direct navigation;
-- analysis-run history across cases, server-side filtering/pagination, and direct navigation to a
-  selected run. Per-case multi-run selection and rerunning an existing submission are implemented;
-- the remaining supported analysis parameters, especially analysis timeout/options. Guest-profile,
-  network-mode, offline C2, and Android interactive-session selection are already exposed;
-- an available-workers page showing enrollment, type, supported stages/platforms, capabilities,
-  runtime identity/version, health, last heartbeat, workload, and availability;
-- richer guest-profile details showing immutable runtime identity, snapshot/image, capabilities,
-  qualification evidence, and current worker compatibility;
-- profile editing/default selection and the remaining platform-specific controls. Create, qualify,
-  and retire workflows exist for their currently supported subsets;
-- complete RBAC-aware navigation and actions. Backend RBAC and role-filtered responses exist, but
-  the UI does not yet fully implement administrator, analyst, and officer workflows or consistently
-  hide/disable every unauthorized control;
-- an explicit retry operation and deeper CAPE post-processing progress. Critical browser workflows
-  and automated accessibility checks are implemented; broader browser coverage should grow with
-  each new operator workflow. Cancellation, stage diagnostics, evidence availability, and caveat
-  rendering are implemented.
-
-Until those screens are implemented, the CAPE workload may need to be driven or diagnosed through
-the UMAT API and native CAPE interface even though its end-to-end worker/adapter/report path works.
+The operations console covers routine workflows. Remaining UI enhancements are deeper live CAPE
+post-processing telemetry, bulk operations, server-side case pagination, and organization-specific
+analysis timeout/options if those controls are approved in deployment policy. The supported
+guest-profile, network, C2, Android-interactive, retry, cancellation, evidence, and diagnostic
+controls are exposed with role-aware actions.
 
 ## Pending Phase 6
 

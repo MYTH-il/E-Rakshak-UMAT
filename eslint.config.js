@@ -10,7 +10,7 @@ export default [
     files: ["src/umat/web/static/**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
-      sourceType: "script",
+      sourceType: "module",
       globals: globals.browser,
     },
     rules: {

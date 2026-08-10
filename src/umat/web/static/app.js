@@ -1,5 +1,12 @@
 "use strict";
 
+import { configureApi, api } from "./api.js";
+import { loadWorkers, updateAndroidProfile, updateWindowsProfile } from "./administration.js";
+import { loadAndroidCommand, loadAndroidWorkflow, submitAndroidCommand } from "./android.js";
+import { addCaseSubmission, queryRecentRuns, retryAnalysisRun, updateCaseMetadata } from "./cases.js";
+import { createReportExport, loadRunReport } from "./reports.js";
+import { configureRouter, go, navigateEvent, state } from "./state-router.js";
+
 // Officer-facing caveat text. Mirrors contracts/vocabularies/caveats.json
 // (descriptions). tests/unit/test_web_ui.py asserts the two stay in sync —
 // an officer must never be shown a bare machine code.
@@ -27,12 +34,6 @@ const CAVEAT_TEXT = {
   static_tool_unavailable: "One of the file-inspection tools did not run, so part of the examination of the file itself is missing.",
   stimulation_incomplete: "The app was not fully exercised during the test, so features that only activate through further use may not have been triggered.",
   tls_pinning: "The file used encryption we could not read. We can see who it contacted and how often, but not the contents of what was sent."
-};
-
-const state = {
-  session: null, cases: [], pollTimer: null, activeTab: "overview",
-  caseFilter: { query: "", status: "", platform: "", verdict: "" },
-  activeRunId: null, androidTab: "static", androidLiveCleanup: null
 };
 
 // --- role helpers ---------------------------------------------------------
@@ -89,54 +90,14 @@ function human(value) {
   return String(value || "unknown").replaceAll("_", " ");
 }
 
-function csrfToken() {
-  const pair = document.cookie.split("; ").find((item) => item.startsWith("umat_csrf="));
-  return pair ? decodeURIComponent(pair.split("=").slice(1).join("=")) : "";
-}
-
-async function api(path, options = {}) {
-  const request = { credentials: "same-origin", ...options };
-  request.headers = new Headers(options.headers || {});
-  if (request.body && !(request.body instanceof FormData) && typeof request.body !== "string") {
-    request.headers.set("Content-Type", "application/json");
-    request.body = JSON.stringify(request.body);
-  }
-  if (request.method && !["GET", "HEAD"].includes(request.method.toUpperCase())) {
-    request.headers.set("X-CSRF-Token", csrfToken());
-  }
-  const response = await fetch(path, request);
-  if (response.status === 401 && !path.endsWith("/login")) {
-    state.session = null;
-    go("/login");
-    throw new Error("Your session has expired.");
-  }
-  if (!response.ok) {
-    let message = `Request failed (${response.status})`;
-    try { message = (await response.json()).detail || message; } catch (_) { /* response was not JSON */ }
-    throw new Error(message);
-  }
-  if (response.status === 204) return null;
-  return response.json();
-}
-
 function toast(message, error = false) {
   const existing = document.querySelector(".toast");
   if (existing) existing.remove();
-  const item = node("div", `toast${error ? " notice-error" : ""}`, message);
+  const item = node("aside", `toast${error ? " notice-error" : ""}`, message);
+  item.setAttribute("aria-label", error ? "Error notification" : "Notification");
+  item.setAttribute("aria-live", error ? "assertive" : "polite");
   document.body.append(item);
   window.setTimeout(() => item.remove(), 4500);
-}
-
-function go(path) {
-  if (state.androidLiveCleanup) { state.androidLiveCleanup(); state.androidLiveCleanup = null; }
-  history.pushState({}, "", path);
-  renderRoute();
-}
-
-function navigateEvent(event) {
-  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  event.preventDefault();
-  go(event.currentTarget.getAttribute("href"));
 }
 
 function badge(value) {
@@ -159,11 +120,13 @@ function shell(title, content) {
   brand.append(brandCopy);
   sidebar.append(brand, node("div", "nav-label", "Workspace"));
   sidebar.append(navItem("Case queue", "/cases", path === "/cases" || path.startsWith("/cases/")));
+  sidebar.append(navItem("Recent runs", "/runs", path === "/runs"));
   if (canSubmit()) sidebar.append(navItem("New analysis", "/submit", path === "/submit"));
   if (state.session.roles.includes("administrator")) {
     sidebar.append(node("div", "nav-label", "Administration"));
     sidebar.append(navItem("Windows profiles", "/admin/windows", path === "/admin/windows"));
     sidebar.append(navItem("Android profiles", "/admin/android", path === "/admin/android"));
+    sidebar.append(navItem("Workers", "/admin/workers", path === "/admin/workers"));
   }
   const foot = node("div", "sidebar-foot");
   const user = node("div", "user-chip");
@@ -326,7 +289,8 @@ async function renderSubmit() {
   const file = field("Sample file", "file", "file", true); file.wrap.classList.add("full");
   const profileWrap = node("div", "field full");
   const profileLabel = node("label", "", "Windows analysis profile (ignored for valid APKs)");
-  const profiles = node("select"); profiles.name = "windows_profile_id";
+  profileLabel.htmlFor = "intake-windows-profile";
+  const profiles = node("select"); profiles.name = "windows_profile_id"; profiles.id = "intake-windows-profile";
   profiles.append(node("option", "", "Use active default profile")); profiles.firstChild.value = "";
   try {
     const items = await api("/api/v1/windows/profiles");
@@ -335,7 +299,8 @@ async function renderSubmit() {
   append(profileWrap, profileLabel, profiles);
   const androidProfileWrap = node("div", "field full");
   const androidProfileLabel = node("label", "", "Android analysis profile (ignored for non-APKs)");
-  const androidProfiles = node("select"); androidProfiles.name = "android_profile_id";
+  androidProfileLabel.htmlFor = "intake-android-profile";
+  const androidProfiles = node("select"); androidProfiles.name = "android_profile_id"; androidProfiles.id = "intake-android-profile";
   androidProfiles.append(node("option", "", "Use active default profile")); androidProfiles.firstChild.value = "";
   try {
     const items = await api("/api/v1/android/profiles");
@@ -464,7 +429,12 @@ function rerunCard(caseData, run) {
   c2.checked = Boolean(run?.c2_analysis_enabled);
   append(c2Wrap, c2, node("span", "", "Run the C2 network analyzer"));
 
-  append(grid, sampleWrap, networkWrap, c2Wrap);
+  const interactiveWrap = node("label", "field checkbox-field");
+  const interactive = node("input"); interactive.type = "checkbox"; interactive.name = "android_interactive";
+  interactive.checked = Boolean(run?.android_interactive);
+  append(interactiveWrap, interactive, node("span", "", "Request an interactive Android session"));
+
+  append(grid, sampleWrap, networkWrap, c2Wrap, interactiveWrap);
   const submit = button("Queue additional run", "btn btn-primary"); submit.type = "submit";
   append(form, grid, append(node("div", "form-actions"), submit));
   form.addEventListener("submit", async (event) => {
@@ -473,10 +443,11 @@ function rerunCard(caseData, run) {
       const body = {
         submission_id: sample.value,
         network_mode: network.value,
-        c2_analysis_enabled: c2.checked
+        c2_analysis_enabled: c2.checked,
+        android_interactive: interactive.checked,
       };
-      if (run?.windows_profile?.id) body.windows_profile_id = run.windows_profile.id;
-      if (run?.android_profile?.id) body.android_profile_id = run.android_profile.id;
+      if (run?.windows_profile?.profile_id) body.windows_profile_id = run.windows_profile.profile_id;
+      if (run?.android_profile?.profile_id) body.android_profile_id = run.android_profile.profile_id;
       const result = await api(`/api/v1/cases/${caseData.case_id}/analysis-runs`, { method: "POST", body });
       toast("Additional run queued.");
       state.activeRunId = result.analysis_run_id;
@@ -485,6 +456,68 @@ function rerunCard(caseData, run) {
     finally { submit.disabled = false; }
   });
   card.append(form);
+  return card;
+}
+
+function caseOperationsCard(caseData, run) {
+  if (!canSubmit()) return null;
+  const card = node("section", "card card-body");
+  card.append(node("h3", "card-title", "Case operations"));
+  const metadata = node("form");
+  const metadataGrid = node("div", "field-grid");
+  const title = field("Case title", "text", "edit_case_title");
+  const reference = field("Case reference", "text", "edit_case_reference");
+  title.input.value = caseData.title || "";
+  reference.input.value = caseData.reference || "";
+  const save = button("Save case metadata", "btn btn-small"); save.type = "submit";
+  append(metadataGrid, title.wrap, reference.wrap);
+  append(metadata, metadataGrid, append(node("div", "form-actions"), save));
+  metadata.addEventListener("submit", async (event) => {
+    event.preventDefault(); save.disabled = true;
+    try {
+      await updateCaseMetadata(caseData.case_id, {
+        title: title.input.value || null,
+        reference: reference.input.value || null,
+      });
+      toast("Case metadata updated and audited.");
+      renderCase(caseData.case_id, true);
+    } catch (failure) { toast(failure.message, true); }
+    finally { save.disabled = false; }
+  });
+
+  const upload = node("form"); upload.enctype = "multipart/form-data";
+  upload.append(node("h4", "card-title", "Add submission to this case"));
+  const uploadGrid = node("div", "field-grid");
+  const sample = field("Additional sample", "file", "additional_sample", true);
+  const network = selectField("Analysis network", "additional_network", [
+    ["Isolated / simulated (recommended)", "isolated_simulated"],
+    ["Real-world egress (not containment-qualified)", "real_world_egress"],
+  ], run?.network_mode || "isolated_simulated");
+  const c2Wrap = node("label", "field checkbox-field");
+  const c2 = node("input"); c2.type = "checkbox"; c2.checked = Boolean(run?.c2_analysis_enabled);
+  append(c2Wrap, c2, node("span", "", "Run the C2 network analyzer"));
+  const interactiveWrap = node("label", "field checkbox-field");
+  const interactive = node("input"); interactive.type = "checkbox";
+  append(interactiveWrap, interactive, node("span", "", "Request an interactive Android session when the file is an APK"));
+  append(uploadGrid, sample.wrap, network.wrap, c2Wrap, interactiveWrap);
+  const add = button("Add submission and analyze", "btn btn-primary"); add.type = "submit";
+  append(upload, uploadGrid, append(node("div", "form-actions"), add));
+  upload.addEventListener("submit", async (event) => {
+    event.preventDefault(); add.disabled = true;
+    const data = new FormData();
+    data.append("file", sample.input.files[0]);
+    data.append("network_mode", network.select.value);
+    data.append("c2_analysis_enabled", c2.checked ? "true" : "false");
+    data.append("android_interactive", interactive.checked ? "true" : "false");
+    try {
+      const result = await addCaseSubmission(caseData.case_id, data);
+      state.activeRunId = result.analysis_run_id;
+      toast(result.status === "awaiting_confirmation" ? "Submission added; duplicate confirmation required." : "Submission added and queued.");
+      renderCase(caseData.case_id, true);
+    } catch (failure) { toast(failure.message, true); }
+    finally { add.disabled = false; }
+  });
+  card.append(metadata, upload);
   return card;
 }
 
@@ -500,7 +533,7 @@ async function renderCase(caseId, preserveTab = false) {
   // run's snapshot so the displayed verdict always matches the selected run.
   let report = caseData.report;
   if (run && state.activeRunId && run.id !== latestRun(caseData)?.id) {
-    try { report = (await api(`/api/v1/cases/${caseId}/report?run_id=${run.id}`)).report; }
+    try { report = (await loadRunReport(caseId, run.id)).report; }
     catch (_) { report = null; }
   }
 
@@ -568,6 +601,8 @@ async function renderCase(caseId, preserveTab = false) {
   else renderProgress(content, caseData.analysis_runs, caseId);
 
   if (state.activeTab === "overview") {
+    const operations = caseOperationsCard(caseData, run);
+    if (operations) content.append(operations);
     const rerun = rerunCard(caseData, run);
     if (rerun) content.append(rerun);
   }
@@ -698,6 +733,20 @@ function renderProgress(content, runs, caseId) {
       });
       head.append(cancel);
     }
+    if (run.status === "terminal" && ["partial", "inconclusive", "failed", "cancelled", "unsupported"].includes(run.result) && canControlRuns()) {
+      const retry = button("Retry run", "btn btn-small");
+      retry.addEventListener("click", async () => {
+        const reason = window.prompt("Reason for retry (recorded in the audit log):");
+        if (!reason) return;
+        try {
+          const result = await retryAnalysisRun(run.id, reason);
+          state.activeRunId = result.analysis_run_id;
+          toast("Retry queued as a new immutable run.");
+          renderCase(caseId, true);
+        } catch (failure) { toast(failure.message, true); }
+      });
+      head.append(retry);
+    }
     card.append(head);
 
     const policy = node("div", "mono muted",
@@ -741,7 +790,7 @@ function renderProgress(content, runs, caseId) {
 }
 
 async function exportReport(caseId, format) {
-  try { const result = await api(`/api/v1/cases/${caseId}/exports/${format}`, { method: "POST" }); toast(`${format.toUpperCase()} export created and integrity-registered.`); window.location.assign(result.download_path); } catch (failure) { toast(failure.message, true); }
+  try { const result = await createReportExport(caseId, format); toast(`${format.toUpperCase()} export created and integrity-registered.`); window.location.assign(result.download_path); } catch (failure) { toast(failure.message, true); }
 }
 
 function schedulePoll(caseId, runs) {
@@ -774,7 +823,7 @@ function compactJson(value) {
 async function renderAndroidWorkflow(runId, quiet = false) {
   if (state.androidLiveCleanup) { state.androidLiveCleanup(); state.androidLiveCleanup = null; }
   let workflow;
-  try { workflow = await api(`/api/v1/analysis-runs/${runId}/android-workflow`); }
+  try { workflow = await loadAndroidWorkflow(runId); }
   catch (failure) {
     if (!quiet) { const content = node("div"); content.append(node("div", "notice notice-error", failure.message)); shell("Android analysis", content); }
     return;
@@ -870,10 +919,10 @@ function renderAndroidDynamic(content, workflow, report) {
 }
 
 async function androidCommand(runId, type, payload = {}, timeoutMs = 120000) {
-  const created = await api(`/api/v1/analysis-runs/${runId}/android-commands`, { method: "POST", body: { command_type: type, payload } });
+  const created = await submitAndroidCommand(runId, { command_type: type, payload });
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = await api(`/api/v1/analysis-runs/${runId}/android-commands/${created.command_id}`);
+    const value = await loadAndroidCommand(runId, created.command_id);
     if (["completed", "failed"].includes(value.state)) {
       if (value.state === "failed") throw new Error(value.result?.error || `${human(type)} failed`);
       return value.result || {};
@@ -976,6 +1025,94 @@ function renderAndroidArtifacts(content, workflow) {
   content.append(node("h3", "section-title", "Registered evidence"), list);
 }
 
+async function renderRecentRuns() {
+  const content = node("div");
+  content.append(pageHead("Analysis operations", "Recent runs", "Search and diagnose analysis work across cases without opening native backend consoles.", null));
+  const filters = node("form", "card card-body");
+  const grid = node("div", "field-grid");
+  const search = field("Search case, reference, filename or SHA-256", "search", "run_search");
+  const statusFilter = selectField("Run status", "run_status", [["All statuses", ""], ["Awaiting confirmation", "awaiting_confirmation"], ["Queued", "queued"], ["Running", "running"], ["Cancelling", "cancelling"], ["Terminal", "terminal"]], "");
+  const platformFilter = selectField("Platform", "run_platform", [["All platforms", ""], ["Windows", "windows"], ["Android", "android"]], "");
+  const apply = button("Apply filters", "btn btn-primary"); apply.type = "submit";
+  append(grid, search.wrap, statusFilter.wrap, platformFilter.wrap);
+  append(filters, grid, append(node("div", "form-actions"), apply));
+  const summary = node("div", "muted");
+  const list = node("div", "case-list");
+  const pagination = node("div", "actions-row");
+  content.append(filters, summary, list, pagination);
+  shell("Recent runs", content);
+
+  async function load(page = 1) {
+    apply.disabled = true;
+    try {
+      const result = await queryRecentRuns({ q: search.input.value, status: statusFilter.select.value, platform: platformFilter.select.value, page, page_size: 10 });
+      state.recentRunPage = result.page;
+      summary.textContent = `${result.total} run${result.total === 1 ? "" : "s"} · page ${result.page} of ${result.pages || 1}`;
+      list.replaceChildren(); pagination.replaceChildren();
+      if (!result.items.length) list.append(node("div", "card empty", "No runs match these filters."));
+      result.items.forEach((item) => {
+        const row = node("section", "card card-body");
+        const head = node("div", "case-row");
+        const identity = node("div");
+        append(identity, link(item.case_title || "Untitled case", `/cases/${item.case_id}`), node("div", "mono muted", `${item.case_reference || item.case_id} · ${item.filename}`), node("div", "mono muted", item.id));
+        append(head, identity, badge(item.platform), badge(item.status), item.result ? badge(item.result) : null);
+        const policy = node("div", "muted", `${human(item.network_mode)} · C2 ${item.c2_analysis_enabled ? "enabled" : "disabled"} · ${formatDate(item.updated_at)}`);
+        const diagnostics = node("details"); diagnostics.append(node("summary", "", "Stage diagnostics"));
+        const stages = node("div", "case-list");
+        item.stages.forEach((stage) => {
+          const stageRow = node("div", "case-row");
+          append(stageRow, node("span", "", human(stage.stage_type)), badge(stage.state), node("span", "muted", `${stage.attempt_count} attempt${stage.attempt_count === 1 ? "" : "s"}`), stage.failure_detail ? node("span", "notice notice-error", stage.failure_detail) : null);
+          stages.append(stageRow);
+        });
+        diagnostics.append(stages);
+        const actions = node("div", "actions-row");
+        actions.append(link("Open case", `/cases/${item.case_id}`, "btn btn-small"));
+        if (item.retry_eligible && canControlRuns()) {
+          const retry = button("Retry", "btn btn-small");
+          retry.addEventListener("click", async () => {
+            const reason = window.prompt("Reason for retry (recorded in the audit log):");
+            if (!reason) return;
+            try { await retryAnalysisRun(item.id, reason); toast("Retry queued."); load(result.page); }
+            catch (failure) { toast(failure.message, true); }
+          });
+          actions.append(retry);
+        }
+        append(row, head, policy, diagnostics, actions); list.append(row);
+      });
+      const previous = button("Previous", "btn btn-small"); previous.disabled = result.page <= 1; previous.addEventListener("click", () => load(result.page - 1));
+      const next = button("Next", "btn btn-small"); next.disabled = result.page >= result.pages; next.addEventListener("click", () => load(result.page + 1));
+      append(pagination, previous, next);
+    } catch (failure) { list.replaceChildren(node("div", "notice notice-error", failure.message)); }
+    finally { apply.disabled = false; }
+  }
+  filters.addEventListener("submit", (event) => { event.preventDefault(); load(1); });
+  await load(state.recentRunPage);
+}
+
+async function renderWorkersAdmin() {
+  if (!isAdmin()) { go("/cases"); return; }
+  const content = node("div");
+  content.append(pageHead("Execution capacity", "Workers", "Runtime identity, compatibility, heartbeat, workload, and active leases from the control plane.", null));
+  const list = node("div", "case-list"); content.append(list); shell("Workers", content);
+  try {
+    const inventory = await loadWorkers();
+    if (!inventory.items.length) list.append(node("div", "card empty", "No workers are enrolled."));
+    inventory.items.forEach((item) => {
+      const card = node("section", "card card-body");
+      const head = node("div", "case-row");
+      const identity = node("div");
+      append(identity, node("h3", "", item.name), node("div", "mono muted", item.runtime_identity || "Runtime identity not advertised"), node("small", "muted", `${item.executor_type} · last seen ${formatDate(item.last_seen_at)}`));
+      append(head, identity, badge(item.status), badge(item.heartbeat_state), badge(item.compatibility.compatible ? "compatible" : "incompatible"), node("strong", "", `${item.active_workload} active`));
+      const details = node("details"); details.append(node("summary", "", "Capabilities and leases"));
+      details.append(node("pre", "code-block", compactJson({ supported_stage_types: item.supported_stage_types, capabilities: item.capabilities, compatibility: item.compatibility })));
+      const leases = node("div", "case-list");
+      item.active_leases.forEach((lease) => { const row = node("div", "case-row"); append(row, link(human(lease.stage_type), `/cases/${lease.case_id}`), badge(lease.platform), badge(lease.state), node("span", "muted", `heartbeat ${formatDate(lease.last_heartbeat_at)} · expires ${formatDate(lease.expires_at)}`)); leases.append(row); });
+      if (!item.active_leases.length) leases.append(node("div", "muted", "No active leases."));
+      details.append(leases); append(card, head, details); list.append(card);
+    });
+  } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }
+}
+
 async function renderWindowsAdmin() {
   if (!state.session.roles.includes("administrator")) { go("/cases"); return; }
   const content = node("div");
@@ -988,7 +1125,25 @@ async function renderWindowsAdmin() {
   const profileField = node("div", "field"); const profileLabel = node("label", "", "Analysis profile"); const profile = node("select"); ["standard", "deep_static", "tls_intercept", "full_memory", "full_investigation"].forEach((value) => { const option = node("option", "", human(value)); option.value = value; profile.append(option); }); append(profileField, profileLabel, profile); grid.append(profileField);
   const submit = button("Queue provisioning", "btn btn-primary"); submit.type = "submit"; append(form, grid, append(node("div", "form-actions"), submit)); create.append(form); content.append(create, node("h3", "section-title", "Managed profiles"));
   const list = node("div", "case-list"); content.append(list); shell("Windows profiles", content);
-  async function load() { const items = await api("/api/v1/windows/profiles?include_inactive=true"); list.replaceChildren(); items.forEach((item) => { const row = node("div", "card case-row"); const copy = node("div"); append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · ${item.windows_version} · ${item.vcpus} vCPU · ${item.ram_mb} MiB · ${item.disk_gb} GiB`)); const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = ["deleting", "deleted", "provisioning"].includes(item.state); remove.addEventListener("click", async () => { try { await api(`/api/v1/windows/profiles/${item.id}`, { method: "DELETE" }); toast("Profile deletion queued through CAPE."); load(); } catch (failure) { toast(failure.message, true); } }); append(row, copy, node("div", "", human(item.analysis_profile)), badge(item.state), remove); list.append(row); }); }
+  async function load() {
+    const items = await api("/api/v1/windows/profiles?include_inactive=true"); list.replaceChildren();
+    items.forEach((item) => {
+      const row = node("div", "card case-row"); const copy = node("div");
+      append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · ${item.windows_version} · ${item.vcpus} vCPU · ${item.ram_mb} MiB · ${item.disk_gb} GiB`), node("div", "mono muted", `${item.cape_machine_label || "not provisioned"} · ${item.cape_template}`));
+      const edit = button("Edit", "btn btn-small"); edit.disabled = item.state !== "active";
+      edit.addEventListener("click", async () => {
+        const displayName = window.prompt("Profile display name:", item.display_name);
+        if (!displayName) return;
+        try { await updateWindowsProfile(item.id, { display_name: displayName }); toast("Windows profile metadata updated."); load(); }
+        catch (failure) { toast(failure.message, true); }
+      });
+      const makeDefault = button(item.is_default ? "Default" : "Make default", "btn btn-small"); makeDefault.disabled = item.is_default || item.state !== "active";
+      makeDefault.addEventListener("click", async () => { try { await updateWindowsProfile(item.id, { is_default: true }); toast("Default Windows profile changed."); load(); } catch (failure) { toast(failure.message, true); } });
+      const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = ["deleting", "deleted", "provisioning"].includes(item.state);
+      remove.addEventListener("click", async () => { try { await api(`/api/v1/windows/profiles/${item.id}`, { method: "DELETE" }); toast("Profile deletion queued through CAPE."); load(); } catch (failure) { toast(failure.message, true); } });
+      append(row, copy, node("div", "", human(item.analysis_profile)), badge(item.state), edit, makeDefault, remove); list.append(row);
+    });
+  }
   form.addEventListener("submit", async (event) => { event.preventDefault(); const body = { name: controls.name.value, display_name: controls.display_name.value, windows_version: controls.windows_version.value, architecture: "x64", vcpus: Number(controls.vcpus.value), ram_mb: Number(controls.ram_mb.value), disk_gb: Number(controls.disk_gb.value), user_profile: { username: controls.username.value, locale: "en-US", timezone: "UTC", installed_software: [] }, analysis_profile: profile.value, cape_template: controls.cape_template.value, is_default: false }; try { await api("/api/v1/windows/profiles", { method: "POST", body }); toast("Profile provisioning queued."); form.reset(); load(); } catch (failure) { toast(failure.message, true); } });
   try { await load(); } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }
 }
@@ -1011,7 +1166,19 @@ async function renderAndroidAdmin() {
   async function load() {
     const items = await api("/api/v1/android/profiles?include_inactive=true"); list.replaceChildren();
     if (!items.length) list.append(node("div", "card empty", "No Android profiles configured."));
-    items.forEach((item) => { const row = node("div", "card case-row"); const copy = node("div"); append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · Android ${item.android_version} / API ${item.api_level} · ${item.architecture} · ${item.vcpus} vCPU · ${item.ram_mb} MiB`), node("div", "mono muted", item.system_image)); const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = item.state !== "active" || item.is_default; remove.title = item.is_default ? "Select another default before retiring this profile" : "Retire profile"; remove.addEventListener("click", async () => { try { await api(`/api/v1/android/profiles/${item.id}`, { method: "DELETE" }); toast("Android profile retired; existing run snapshots are preserved."); load(); } catch (failure) { toast(failure.message, true); } }); const qualify = button("Qualify", "btn btn-small"); qualify.disabled = item.state !== "active" || item.qualification?.status === "qualified"; qualify.title = "Record a completed evidence run that qualifies this profile"; qualify.addEventListener("click", async () => { const runId = window.prompt("Evidence analysis run ID that qualifies this profile:"); if (!runId) return; try { await api(`/api/v1/android/profiles/${item.id}/qualify`, { method: "POST", body: { evidence_run_id: runId.trim() } }); toast("Profile qualified against the supplied evidence run."); load(); } catch (failure) { toast(failure.message, true); } }); append(row, copy, node("div", "", item.is_default ? "Default" : human(item.qualification?.status || "candidate")), badge(item.state), qualify, remove); list.append(row); });
+    items.forEach((item) => {
+      const row = node("div", "card case-row"); const copy = node("div");
+      append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · Android ${item.android_version} / API ${item.api_level} · ${item.architecture} · ${item.vcpus} vCPU · ${item.ram_mb} MiB`), node("div", "mono muted", item.system_image));
+      const edit = button("Edit", "btn btn-small"); edit.disabled = item.state !== "active";
+      edit.addEventListener("click", async () => { const displayName = window.prompt("Profile display name:", item.display_name); if (!displayName) return; try { await updateAndroidProfile(item.id, { display_name: displayName }); toast("Android profile updated."); load(); } catch (failure) { toast(failure.message, true); } });
+      const makeDefault = button(item.is_default ? "Default" : "Make default", "btn btn-small"); makeDefault.disabled = item.is_default || item.state !== "active";
+      makeDefault.addEventListener("click", async () => { try { await updateAndroidProfile(item.id, { is_default: true }); toast("Default Android profile changed."); load(); } catch (failure) { toast(failure.message, true); } });
+      const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = item.state !== "active" || item.is_default; remove.title = item.is_default ? "Select another default before retiring this profile" : "Retire profile";
+      remove.addEventListener("click", async () => { try { await api(`/api/v1/android/profiles/${item.id}`, { method: "DELETE" }); toast("Android profile retired; existing run snapshots are preserved."); load(); } catch (failure) { toast(failure.message, true); } });
+      const qualify = button("Qualify", "btn btn-small"); qualify.disabled = item.state !== "active" || item.qualification?.status === "qualified"; qualify.title = "Record a completed evidence run that qualifies this profile";
+      qualify.addEventListener("click", async () => { const runId = window.prompt("Evidence analysis run ID that qualifies this profile:"); if (!runId) return; try { await api(`/api/v1/android/profiles/${item.id}/qualify`, { method: "POST", body: { evidence_run_id: runId.trim() } }); toast("Profile qualified against the supplied evidence run."); load(); } catch (failure) { toast(failure.message, true); } });
+      append(row, copy, node("div", "", item.is_default ? "Default" : human(item.qualification?.status || "candidate")), badge(item.state), edit, makeDefault, qualify, remove); list.append(row);
+    });
   }
   form.addEventListener("submit", async (event) => { event.preventDefault(); const redroid = runtime.value === "redroid"; try { await api("/api/v1/android/profiles", { method: "POST", body: { name: name.input.value, display_name: display.input.value, system_image: redroid ? "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d" : "system-images;android-30;default;x86_64", emulator_version: redroid ? "redroid-11-d1ca0815" : "34.1.19", is_default: isDefault.checked } }); toast("Android candidate profile created."); form.reset(); load(); } catch (failure) { toast(failure.message, true); } });
   try { await load(); } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }
@@ -1026,7 +1193,9 @@ async function renderRoute() {
   if (path === "/login") return renderLogin();
   if (!state.session) return renderLogin();
   if (path === "/" || path === "/cases") return renderCases();
+  if (path === "/runs") return renderRecentRuns();
   if (path === "/submit") return renderSubmit();
+  if (path === "/admin/workers") return renderWorkersAdmin();
   if (path === "/admin/windows") return renderWindowsAdmin();
   if (path === "/admin/android") return renderAndroidAdmin();
   const androidMatch = path.match(/^\/analysis\/([0-9a-f-]+)\/android$/i);
@@ -1036,5 +1205,6 @@ async function renderRoute() {
   go("/cases");
 }
 
-window.addEventListener("popstate", renderRoute);
+configureApi({ onUnauthorized: () => { state.session = null; go("/login"); } });
+configureRouter(renderRoute);
 renderRoute();

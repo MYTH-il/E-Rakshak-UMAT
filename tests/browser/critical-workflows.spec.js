@@ -58,7 +58,19 @@ test("report selection and exports use the selected immutable report", async ({ 
   await page.getByLabel("Search title, reference, ID or headline").fill("BROWSER-REPORT");
   await page.getByRole("link", { name: /Browser report selection/ }).click();
   await expect(page.getByText("Second browser report")).toBeVisible();
-  await page.getByRole("button", { name: "Show report" }).last().click();
+  const caseId = page.url().split("/").pop();
+  const firstRunId = await page.evaluate(async ({ selectedCaseId }) => {
+    const detail = await fetch(`/api/v1/cases/${selectedCaseId}`).then((response) => response.json());
+    for (const run of detail.analysis_runs) {
+      const response = await fetch(`/api/v1/cases/${selectedCaseId}/report?run_id=${run.id}`);
+      if (!response.ok) continue;
+      const snapshot = await response.json();
+      if (snapshot.report.headline === "First browser report") return run.id;
+    }
+    return null;
+  }, { selectedCaseId: caseId });
+  expect(firstRunId).not.toBeNull();
+  await page.locator(".case-row").filter({ hasText: firstRunId }).getByRole("button", { name: "Show report" }).click();
   await expect(page.getByText("First browser report")).toBeVisible();
   await expectAccessible(page);
 
@@ -88,4 +100,40 @@ test("officer, analyst, and administrator controls are role-appropriate", async 
   await login(page, "administrator");
   await expect(page.getByRole("link", { name: "Windows profiles" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Android profiles" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Workers" })).toBeVisible();
+});
+
+test("operations console supports case changes, run diagnosis, retry, and worker inventory", async ({ page }) => {
+  await login(page, "analyst");
+  await page.getByRole("link", { name: "Recent runs" }).click();
+  await page.getByLabel("Search case, reference, filename or SHA-256").fill("BROWSER-FAILED");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(page.getByRole("link", { name: "Browser failed analysis" }).first()).toBeVisible();
+  const failedRun = page.locator("section.card").filter({ hasText: "The backend was unavailable during the fixture run." });
+  await failedRun.getByText("Stage diagnostics").click();
+  await expect(page.getByText("The backend was unavailable during the fixture run.")).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept("browser verification retry"));
+  await failedRun.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("Retry queued.")).toBeVisible();
+
+  await page.getByLabel("Search case, reference, filename or SHA-256").fill("BROWSER-REPORT");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await page.getByRole("link", { name: "Browser report selection" }).first().click();
+  await page.getByLabel("Case reference").fill("BROWSER-REPORT-UPDATED");
+  await page.getByRole("button", { name: "Save case metadata" }).click();
+  await expect(page.getByText("Case metadata updated and audited.")).toBeVisible();
+  await page.getByLabel("Additional sample").setInputFiles({
+    name: "additional-browser.exe",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("MZ unique browser additional submission"),
+  });
+  await page.getByRole("button", { name: "Add submission and analyze" }).click();
+  await expect(page.getByText("Submission added and queued.")).toBeVisible();
+  await expectAccessible(page);
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await login(page, "administrator");
+  await page.getByRole("link", { name: "Workers" }).click();
+  await expect(page.getByRole("heading", { name: "Workers", level: 2 })).toBeVisible();
+  await expectAccessible(page);
 });

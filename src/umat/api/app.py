@@ -22,6 +22,7 @@ from umat.api.artifact_routes import router as artifact_router
 from umat.api.auth_routes import router as auth_router
 from umat.api.case_routes import router as case_router
 from umat.api.executor_routes import router as executor_router
+from umat.api.operations_routes import router as operations_router
 from umat.api.report_routes import router as report_router
 from umat.config import get_settings
 from umat.db.session import session_factory
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     application.include_router(case_router)
     application.include_router(artifact_router)
     application.include_router(executor_router)
+    application.include_router(operations_router)
     application.include_router(report_router)
     application.include_router(windows_profile_router)
     application.include_router(android_profile_router)
@@ -112,11 +114,13 @@ def create_app() -> FastAPI:
     @application.get("/", include_in_schema=False)
     @application.get("/login", include_in_schema=False)
     @application.get("/cases", include_in_schema=False)
+    @application.get("/runs", include_in_schema=False)
     @application.get("/submit", include_in_schema=False)
     @application.get("/cases/{case_id}", include_in_schema=False)
     @application.get("/analysis/{run_id}/android", include_in_schema=False)
     @application.get("/admin/windows", include_in_schema=False)
     @application.get("/admin/android", include_in_schema=False)
+    @application.get("/admin/workers", include_in_schema=False)
     async def web_application(
         case_id: str | None = None, run_id: str | None = None
     ) -> FileResponse:
