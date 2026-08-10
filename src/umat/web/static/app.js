@@ -479,8 +479,8 @@ function caseOperationsCard(caseData, run) {
         title: title.input.value || null,
         reference: reference.input.value || null,
       });
+      await renderCase(caseData.case_id, true);
       toast("Case metadata updated and audited.");
-      renderCase(caseData.case_id, true);
     } catch (failure) { toast(failure.message, true); }
     finally { save.disabled = false; }
   });
@@ -512,8 +512,8 @@ function caseOperationsCard(caseData, run) {
     try {
       const result = await addCaseSubmission(caseData.case_id, data);
       state.activeRunId = result.analysis_run_id;
+      await renderCase(caseData.case_id, true);
       toast(result.status === "awaiting_confirmation" ? "Submission added; duplicate confirmation required." : "Submission added and queued.");
-      renderCase(caseData.case_id, true);
     } catch (failure) { toast(failure.message, true); }
     finally { add.disabled = false; }
   });
