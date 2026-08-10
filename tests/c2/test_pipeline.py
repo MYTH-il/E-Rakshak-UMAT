@@ -15,7 +15,7 @@ from umat.c2.bundle import (
 )
 from umat.c2.input_builder import C2InputBuilder, C2InputError
 from umat.c2.models import InputArtifact
-from umat.c2.runtime import FixtureC2Runtime
+from umat.c2.runtime import FixtureC2Runtime, SubprocessC2Runtime
 
 RUN_ID = UUID("0198fd40-1111-7000-8000-000000000001")
 SAMPLE_HASH = "a" * 64
@@ -84,6 +84,31 @@ def test_android_is_network_only_and_bundle_verifies(tmp_path: Path) -> None:
     assert manifest["native_event_schema_version"] == "1.3"
     assert manifest["correlation_mode"] == "network_only"
     assert all(event["data_type_accessed"] is None for event in manifest["network_events"])
+
+
+def test_android_proxy_observations_are_available_to_c2(tmp_path: Path) -> None:
+    inputs = android_inputs(tmp_path)
+    inputs.append(artifact(
+        tmp_path / "network-activity.json",
+        "network_activity",
+        json.dumps({"observations": [{
+            "observed_at": "2026-08-08T12:01:00Z",
+            "destination_domain": "runtime.example",
+            "destination_ip": "198.51.100.20",
+            "destination_port": 443,
+            "source": "mobsf_dynamic_proxy",
+        }]}).encode(),
+    ))
+    context = C2InputBuilder().build(
+        analysis_run_id=RUN_ID,
+        platform="android",
+        sample_sha256=SAMPLE_HASH,
+        artifacts=inputs,
+    )
+    events = SubprocessC2Runtime._proxy_network_events(context)  # noqa: SLF001
+    assert events[0]["destination_domain"] == "runtime.example"
+    assert events[0]["finding_kind"] == "beacon"
+    assert events[0]["capped_by_caveat"] == "c2_network_only"
 
 
 def test_same_pcap_has_same_network_observation_across_platforms(tmp_path: Path) -> None:

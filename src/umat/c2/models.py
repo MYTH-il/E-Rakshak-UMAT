@@ -27,6 +27,7 @@ class C2AnalysisContext(BaseModel):
     platform_manifest: InputArtifact
     access_events: InputArtifact | None = None
     static_prior: InputArtifact | None = None
+    network_activity: InputArtifact | None = None
     analysis_started_at: datetime
     analysis_ended_at: datetime
     guest_ip: str | None = None
@@ -58,6 +59,11 @@ class C2AnalysisContext(BaseModel):
             "static_prior": {
                 "artifact_id": str(self.static_prior.artifact_id)
                 if self.static_prior
+                else None
+            },
+            "network_activity": {
+                "artifact_id": str(self.network_activity.artifact_id)
+                if self.network_activity
                 else None
             },
             "platform_manifest": {

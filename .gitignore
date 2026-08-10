@@ -1,6 +1,7 @@
 /target/
 /.idea/
 /.venv/
+/dumps/
 /__pycache__/
 *.py[cod]
 /.pytest_cache/

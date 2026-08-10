@@ -495,6 +495,11 @@ function renderAndroidDynamic(content, workflow, report) {
   const session = workflow.interactive_session;
   if (session?.state === "ready") renderLiveAndroidSession(content, workflow);
   else if (workflow.inline_evidence.screenshot) { const screenCard = node("section", "card card-body android-screen-card"); append(screenCard, node("h3", "card-title", "Final guest screenshot")); const image = node("img", "android-screen"); image.src = workflow.inline_evidence.screenshot; image.alt = "Final captured Android guest screen"; screenCard.append(image); content.append(node("h3", "section-title", "Captured device"), screenCard); }
+  const backgroundCommands = new Set(["screen", "logcat", "frida_logs"]);
+  const analystCommands = (session?.commands || []).filter((item) => !backgroundCommands.has(item.type)).reverse();
+  content.append(node("h3", "section-title", "Analyst operations and captured outcomes"));
+  if (analystCommands.length) content.append(table(["Time", "Operation", "State", "Captured result"], analystCommands, (item) => [formatDate(item.completed_at || item.created_at), human(item.type), human(item.state), compactJson(item.result || {}).slice(0, 4000)]));
+  else content.append(node("div", "notice", terminal ? "No analyst-triggered operations were recorded for this run." : "Analyst operations will appear here as they complete."));
   content.append(node("h3", "section-title", "Runtime observations"));
   const runtimeRows = [];
   Object.entries(report).forEach(([name, value]) => { if (["domains", "urls", "traffic", "http_tools", "screenshots"].includes(name) || Array.isArray(value)) runtimeRows.push({ name, value }); });
@@ -596,9 +601,11 @@ function renderLiveAndroidSession(content, workflow) {
 function renderAndroidNetwork(content, workflow) {
   const mode = node("div", `notice${workflow.run.network_mode === "real_world_egress" ? " notice-warn" : ""}`, workflow.run.network_mode === "isolated_simulated" ? "This run used the isolated/simulated malware-safe baseline. C2 analysis inspected captured connection attempts without granting unrestricted Internet access." : "This run requested real-world egress. Treat all resulting destinations and responses as potentially hostile.");
   content.append(mode, node("h3", "section-title", "Observed network destinations"));
-  content.append(table(["Time", "Domain", "IP", "Port", "Protocol"], workflow.network_observations, (item) => [formatDate(item.observed_at), item.destination_domain || "—", item.destination_ip || "—", item.destination_port || "—", item.protocol || "—"]));
+  if (workflow.network_observations.length) content.append(table(["Time", "Domain", "IP", "Port", "Protocol", "Evidence source"], workflow.network_observations, (item) => [formatDate(item.observed_at), item.destination_domain || "—", item.destination_ip || "—", item.destination_port || "—", item.protocol || "—", human(item.details?.source || "unknown")]));
+  else content.append(node("div", "notice notice-warn", "No application destinations were normalized. A completed C2 stage with this state means it had no usable network events; it is not evidence that the sample made no connection attempts."));
   content.append(node("h3", "section-title", "C2 analyzer findings"));
-  content.append(table(["Finding", "Kind", "Confidence", "Limitation"], workflow.c2_findings, (item) => [item.summary, human(item.kind), human(item.confidence), item.capped_by_caveat ? CAVEAT_TEXT[item.capped_by_caveat] || human(item.capped_by_caveat) : "—"]));
+  if (workflow.c2_findings.length) content.append(table(["Finding", "Kind", "Confidence", "Limitation"], workflow.c2_findings, (item) => [item.summary, human(item.kind), human(item.confidence), item.capped_by_caveat ? CAVEAT_TEXT[item.capped_by_caveat] || human(item.capped_by_caveat) : "—"]));
+  else content.append(node("div", "notice", workflow.run.c2_analysis_enabled ? "C2 analysis completed without a qualifying finding. Static indicators below remain unconfirmed unless they were observed in runtime traffic." : "C2 analysis was disabled for this run."));
   content.append(node("h3", "section-title", "Static destinations (not necessarily contacted)"));
   content.append(table(["Type", "Value", "Confidence", "Observed"], workflow.iocs.filter((item) => ["domain", "ip", "url"].includes(item.type)), (item) => [item.type, item.value, human(item.confidence), item.seen_in_traffic ? "Yes" : "No"]));
 }

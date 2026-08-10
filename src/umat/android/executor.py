@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
@@ -433,7 +434,9 @@ class AndroidExecutor:
             ) from analysis_error
         evidence["pcap"] = pcap
         network_activity = workspace / "network-activity.json"
-        self._network_summary(pcap, running.guest_ip if running else None, network_activity)
+        self._network_summary(
+            pcap, running.guest_ip if running else None, network_activity, dynamic
+        )
         evidence["network_activity"] = network_activity
         dynamic_path: Path | None = None
         if dynamic is not None:
@@ -597,7 +600,13 @@ class AndroidExecutor:
             "complete": True,
         }, session_evidence
 
-    def _network_summary(self, pcap: Path, guest_ip: str | None, destination: Path) -> None:
+    def _network_summary(
+        self,
+        pcap: Path,
+        guest_ip: str | None,
+        destination: Path,
+        dynamic: dict[str, Any] | None = None,
+    ) -> None:
         display_filter = (
             f"ip.src == {guest_ip} && !(mdns) && !(tcp.srcport == 5555)"
             if guest_ip else "ip && !(mdns)"
@@ -623,7 +632,59 @@ class AndroidExecutor:
                 "destination_port": int(tcp_port or udp_port) if (tcp_port or udp_port).isdigit() else None,
                 "destination_domain": domain.rstrip(".").lower() or None,
                 "protocol": protocol.lower() or None,
+                "source": "guest_pcap",
             })
+        # MobSF's HTTPS proxy is carried over the ADB tunnel. The bridge PCAP
+        # therefore sees TCP/5555 rather than the application's destinations;
+        # retain MobSF's independently captured proxy destinations as observed
+        # telemetry and label their provenance explicitly.
+        seen: set[tuple[str | None, str | None, int | None]] = {
+            (item.get("destination_domain"), item.get("destination_ip"), item.get("destination_port"))
+            for item in observations
+        }
+        captured_at = datetime.now(timezone.utc).isoformat()
+        if isinstance(dynamic, dict):
+            domains = dynamic.get("domains") or {}
+            if isinstance(domains, dict):
+                for domain, metadata in domains.items():
+                    if not isinstance(domain, str) or not domain.strip():
+                        continue
+                    detail = metadata if isinstance(metadata, dict) else {}
+                    geolocation = detail.get("geolocation") or {}
+                    address = geolocation.get("ip") if isinstance(geolocation, dict) else None
+                    domain_key = (domain.rstrip(".").lower(), address, None)
+                    if domain_key in seen:
+                        continue
+                    seen.add(domain_key)
+                    observations.append({
+                        "observed_at": captured_at,
+                        "destination_ip": address,
+                        "destination_port": None,
+                        "destination_domain": domain_key[0],
+                        "protocol": "https_proxy",
+                        "source": "mobsf_dynamic_proxy",
+                    })
+            urls = dynamic.get("urls") or []
+            for raw in urls if isinstance(urls, list) else []:
+                value = raw if isinstance(raw, str) else raw.get("url") if isinstance(raw, dict) else None
+                if not value:
+                    continue
+                parsed = urlparse(str(value))
+                if not parsed.hostname:
+                    continue
+                port = parsed.port or (443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None)
+                url_key = (parsed.hostname.lower(), None, port)
+                if url_key in seen:
+                    continue
+                seen.add(url_key)
+                observations.append({
+                    "observed_at": captured_at,
+                    "destination_ip": None,
+                    "destination_port": port,
+                    "destination_domain": url_key[0],
+                    "protocol": parsed.scheme.lower() or "proxy",
+                    "source": "mobsf_dynamic_proxy",
+                })
         self._json(destination, {
             "schema_version": "1.0", "guest_ip": guest_ip,
             "capture_size_bytes": pcap.stat().st_size, "observations": observations,

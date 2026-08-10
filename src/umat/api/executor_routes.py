@@ -640,7 +640,9 @@ async def claim_stage(
     ).all()
     allowed_input_kinds: set[str] | None = None
     if stage.stage_type == StageType.C2_ANALYSIS:
-        allowed_input_kinds = {"pcap", "platform_manifest", "access_events", "static_prior"}
+        allowed_input_kinds = {
+            "pcap", "platform_manifest", "access_events", "static_prior", "network_activity"
+        }
     elif stage.stage_type == StageType.PLATFORM_ADAPTATION:
         allowed_input_kinds = {"windows_bundle", "android_bundle"}
     elif stage.stage_type == StageType.C2_ADAPTATION:

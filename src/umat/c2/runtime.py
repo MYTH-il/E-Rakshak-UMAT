@@ -226,6 +226,8 @@ class SubprocessC2Runtime:
             )
         output = workspace / "output"
         events = self._json_list(output / "exfil_events.json", required=True)
+        if context.platform == "android" and context.network_activity:
+            events.extend(self._proxy_network_events(context))
         return NativeC2Result(
             events=events,
             attribution=self._json_list(output / "attribution.json"),
@@ -236,6 +238,51 @@ class SubprocessC2Runtime:
             runtime_identity=self.identity,
             tool_versions={"python": sys.version.split()[0], "c2_commit": self.expected_commit},
         )
+
+    @staticmethod
+    def _proxy_network_events(context: C2AnalysisContext) -> list[dict[str, Any]]:
+        source = context.network_activity
+        if source is None:
+            return []
+        try:
+            document = json.loads(source.local_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise C2RuntimeError("Android network-activity evidence is not valid JSON") from exc
+        if not isinstance(document, dict) or not isinstance(document.get("observations"), list):
+            raise C2RuntimeError("Android network-activity evidence has no observation list")
+        normalized: list[dict[str, Any]] = []
+        seen: set[tuple[Any, Any, Any]] = set()
+        for item in document["observations"][:5000]:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                item.get("destination_domain"), item.get("destination_ip"),
+                item.get("destination_port"),
+            )
+            if key in seen or not (key[0] or key[1]):
+                continue
+            seen.add(key)
+            destination = key[0] or key[1]
+            normalized.append({
+                "timestamp": item.get("observed_at") or context.analysis_started_at.isoformat(),
+                "destination_domain": key[0],
+                "destination_ip": key[1],
+                "destination_port": key[2],
+                "confidence_score": 0.55,
+                "confidence_tier": "weak",
+                "finding_kind": "beacon",
+                "plain_language": (
+                    f"Android runtime telemetry observed a connection to {destination}; "
+                    "this alone does not confirm C2 behavior."
+                ),
+                "capped_by_caveat": "c2_network_only",
+                "evidence_refs": [{
+                    "artifact_id": str(source.artifact_id),
+                    "sha256": source.sha256,
+                    "source": item.get("source") or "android_network_activity",
+                }],
+            })
+        return normalized
 
     @staticmethod
     def _prepare_static_prior(context: C2AnalysisContext, workspace: Path) -> Path:

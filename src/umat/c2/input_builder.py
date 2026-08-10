@@ -52,6 +52,7 @@ class C2InputBuilder:
             platform_manifest=by_kind["platform_manifest"],
             access_events=access_events,
             static_prior=by_kind.get("static_prior"),
+            network_activity=by_kind.get("network_activity"),
             analysis_started_at=started,
             analysis_ended_at=ended,
             guest_ip=guest_ip,

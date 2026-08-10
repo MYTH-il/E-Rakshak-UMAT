@@ -262,7 +262,44 @@ class AndroidAdapter:
         self._findings(db, adaptation.id, run.id, static, dynamic)
         self._capabilities(db, adaptation.id, run.id, static, dynamic)
         self._iocs(db, adaptation.id, run.id, static, dynamic)
-        for sequence, item in enumerate(network_activity.get("observations", [])[:5000]):
+        observations = list(network_activity.get("observations", [])[:5000])
+        seen: set[tuple[str | None, str | None, int | None]] = {
+            (item.get("destination_domain"), item.get("destination_ip"), item.get("destination_port"))
+            for item in observations if isinstance(item, dict)
+        }
+        captured_at = (manifest.get("analysis_window") or {}).get("ended_at")
+        domains = dynamic.get("domains") or {}
+        if isinstance(domains, dict):
+            for domain, metadata in domains.items():
+                detail = metadata if isinstance(metadata, dict) else {}
+                geolocation = detail.get("geolocation") or {}
+                address = geolocation.get("ip") if isinstance(geolocation, dict) else None
+                domain_key = (str(domain).rstrip(".").lower(), address, None)
+                if domain_key in seen:
+                    continue
+                seen.add(domain_key)
+                observations.append({
+                    "observed_at": captured_at, "destination_domain": domain_key[0],
+                    "destination_ip": address, "destination_port": None,
+                    "protocol": "https_proxy", "source": "mobsf_dynamic_proxy",
+                })
+        urls = dynamic.get("urls") or []
+        for raw in urls if isinstance(urls, list) else []:
+            value = raw if isinstance(raw, str) else raw.get("url") if isinstance(raw, dict) else None
+            parsed = urlparse(str(value)) if value else None
+            if not parsed or not parsed.hostname:
+                continue
+            port = parsed.port or (443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None)
+            url_key = (parsed.hostname.lower(), None, port)
+            if url_key in seen:
+                continue
+            seen.add(url_key)
+            observations.append({
+                "observed_at": captured_at, "destination_domain": url_key[0],
+                "destination_ip": None, "destination_port": port,
+                "protocol": parsed.scheme.lower() or "proxy", "source": "mobsf_dynamic_proxy",
+            })
+        for sequence, item in enumerate(observations[:5000]):
             if not isinstance(item, dict):
                 continue
             db.add(NetworkObservation(
@@ -275,7 +312,7 @@ class AndroidAdapter:
                 protocol=item.get("protocol"),
                 observed_at=datetime.fromisoformat(item["observed_at"])
                 if item.get("observed_at") else utcnow(),
-                details={"source": "android_executor_pcap_summary"},
+                details={"source": item.get("source") or "android_executor_pcap_summary"},
             ))
         return adaptation
 
