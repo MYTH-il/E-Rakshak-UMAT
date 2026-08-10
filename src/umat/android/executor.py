@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -49,6 +51,7 @@ class AndroidExecutor:
         adb_relay_bind_address: str | None,
         stimulation_seconds: int,
         stimulation_actions: int,
+        mobsf_container: str = "android-mobsf-1",
     ) -> None:
         self.client = httpx.Client(base_url=umat_url.rstrip("/"), timeout=120)
         self.state_path = state_path
@@ -62,6 +65,7 @@ class AndroidExecutor:
             stimulation_seconds,
             stimulation_actions,
         )
+        self.mobsf_container = mobsf_container
         self.state: dict[str, Any] = (
             json.loads(state_path.read_text()) if state_path.is_file() else {}
         )
@@ -336,6 +340,15 @@ class AndroidExecutor:
             "complete": False,
         }
         evidence: dict[str, Path] = {}
+        evidence["original_apk"] = workspace / "sample.apk"
+        try:
+            scan_logs_path = workspace / "mobsf-scan-logs.json"
+            self._json(scan_logs_path, self.mobsf.scan_logs(scan_hash))
+            evidence["scan_logs"] = scan_logs_path
+        except Exception as exc:
+            self._json(scan_logs_path, {"status": "unavailable", "error": str(exc)[:2000]})
+            evidence["scan_logs"] = scan_logs_path
+        evidence.update(self._export_mobsf_sources(scan_hash, workspace))
         running = None
         dynamic_started = False
         analysis_error: Exception | None = None
@@ -357,10 +370,25 @@ class AndroidExecutor:
                 self.mobsf.instrument(scan_hash)
             except Exception:
                 caveats.append("android_api_monitoring_failed")
-            stimulation = avd.stimulate(self.stimulation_seconds, self.stimulation_actions)
+            if bool(profile.get("android_interactive")):
+                if not isinstance(avd, RedroidManager):
+                    raise RuntimeError("interactive Android analysis requires ReDroid")
+                stimulation = self._interactive_session(
+                    claim, common, avd, scan_hash, static, running.guest_ip, check_stop
+                )
+            else:
+                stimulation = avd.stimulate(self.stimulation_seconds, self.stimulation_actions)
             check_stop()
             if not stimulation.get("complete"):
                 caveats.append("stimulation_incomplete")
+            package_name = str(static.get("package_name") or static.get("package") or "")
+            if package_name and isinstance(avd, RedroidManager):
+                try:
+                    evidence["application_data"] = avd.collect_app_data(
+                        workspace / "device-evidence", package_name
+                    )
+                except Exception:
+                    caveats.append("application_data_collection_failed")
             evidence.update(avd.collect(workspace / "device-evidence"))
             for kind, getter in (
                 ("api_monitor", self.mobsf.api_monitor),
@@ -435,11 +463,166 @@ class AndroidExecutor:
         prior_path = workspace / "c2-static-prior.json"
         self._json(prior_path, prior)
         self._upload(claim, prior_path, "static_prior", "application/json")
+        for kind, artifact_path, media_type in (
+            ("android_sample", evidence.get("original_apk"), "application/vnd.android.package-archive"),
+            ("java_source", evidence.get("java_source"), "application/zip"),
+            ("smali_source", evidence.get("smali_source"), "application/zip"),
+            ("application_data", evidence.get("application_data"), "application/x-tar"),
+            ("android_scan_logs", evidence.get("scan_logs"), "application/json"),
+        ):
+            if artifact_path and artifact_path.is_file():
+                self._upload(claim, artifact_path, kind, media_type)
         return (
             ("partial", "Static analysis completed; dynamic evidence is incomplete")
             if dynamic is None
             else ("completed", "MobSF static/dynamic analysis bundle validated and registered")
         )
+
+    def _export_mobsf_sources(self, scan_hash: str, workspace: Path) -> dict[str, Path]:
+        exports: dict[str, Path] = {}
+        for kind, directory in (("java_source", "java_source"), ("smali_source", "smali_source")):
+            destination = workspace / f"mobsf-{directory}"
+            result = subprocess.run(  # noqa: S603
+                [
+                    "/usr/bin/docker", "cp",
+                    f"{self.mobsf_container}:/home/mobsf/.MobSF/uploads/{scan_hash}/{directory}",
+                    str(destination),
+                ],
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+            if result.returncode == 0 and destination.is_dir():
+                archive = Path(shutil.make_archive(str(workspace / kind), "zip", destination))
+                exports[kind] = archive
+        return exports
+
+    def _interactive_session(
+        self,
+        claim: dict[str, Any],
+        common: dict[str, Any],
+        avd: RedroidManager,
+        scan_hash: str,
+        static: dict[str, Any],
+        guest_ip: str | None,
+        check_stop: Any,
+    ) -> dict[str, Any]:
+        path = f"/api/internal/v1/stages/{claim['stage_id']}/android-session/ready"
+        body = common | {
+            "scan_hash": scan_hash,
+            "package_name": str(static.get("package_name") or static.get("package") or "") or None,
+            "main_activity": self._main_activity(static),
+            "guest_ip": guest_ip,
+            "duration_seconds": 900,
+        }
+        response = self.mutate(path, body, claim["lease_token"])
+        response.raise_for_status()
+        completed = 0
+        while True:
+            check_stop()
+            poll_path = f"/api/internal/v1/stages/{claim['stage_id']}/android-session/poll"
+            poll = self.mutate(poll_path, common, claim["lease_token"])
+            poll.raise_for_status()
+            value = poll.json()
+            command = value.get("command")
+            if command:
+                success = True
+                try:
+                    result = self._execute_interactive_command(
+                        avd, scan_hash, body.get("package_name"), command["type"], command["payload"]
+                    )
+                    completed += 1
+                except Exception as exc:
+                    success, result = False, {"error": str(exc)[:2000]}
+                complete_path = (
+                    f"/api/internal/v1/stages/{claim['stage_id']}"
+                    "/android-session/complete-command"
+                )
+                complete_body = common | {
+                    "command_id": command["id"], "success": success, "result": result
+                }
+                completed_response = self.mutate(
+                    complete_path, complete_body, claim["lease_token"]
+                )
+                completed_response.raise_for_status()
+            if value.get("finalize"):
+                break
+            time.sleep(0.35)
+        return {
+            "strategy": "interactive_analyst_v1",
+            "actions_completed": completed,
+            "complete": True,
+        }
+
+    def _execute_interactive_command(
+        self,
+        avd: RedroidManager,
+        scan_hash: str,
+        package_name: str | None,
+        command_type: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if command_type in {"screen", "screenshot"}:
+            return {"image_base64": base64.b64encode(avd.screenshot()).decode()}
+        if command_type == "tap":
+            avd.input_tap(int(payload["x"]), int(payload["y"]))
+        elif command_type == "swipe":
+            avd.input_swipe(
+                int(payload["x1"]), int(payload["y1"]), int(payload["x2"]),
+                int(payload["y2"]), int(payload["duration_ms"]),
+            )
+        elif command_type == "key":
+            avd.input_key(int(payload["keycode"]))
+        elif command_type == "text":
+            avd.input_text(str(payload["text"]))
+        elif command_type == "start_activity":
+            return self.mobsf.start_activity(scan_hash, str(payload["activity"]))
+        elif command_type == "deeplink":
+            value = str(payload["url"])
+            result = avd._adb(  # noqa: SLF001 - executor owns the isolated manager
+                "-s", avd.adb_address, "shell", "am", "start", "-a",
+                "android.intent.action.VIEW", "-d", value, check=False,
+            )
+            return {"output": (result.stdout + result.stderr).decode(errors="replace")[:8192]}
+        elif command_type == "logcat":
+            return {"logcat": avd.logcat_tail()}
+        elif command_type == "api_monitor":
+            return self.mobsf.api_monitor(scan_hash)
+        elif command_type == "frida_logs":
+            return self.mobsf.frida_logs(scan_hash)
+        elif command_type == "frida":
+            data = dict(payload)
+            data["frida_action"] = data.pop("action")
+            return self.mobsf.android_operation("frida", scan_hash, data)
+        elif command_type == "activity_test":
+            return self.mobsf.android_operation("activity", scan_hash, payload)
+        elif command_type == "tls_test":
+            return self.mobsf.android_operation("tls_tests", scan_hash)
+        elif command_type == "proxy":
+            return self.mobsf.android_operation("global_proxy", scan_hash, payload)
+        elif command_type == "root_ca":
+            return self.mobsf.android_operation("root_ca", scan_hash, payload)
+        elif command_type == "dependencies":
+            return self.mobsf.android_operation("dependencies", scan_hash)
+        elif command_type == "app_data":
+            return {"message": "Application data will be collected during finalization"}
+        elif command_type == "list_files":
+            if not package_name:
+                raise RuntimeError("package name is unavailable")
+            return {"files": avd.list_app_files(package_name, str(payload["path"]))}
+        elif command_type == "read_file":
+            if not package_name:
+                raise RuntimeError("package name is unavailable")
+            file_value = avd.read_app_file(package_name, str(payload["path"]))
+            return {
+                "content_base64": base64.b64encode(file_value).decode(),
+                "size_bytes": len(file_value),
+            }
+        elif command_type == "finalize":
+            return {"message": "Session finalization accepted"}
+        else:
+            raise RuntimeError("unsupported interactive Android command")
+        return {"status": "ok"}
 
     def _heartbeat(self, claim: dict[str, Any], common: dict[str, Any]) -> None:
         body = common | {"state": "running"}
@@ -546,6 +729,9 @@ def run(
     enroll_only: bool = typer.Option(False, help="Enroll and publish capabilities, then exit"),
     stimulation_seconds: int = typer.Option(30, min=1, max=600),
     stimulation_actions: int = typer.Option(20, min=1, max=500),
+    mobsf_container: str = typer.Option(
+        "android-mobsf-1", envvar="UMAT_ANDROID_MOBSF_CONTAINER"
+    ),
     once: bool = typer.Option(False),
     poll_seconds: float = typer.Option(5.0, min=0.5),
 ) -> None:
@@ -564,6 +750,7 @@ def run(
         adb_relay_bind_address=adb_relay_bind_address,
         stimulation_seconds=stimulation_seconds,
         stimulation_actions=stimulation_actions,
+        mobsf_container=mobsf_container,
     )
     if not executor_process.state:
         if not enrollment_token:

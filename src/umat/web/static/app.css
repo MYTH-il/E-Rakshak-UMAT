@@ -148,6 +148,22 @@ tbody tr:hover { background: rgba(139,92,246,.06); }
 .workflow-metrics small { color: var(--muted); }
 .android-screen-card { max-width: 760px; }
 .android-screen { display: block; max-width: 100%; max-height: 680px; margin: 18px auto 0; border: 1px solid var(--border); border-radius: 12px; background: #08060b; object-fit: contain; }
+.android-live-grid { display: grid; grid-template-columns: minmax(330px, .8fr) minmax(480px, 1.2fr); gap: 17px; align-items: start; }
+.android-device-panel { position: sticky; top: 94px; }
+.android-panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+.android-panel-head h3 { margin-right: auto; }
+.android-live-screen-wrap { margin: 17px auto; max-width: 420px; aspect-ratio: 9 / 16; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 14px; background: #050407; overflow: hidden; }
+.android-live-screen { display: block; width: 100%; height: 100%; object-fit: contain; cursor: crosshair; }
+.android-device-keys { justify-content: center; }
+.android-inline-input { flex: 1 1 180px; min-width: 0; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: #17111f; padding: 7px 10px; }
+.android-live-status { margin-top: 12px; color: var(--teal); text-align: center; }
+.android-tool-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+.android-control-group { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.android-control-group h4 { margin: 0 0 10px; }
+.android-control-group > input, .android-control-group > textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: #17111f; padding: 9px 10px; margin-bottom: 8px; }
+.frida-editor { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.checkbox-field.compact { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.android-command-output { min-height: 150px; max-height: 430px; overflow: auto; padding: 13px; border: 1px solid var(--border); border-radius: 9px; background: #09070d; color: #c8f7ef; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 1050px) {
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -165,6 +181,9 @@ tbody tr:hover { background: rgba(139,92,246,.06); }
   .grid-2, .grid-3, .grid-4, .field-grid { grid-template-columns: 1fr; }
   .page-head, .verdict-hero { align-items: start; flex-direction: column; grid-template-columns: 1fr; }
   .workflow-summary { grid-template-columns: 1fr; }
+  .android-live-grid { grid-template-columns: 1fr; }
+  .android-device-panel { position: static; }
+  .android-tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workflow-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .verdict-orb { display: none; }
   .field.full { grid-column: auto; }

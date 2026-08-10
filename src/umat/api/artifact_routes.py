@@ -60,9 +60,16 @@ async def download_artifact(
         "text/csv": "csv",
     }
     extension = extensions.get(artifact.media_type)
+    analyst_suffixes = {
+        "android_sample": "apk", "java_source": "zip", "smali_source": "zip",
+        "application_data": "tar", "android_scan_logs": "json",
+    }
+    suffix = analyst_suffixes.get(artifact.kind)
     filename = (
         f"umat-report-{artifact.id}.{extension}"
         if artifact.kind in {"report", "ioc_export"} and extension
+        else f"umat-{artifact.kind}-{artifact.id}.{suffix}"
+        if suffix
         else f"umat-artifact-{artifact.id}"
     )
     return FileResponse(

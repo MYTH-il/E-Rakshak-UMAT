@@ -21,7 +21,7 @@ The authoritative design remains the
 | Phase 2 shared C2 service | Implemented with runtime gates | Isolated executor, input/result validation, adapters, recovery, and Windows/Android inputs exist. The executable runtime is pinned to upstream schema-v1.3 commit `bc5bb681` as effective runtime `bc5bb681-umat.1`. |
 | Phase 3 Windows/CAPE | Operational end to end | Submission-format normalization, CAPE execution and recovery, full JSON evidence import, WinST/DT handoff validation, adapters, aggregation, and reporting have completed real LNK-in-ZIP malware runs. CAPE itself is operational; the current UMAT UI does not expose every supported workflow and profile parameter. |
 | Phase 4 API and UI | Backend implemented; UI incomplete | Case/run APIs, L1/L2/L3 views, aggregation, verdict policy, report worker, JSON/PDF/CSV exports, network mode, and optional C2 policy exist. The browser UI is an operator preview and still needs the workflow surfaces listed under **Current UI limitations**. |
-| Phase 5 Android/MobSF | Implemented and runtime-validated | The default pinned Android 11/API-30 x86_64 ReDroid profile completed dynamic MobSF analysis, capture, adaptation, aggregation, and reporting. The AOSP AVD is retained as a fallback; ARM profiles are out of scope. |
+| Phase 5 Android/MobSF | Implemented and runtime-validated | The default pinned Android 11/API-30 x86_64 ReDroid profile supports unattended analysis and a brokered interactive analyst session with live screen/input, activities, Frida, TLS/proxy controls, logs, scoped file access, evidence capture, adaptation, aggregation, and reporting. The AOSP AVD is retained as a fallback; ARM profiles are out of scope. |
 | Phase 5.5 hardening | Implemented | Scheduler timeouts/retries, cancellation propagation, capability matching, administrative controls, migration/security tests, fail-closed isolated guest networks, and a host guest-firewall service. |
 | Phase 6 hardening and operations | **Pending** | See the dedicated section below. |
 
@@ -258,6 +258,16 @@ recovery, enrollment, and status semantics.
    post-processing are outside that timer.
 5. Review the UMAT report and download authorized JSON/PDF/CSV or evidence artifacts. Use CAPE's
    interface only for native diagnostics while the UMAT UI backlog remains open.
+
+For an Android APK, leave **interactive analyst session** enabled to hold the disposable ReDroid
+guest for up to 15 minutes after MobSF static preparation. Open **Android workflow** from the case
+and use the live screen, touch/swipe/keyboard input, activity and deep-link launchers, logcat,
+screenshots, Frida hooks or custom scripts, API monitor, TLS tester, proxy/root-CA controls, runtime
+dependencies, and the application-data browser. Explicitly finalize the session to collect the
+PCAP, scan logs, APK, Java/Smali exports, private application-data archive and dynamic report. A
+five-minute extension is available up to a hard 30-minute session limit; expiry also forces cleanup.
+All commands are allowlisted, tied to the active signed executor lease and audit logged. The API
+service never receives Docker, ADB or MobSF credentials.
 
 Operational checks:
 

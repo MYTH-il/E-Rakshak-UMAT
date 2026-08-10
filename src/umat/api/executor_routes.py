@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -22,6 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from umat.api.case_routes import store
 from umat.api.executor_schemas import (
+    AndroidCommandCompleteRequest,
+    AndroidCommandPollRequest,
+    AndroidSessionReadyRequest,
     ArtifactEnvelope,
     CancellationAckRequest,
     CapabilityRequest,
@@ -45,7 +49,9 @@ from umat.db.models import (
     AnalysisAttempt,
     AnalysisRun,
     AnalysisStage,
+    AndroidDynamicSession,
     AndroidRunConfiguration,
+    AndroidSessionCommand,
     Artifact,
     AttemptState,
     BackendCapabilitySnapshot,
@@ -402,6 +408,14 @@ async def expire_attempt(
     reason: str,
 ) -> None:
     run = await db.get(AnalysisRun, stage.analysis_run_id)
+    if run and stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "android":
+        session = await db.scalar(
+            select(AndroidDynamicSession).where(AndroidDynamicSession.analysis_run_id == run.id)
+        )
+        if session:
+            session.state = "expired"
+            session.ended_at = now
+            session.last_seen_at = now
     lease.released_at = now
     lease.release_reason = reason
     attempt.ended_at = now
@@ -666,6 +680,7 @@ async def claim_stage(
     execution_configuration = dict(configuration.profile_snapshot) if configuration else {}
     execution_configuration["network_mode"] = run.network_mode
     execution_configuration["c2_analysis_enabled"] = run.c2_analysis_enabled
+    execution_configuration["android_interactive"] = run.android_interactive
     return ClaimResponse(
         stage_id=stage.id,
         attempt_id=attempt.id,
@@ -1001,6 +1016,159 @@ async def native_task(
     return response
 
 
+@router.post("/stages/{stage_id}/android-session/ready")
+async def android_session_ready(
+    stage_id: UUID,
+    body: AndroidSessionReadyRequest,
+    request: Request,
+    headers: tuple[str, str, str, str, str] = Depends(mutation_headers),
+    executor: Executor = Depends(current_executor),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    timestamp, nonce, key, signature, lease_token = headers
+    stage, attempt, _lease, record, replay = await verify_stage_mutation(
+        db=db, executor=executor, request=request, stage_id=stage_id,
+        body=body.model_dump(mode="json"), timestamp=timestamp, nonce=nonce,
+        idempotency_key=key, signature=signature, lease_token=lease_token,
+    )
+    if replay and record.response_json:
+        return record.response_json
+    run = await db.get(AnalysisRun, stage.analysis_run_id)
+    if not run or run.platform.value != "android" or not run.android_interactive:
+        raise HTTPException(status.HTTP_409_CONFLICT, "run is not interactive Android analysis")
+    now = datetime.now(timezone.utc)
+    session = await db.scalar(
+        select(AndroidDynamicSession)
+        .where(AndroidDynamicSession.analysis_run_id == run.id)
+        .with_for_update()
+    )
+    if session is None:
+        session = AndroidDynamicSession(
+            analysis_run_id=run.id, stage_id=stage.id, attempt_id=attempt.id,
+            executor_id=executor.id, state="ready", scan_hash=body.scan_hash,
+            package_name=body.package_name, main_activity=body.main_activity,
+            guest_ip=body.guest_ip,
+            expires_at=now + timedelta(seconds=body.duration_seconds),
+            status_details={"message": "Interactive Android guest is ready"},
+        )
+        db.add(session)
+        await db.flush()
+    else:
+        session.state = "ready"
+        session.stage_id = stage.id
+        session.attempt_id = attempt.id
+        session.executor_id = executor.id
+        session.scan_hash = body.scan_hash
+        session.package_name = body.package_name
+        session.main_activity = body.main_activity
+        session.guest_ip = body.guest_ip
+        session.expires_at = now + timedelta(seconds=body.duration_seconds)
+        session.ended_at = None
+        session.last_seen_at = now
+    response = {"session_id": str(session.id), "expires_at": session.expires_at.isoformat()}
+    record.response_json = response
+    await append_audit(
+        db, actor_type="executor", actor_id=str(executor.id), action="android_session.ready",
+        target_type="android_dynamic_session", target_id=str(session.id),
+        payload={"analysis_run_id": str(run.id), "expires_at": session.expires_at.isoformat()},
+    )
+    await db.commit()
+    return response
+
+
+@router.post("/stages/{stage_id}/android-session/poll")
+async def android_session_poll(
+    stage_id: UUID,
+    body: AndroidCommandPollRequest,
+    request: Request,
+    headers: tuple[str, str, str, str, str] = Depends(mutation_headers),
+    executor: Executor = Depends(current_executor),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    timestamp, nonce, key, signature, lease_token = headers
+    stage, _attempt, _lease, record, replay = await verify_stage_mutation(
+        db=db, executor=executor, request=request, stage_id=stage_id,
+        body=body.model_dump(mode="json"), timestamp=timestamp, nonce=nonce,
+        idempotency_key=key, signature=signature, lease_token=lease_token,
+    )
+    if replay and record.response_json:
+        return record.response_json
+    session = await db.scalar(
+        select(AndroidDynamicSession)
+        .where(AndroidDynamicSession.analysis_run_id == stage.analysis_run_id)
+        .with_for_update()
+    )
+    if session is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "interactive session is not registered")
+    now = datetime.now(timezone.utc)
+    session.last_seen_at = now
+    if session.expires_at <= now or session.state in {"finalizing", "expired"}:
+        session.state = "finalizing"
+        response = {"session_id": str(session.id), "finalize": True, "command": None}
+    else:
+        command = await db.scalar(
+            select(AndroidSessionCommand)
+            .where(
+                AndroidSessionCommand.session_id == session.id,
+                AndroidSessionCommand.state == "queued",
+            )
+            .order_by(AndroidSessionCommand.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if command:
+            command.state = "running"
+            command.claimed_at = now
+            if command.command_type == "finalize":
+                session.state = "finalizing"
+            response = {
+                "session_id": str(session.id), "finalize": command.command_type == "finalize",
+                "command": {"id": str(command.id), "type": command.command_type, "payload": command.payload},
+            }
+        else:
+            response = {"session_id": str(session.id), "finalize": False, "command": None}
+    record.response_json = response
+    await db.commit()
+    return response
+
+
+@router.post("/stages/{stage_id}/android-session/complete-command")
+async def android_session_complete_command(
+    stage_id: UUID,
+    body: AndroidCommandCompleteRequest,
+    request: Request,
+    headers: tuple[str, str, str, str, str] = Depends(mutation_headers),
+    executor: Executor = Depends(current_executor),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    timestamp, nonce, key, signature, lease_token = headers
+    stage, _attempt, _lease, record, replay = await verify_stage_mutation(
+        db=db, executor=executor, request=request, stage_id=stage_id,
+        body=body.model_dump(mode="json"), timestamp=timestamp, nonce=nonce,
+        idempotency_key=key, signature=signature, lease_token=lease_token,
+    )
+    if replay and record.response_json:
+        return record.response_json
+    command = await db.get(AndroidSessionCommand, body.command_id)
+    session = await db.scalar(
+        select(AndroidDynamicSession).where(
+            AndroidDynamicSession.analysis_run_id == stage.analysis_run_id
+        )
+    )
+    if not command or not session or command.session_id != session.id or command.state != "running":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Android session command is not active")
+    encoded = json.dumps(body.result)
+    if len(encoded.encode()) > 2 * 1024 * 1024:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "command result is too large")
+    command.state = "completed" if body.success else "failed"
+    command.result = body.result
+    command.completed_at = datetime.now(timezone.utc)
+    response = {"command_id": str(command.id), "state": command.state}
+    record.response_json = response
+    await db.commit()
+    return response
+
+
 @router.post("/stages/{stage_id}/artifacts", status_code=status.HTTP_201_CREATED)
 async def upload_artifact(
     stage_id: UUID,
@@ -1185,6 +1353,16 @@ async def complete_stage(
     run = await db.get(AnalysisRun, stage.analysis_run_id)
     if not run:
         raise HTTPException(status.HTTP_409_CONFLICT, "run missing")
+    if stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "android":
+        session = await db.scalar(
+            select(AndroidDynamicSession).where(
+                AndroidDynamicSession.analysis_run_id == run.id
+            )
+        )
+        if session:
+            session.state = "ended"
+            session.ended_at = now
+            session.last_seen_at = now
     if (
         requested_state == StageState.UNSUPPORTED
         and stage.stage_type == StageType.PLATFORM_ANALYSIS
@@ -1256,6 +1434,16 @@ async def fail_stage(
         or 0
     )
     run = await db.get(AnalysisRun, stage.analysis_run_id)
+    if run and stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "android":
+        session = await db.scalar(
+            select(AndroidDynamicSession).where(AndroidDynamicSession.analysis_run_id == run.id)
+        )
+        if session:
+            session.state = (
+                "recovering" if body.retryable and attempt_count < stage.max_attempts else "failed"
+            )
+            session.ended_at = now
+            session.last_seen_at = now
     if body.retryable and attempt_count < stage.max_attempts:
         stage.state = StageState.QUEUED
         stage.next_attempt_at = now + timedelta(seconds=min(300, 2**attempt_count))
@@ -1318,6 +1506,14 @@ async def cancellation_ack(
     if not run or run.status != RunStatus.CANCELLING:
         raise HTTPException(status.HTTP_409_CONFLICT, "run is not cancelling")
     now = datetime.now(timezone.utc)
+    if stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "android":
+        session = await db.scalar(
+            select(AndroidDynamicSession).where(AndroidDynamicSession.analysis_run_id == run.id)
+        )
+        if session:
+            session.state = "cancelled"
+            session.ended_at = now
+            session.last_seen_at = now
     stage.state = StageState.CANCELLED
     attempt.state = AttemptState.CANCELLED
     attempt.ended_at = now

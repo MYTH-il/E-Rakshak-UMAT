@@ -268,6 +268,7 @@ class AnalysisRun(Base):
     result: Mapped[RunResult | None] = mapped_column(db_enum(RunResult, "run_result"))
     network_mode: Mapped[str] = mapped_column(String(32), default="isolated_simulated")
     c2_analysis_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    android_interactive: Mapped[bool] = mapped_column(Boolean, default=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
@@ -280,6 +281,9 @@ class AnalysisRun(Base):
         lazy="selectin", uselist=False
     )
     android_configuration: Mapped[AndroidRunConfiguration | None] = relationship(
+        lazy="selectin", uselist=False
+    )
+    android_dynamic_session: Mapped[AndroidDynamicSession | None] = relationship(
         lazy="selectin", uselist=False
     )
 
@@ -774,6 +778,51 @@ class AndroidRunConfiguration(Base):
     profile_snapshot: Mapped[dict[str, Any]] = mapped_column(json_dict_type())
     selected_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AndroidDynamicSession(Base):
+    __tablename__ = "android_dynamic_sessions"
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
+    analysis_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="RESTRICT"), unique=True, index=True
+    )
+    stage_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True
+    )
+    attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_attempts.id", ondelete="RESTRICT"), index=True
+    )
+    executor_id: Mapped[UUID] = mapped_column(
+        ForeignKey("executors.id", ondelete="RESTRICT"), index=True
+    )
+    state: Mapped[str] = mapped_column(String(32), default="starting", index=True)
+    scan_hash: Mapped[str] = mapped_column(String(64), index=True)
+    package_name: Mapped[str | None] = mapped_column(String(512))
+    main_activity: Mapped[str | None] = mapped_column(String(1024))
+    guest_ip: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status_details: Mapped[dict[str, Any]] = mapped_column(json_dict_type(), default=dict)
+
+
+class AndroidSessionCommand(Base):
+    __tablename__ = "android_session_commands"
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
+    session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("android_dynamic_sessions.id", ondelete="RESTRICT"), index=True
+    )
+    requested_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    command_type: Mapped[str] = mapped_column(String(64), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(json_dict_type(), default=dict)
+    state: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    result: Mapped[dict[str, Any]] = mapped_column(json_dict_type(), default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class WindowsAnalysisMetadata(Base):

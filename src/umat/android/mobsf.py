@@ -43,6 +43,9 @@ class MobSFClient:
     def static_report(self, scan_hash: str) -> dict[str, Any]:
         return self._post("/api/v1/report_json", {"hash": scan_hash})
 
+    def scan_logs(self, scan_hash: str) -> dict[str, Any]:
+        return self._post("/api/v1/scan_logs", {"hash": scan_hash})
+
     def wait_static_report(
         self,
         scan_hash: str,
@@ -90,6 +93,22 @@ class MobSFClient:
 
     def frida_logs(self, scan_hash: str) -> dict[str, Any]:
         return self._post("/api/v1/frida/logs", {"hash": scan_hash})
+
+    def android_operation(
+        self, path: str, scan_hash: str, data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        allowed = {
+            "activity": "/api/v1/android/activity",
+            "root_ca": "/api/v1/android/root_ca",
+            "global_proxy": "/api/v1/android/global_proxy",
+            "tls_tests": "/api/v1/android/tls_tests",
+            "frida": "/api/v1/frida/instrument",
+            "dependencies": "/api/v1/frida/get_dependencies",
+        }
+        endpoint = allowed.get(path)
+        if endpoint is None:
+            raise ValueError("unsupported MobSF Android operation")
+        return self._post(endpoint, {"hash": scan_hash, **(data or {})})
 
     @staticmethod
     def _wait_report(

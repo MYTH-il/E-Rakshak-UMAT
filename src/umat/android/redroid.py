@@ -213,6 +213,79 @@ class RedroidManager:
         metadata.write_text(json.dumps({"image": self.image, "abi": "x86_64"}, sort_keys=True))
         return {"logcat": logcat, "screenshot": screenshot, "redroid_metadata": metadata}
 
+    def screenshot(self) -> bytes:
+        return self._adb("-s", self.adb_address, "exec-out", "screencap", "-p").stdout
+
+    def input_tap(self, x: int, y: int) -> None:
+        self._adb("-s", self.adb_address, "shell", "input", "tap", str(x), str(y))
+
+    def input_swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int) -> None:
+        self._adb(
+            "-s", self.adb_address, "shell", "input", "swipe",
+            str(x1), str(y1), str(x2), str(y2), str(duration_ms),
+        )
+
+    def input_key(self, keycode: int) -> None:
+        self._adb("-s", self.adb_address, "shell", "input", "keyevent", str(keycode))
+
+    def input_text(self, value: str) -> None:
+        escaped = value.replace("%", "%25").replace(" ", "%s")
+        self._adb("-s", self.adb_address, "shell", "input", "text", escaped)
+
+    def logcat_tail(self, lines: int = 500) -> str:
+        output = self._adb("-s", self.adb_address, "logcat", "-d", "-t", str(lines), check=False)
+        return output.stdout.decode(errors="replace")[-262144:]
+
+    def list_app_files(self, package_name: str, path: str) -> list[dict[str, Any]]:
+        root = f"/data/data/{package_name}"
+        requested = path.rstrip("/") or root
+        if requested != root and not requested.startswith(root + "/"):
+            raise ValueError("file browsing is restricted to the analyzed application")
+        result: list[dict[str, Any]] = []
+        for kind, file_type in (("directory", "d"), ("file", "f")):
+            output = self._adb(
+                "-s", self.adb_address, "shell", "su", "0", "find", requested,
+                "-maxdepth", "1", "-mindepth", "1", "-type", file_type,
+                check=False,
+            ).stdout.decode(errors="replace")
+            result.extend(
+                {"kind": kind, "path": line}
+                for line in output.splitlines()[:500]
+                if line.startswith(root)
+            )
+        return result
+
+    def read_app_file(self, package_name: str, path: str, maximum: int = 2 * 1024 * 1024) -> bytes:
+        root = f"/data/data/{package_name}"
+        if not path.startswith(root + "/"):
+            raise ValueError("file access is restricted to the analyzed application")
+        probe = self._adb(
+            "-s", self.adb_address, "shell", "su", "0", "test", "-f", path,
+            check=False,
+        )
+        if probe.returncode != 0:
+            raise ValueError("requested application path is not a regular file")
+        output = self._adb(
+            "-s", self.adb_address, "exec-out", "su", "0", "cat", path, check=False
+        )
+        if output.returncode != 0:
+            raise RuntimeError(output.stderr.decode(errors="replace")[:2000] or "file read failed")
+        if len(output.stdout) > maximum:
+            raise ValueError("file exceeds the interactive download limit")
+        return output.stdout
+
+    def collect_app_data(self, destination: Path, package_name: str) -> Path:
+        destination.mkdir(parents=True, exist_ok=True)
+        output = self._adb(
+            "-s", self.adb_address, "exec-out", "su", "0", "tar", "-c",
+            "-C", "/data/data", package_name, check=False,
+        )
+        if output.returncode != 0:
+            raise RuntimeError(output.stderr.decode(errors="replace")[:2000] or "app data archive failed")
+        archive = destination / "application-data.tar"
+        archive.write_bytes(output.stdout)
+        return archive
+
     def stop(self) -> None:
         if self.relay_process:
             self.relay_process.terminate()

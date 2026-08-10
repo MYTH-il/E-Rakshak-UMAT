@@ -93,6 +93,29 @@ class CancellationAckRequest(BaseModel):
     detail: str | None = None
 
 
+class AndroidSessionReadyRequest(BaseModel):
+    lease_id: UUID
+    attempt_id: UUID
+    scan_hash: str = Field(pattern="^[a-f0-9]{32,64}$")
+    package_name: str | None = Field(default=None, max_length=512)
+    main_activity: str | None = Field(default=None, max_length=1024)
+    guest_ip: str | None = Field(default=None, max_length=64)
+    duration_seconds: int = Field(default=900, ge=60, le=1800)
+
+
+class AndroidCommandPollRequest(BaseModel):
+    lease_id: UUID
+    attempt_id: UUID
+
+
+class AndroidCommandCompleteRequest(BaseModel):
+    lease_id: UUID
+    attempt_id: UUID
+    command_id: UUID
+    success: bool
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
 class ArtifactEnvelope(BaseModel):
     lease_id: UUID
     attempt_id: UUID

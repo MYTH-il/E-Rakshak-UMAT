@@ -7,6 +7,8 @@ const CAVEAT_TEXT = {
   analysis_timed_out: "The analysis ran out of time before finishing. Behaviour that occurs later than the time allowed would not have been seen.",
   android_api_monitoring_failed: "Monitoring of the app's activity on the device did not work, so its behaviour was only partly recorded.",
   android_dynamic_stop_failed: "The device did not shut down cleanly after the test, so the final part of the recording may be incomplete.",
+  explicit_activity_launch_failed: "An optional request to launch a specific activity failed. The application may still have launched through its normal entry point.",
+  application_data_collection_failed: "The application ran, but its private files could not be archived at the end of the session.",
   c2_analysis_failed: "The examination of network traffic failed, even though the rest of the analysis completed. Any servers contacted are not reported here.",
   c2_workflow_skipped: "Network-traffic analysis was not run for this sample, so no report is made about which servers it contacted. This was a choice made when the analysis was started, not a failure.",
   c2_network_only: "Only network traffic was available for this analysis. We can report which servers were contacted, but not which specific information was taken from the device.",
@@ -260,7 +262,8 @@ async function renderSubmit() {
   const networkWrap = node("div", "field full"); const networkLabel = node("label", "", "Analysis network"); const networkMode = node("select"); networkMode.name = "network_mode";
   [["Isolated / simulated (recommended)", "isolated_simulated"], ["Real-world network egress (not containment-qualified)", "real_world_egress"]].forEach(([label, value]) => { const option = node("option", "", label); option.value = value; networkMode.append(option); }); append(networkWrap, networkLabel, networkMode);
   const c2Wrap = node("label", "field full checkbox-field"); const c2Enabled = node("input"); c2Enabled.type = "checkbox"; c2Enabled.name = "c2_analysis_enabled"; append(c2Wrap, c2Enabled, node("span", "", "Run C2 analyzer on captured traffic (guest remains governed by the selected network mode)"));
-  append(grid, title.wrap, reference.wrap, file.wrap, profileWrap, androidProfileWrap, networkWrap, c2Wrap);
+  const interactiveWrap = node("label", "field full checkbox-field"); const androidInteractive = node("input"); androidInteractive.type = "checkbox"; androidInteractive.name = "android_interactive"; androidInteractive.checked = true; append(interactiveWrap, androidInteractive, node("span", "", "Hold Android guests for an interactive analyst session (ignored for non-APKs; automatically finalized after 15 minutes)"));
+  append(grid, title.wrap, reference.wrap, file.wrap, profileWrap, androidProfileWrap, networkWrap, c2Wrap, interactiveWrap);
   const note = node("div", "notice", "Isolated/simulated networking is the malware-safe baseline. C2 analysis is optional and can inspect captured connection attempts without enabling Internet access. Real-world egress remains unqualified.");
   const submit = button("Create case and analyze", "btn btn-primary"); submit.type = "submit";
   append(form, grid, note, append(node("div", "form-actions"), submit));
@@ -273,6 +276,7 @@ async function renderSubmit() {
     if (androidProfiles.value) data.append("android_profile_id", androidProfiles.value);
     data.append("network_mode", networkMode.value);
     data.append("c2_analysis_enabled", c2Enabled.checked ? "true" : "false");
+    data.append("android_interactive", androidInteractive.checked ? "true" : "false");
     try {
       const result = await api("/api/v1/cases", { method: "POST", body: data });
       if (result.duplicate_cases.length) toast("Duplicate content found. Confirmation is required before analysis starts.");
@@ -468,6 +472,8 @@ function renderAndroidStatic(content, workflow, report) {
   content.append(table(["Finding", "Phase", "Category", "Severity", "Evidence"], workflow.findings, (item) => [item.summary, item.phase, human(item.category), human(item.severity || "unrated"), human(item.evidence_level)]));
   content.append(node("h3", "section-title", "Static indicators"));
   content.append(table(["Type", "Value", "Confidence", "Traffic"], workflow.iocs, (item) => [item.type, item.value, human(item.confidence), item.seen_in_traffic ? "Observed" : "Not observed"]));
+  const scanLogs = workflow.mobsf?.scan_logs;
+  if (scanLogs) { content.append(node("h3", "section-title", "Static scan log")); content.append(table(["Stage", "Status"], valueItems(scanLogs), (item) => [item.name || human(item), compactJson(item.details || item)])); }
 }
 
 function renderAndroidDynamic(content, workflow, report) {
@@ -475,16 +481,75 @@ function renderAndroidDynamic(content, workflow, report) {
   const status = node("div", "grid grid-4");
   [[workflow.metadata?.dynamic_completed ? "Complete" : "Pending", "MobSF dynamic report"], [`${stimulation.actions_completed || 0}/${stimulation.actions_attempted || stimulation.actions_total || "?"}`, "Stimulation actions"], [stimulation.complete ? "Complete" : "Incomplete", "Stimulation coverage"], [workflow.metadata?.guest_ip || "Destroyed after run", "Guest lifecycle"]].forEach(([value, label]) => { const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "", value)); status.append(card); });
   content.append(status);
-  if (workflow.inline_evidence.screenshot) { const screenCard = node("section", "card card-body android-screen-card"); append(screenCard, node("h3", "card-title", "Final guest screenshot")); const image = node("img", "android-screen"); image.src = workflow.inline_evidence.screenshot; image.alt = "Final captured Android guest screen"; screenCard.append(image); content.append(node("h3", "section-title", "Captured device"), screenCard); }
+  const session = workflow.interactive_session;
+  if (session?.state === "ready") renderLiveAndroidSession(content, workflow);
+  else if (workflow.inline_evidence.screenshot) { const screenCard = node("section", "card card-body android-screen-card"); append(screenCard, node("h3", "card-title", "Final guest screenshot")); const image = node("img", "android-screen"); image.src = workflow.inline_evidence.screenshot; image.alt = "Final captured Android guest screen"; screenCard.append(image); content.append(node("h3", "section-title", "Captured device"), screenCard); }
   content.append(node("h3", "section-title", "Runtime observations"));
   const runtimeRows = [];
   Object.entries(report).forEach(([name, value]) => { if (["domains", "urls", "traffic", "http_tools", "screenshots"].includes(name) || Array.isArray(value)) runtimeRows.push({ name, value }); });
   content.append(table(["Section", "Captured data"], runtimeRows.slice(0, 100), (item) => [human(item.name), compactJson(item.value).slice(0, 4000)]));
-  const controls = node("div", "notice", "This completed run used deterministic UMAT stimulation. The ReDroid guest was destroyed after evidence collection; controls are intentionally unavailable once cleanup succeeds."); content.append(controls);
+  if (session?.state !== "ready") { const controls = node("div", "notice", session ? `Interactive session is ${human(session.state)}. Controls are unavailable after cleanup begins.` : "This run did not request an interactive session. The ReDroid guest was destroyed after evidence collection."); content.append(controls); }
   const links = node("div", "actions-row");
   if (workflow.inline_evidence.logcat) { const item = link("Open logcat", workflow.inline_evidence.logcat, "btn btn-small"); item.removeEventListener("click", navigateEvent); item.target = "_blank"; links.append(item); }
   if (workflow.inline_evidence["frida-logs"]) { const item = link("Open Frida logs", workflow.inline_evidence["frida-logs"], "btn btn-small"); item.removeEventListener("click", navigateEvent); item.target = "_blank"; links.append(item); }
   content.append(links);
+}
+
+async function androidCommand(runId, type, payload = {}, timeoutMs = 120000) {
+  const created = await api(`/api/v1/analysis-runs/${runId}/android-commands`, { method: "POST", body: { command_type: type, payload } });
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await api(`/api/v1/analysis-runs/${runId}/android-commands/${created.command_id}`);
+    if (["completed", "failed"].includes(value.state)) {
+      if (value.state === "failed") throw new Error(value.result?.error || `${human(type)} failed`);
+      return value.result || {};
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 350));
+  }
+  throw new Error(`${human(type)} timed out`);
+}
+
+function renderLiveAndroidSession(content, workflow) {
+  const runId = workflow.run.id; const session = workflow.interactive_session;
+  const workspace = node("div", "android-live-grid");
+  const device = node("section", "card card-body android-device-panel");
+  const deviceHead = node("div", "android-panel-head"); append(deviceHead, node("div", ""), node("h3", "card-title", "Live ReDroid device"), badge(session.state), node("span", "mono muted", `Expires ${formatDate(session.expires_at)}`)); device.append(deviceHead);
+  const screenWrap = node("div", "android-live-screen-wrap"); const screen = node("img", "android-live-screen"); screen.alt = "Live Android guest screen"; screen.draggable = false; screenWrap.append(screen); device.append(screenWrap);
+  const keys = node("div", "actions-row android-device-keys");
+  [["Back", 4], ["Home", 3], ["Overview", 187], ["Power", 26]].forEach(([label, keycode]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform("key", { keycode })); keys.append(item); });
+  const textInput = node("input", "android-inline-input"); textInput.placeholder = "Type into focused field"; const sendText = button("Send text", "btn btn-small"); sendText.addEventListener("click", () => perform("text", { text: textInput.value })); append(keys, textInput, sendText); device.append(keys);
+  const statusLine = node("div", "mono android-live-status", "Connecting to guest…"); device.append(statusLine);
+
+  const tools = node("section", "card card-body android-tools-panel"); tools.append(node("h3", "card-title", "Dynamic analysis controls"));
+  const quick = node("div", "android-tool-grid");
+  const quickActions = [
+    ["Screenshot", "screenshot", {}], ["Logcat", "logcat", {}], ["API monitor", "api_monitor", {}],
+    ["Frida logs", "frida_logs", {}], ["Exported activities", "activity_test", { test: "exported" }],
+    ["All activities", "activity_test", { test: "all_activities" }], ["TLS tests", "tls_test", {}],
+    ["Dependencies", "dependencies", {}], ["Set proxy", "proxy", { action: "set" }],
+    ["Collect app data", "app_data", {}],
+    ["Unset proxy", "proxy", { action: "unset" }], ["Install root CA", "root_ca", { action: "install" }],
+    ["Remove root CA", "root_ca", { action: "remove" }],
+  ];
+  quickActions.forEach(([label, type, payload]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform(type, payload, true)); quick.append(item); }); tools.append(quick);
+  const activity = node("div", "android-control-group"); activity.append(node("h4", "", "Launch component or deep link")); const activityInput = node("input"); activityInput.placeholder = session.main_activity || "package/.Activity"; const launch = button("Start activity", "btn btn-small"); launch.addEventListener("click", () => perform("start_activity", { activity: activityInput.value || session.main_activity }, true)); const deepLink = node("input"); deepLink.placeholder = "Application deep link"; const launchLink = button("Open deep link", "btn btn-small"); launchLink.addEventListener("click", () => perform("deeplink", { url: deepLink.value }, true)); append(activity, activityInput, launch, deepLink, launchLink); tools.append(activity);
+  const frida = node("div", "android-control-group"); frida.append(node("h4", "", "Frida instrumentation")); const hooks = node("div", "actions-row"); const hookValues = {}; [["API monitor", "api_monitor"], ["SSL pinning bypass", "ssl_pinning_bypass"], ["Root detection bypass", "root_bypass"], ["Debugger check bypass", "debugger_check_bypass"], ["Clipboard monitor", "clipboard"]].forEach(([label, value]) => { const wrap = node("label", "checkbox-field compact"); const input = node("input"); input.type = "checkbox"; input.checked = value === "api_monitor"; hookValues[value] = input; append(wrap, input, node("span", "", label)); hooks.append(wrap); }); frida.append(hooks); const className = node("input"); className.placeholder = "Class name to enumerate"; const classSearch = node("input"); classSearch.placeholder = "Search loaded classes"; const classTrace = node("input"); classTrace.placeholder = "Class or method trace pattern"; append(frida, className, classSearch, classTrace); const editor = node("textarea", "frida-editor"); editor.rows = 9; editor.placeholder = "Java.perform(function () {\n  // analyst Frida code\n});"; frida.append(editor); const fridaButtons = node("div", "actions-row"); [["Spawn", "spawn"], ["Inject", "session"], ["Processes", "ps"], ["Injected code", "get"]].forEach(([label, action]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform("frida", { action, default_hooks: Object.entries(hookValues).filter(([, input]) => input.checked).map(([value]) => value).join(","), auxiliary_hooks: "", class_name: className.value, class_search: classSearch.value, class_trace: classTrace.value, frida_code: editor.value }, true, 180000)); fridaButtons.append(item); }); frida.append(fridaButtons); tools.append(frida);
+  const files = node("div", "android-control-group"); files.append(node("h4", "", "Application data browser")); const filePath = node("input"); filePath.value = `/data/data/${session.package_name || ""}`; const listFiles = button("List files", "btn btn-small"); listFiles.addEventListener("click", () => perform("list_files", { path: filePath.value }, true)); append(files, filePath, listFiles); tools.append(files);
+  const output = node("pre", "android-command-output", "Operation results appear here."); tools.append(output);
+  const sessionActions = node("div", "actions-row"); const extend = button("Extend 5 minutes", "btn"); extend.addEventListener("click", async () => { try { await api(`/api/v1/analysis-runs/${runId}/android-commands`, { method: "POST", body: { command_type: "extend", payload: {} } }); toast("Session extended within the 30-minute hard limit."); renderAndroidWorkflow(runId, true); } catch (failure) { toast(failure.message, true); } }); const finish = button("Finalize and generate report", "btn btn-danger"); finish.addEventListener("click", async () => { if (!window.confirm("Finalize this session and destroy the Android guest?")) return; await perform("finalize", {}, false); renderAndroidWorkflow(runId, true); }); append(sessionActions, extend, finish); tools.append(sessionActions);
+  workspace.append(device, tools); content.append(workspace);
+
+  let busy = false; let screenTimer = null;
+  async function perform(type, payload, showResult = false, timeout = 120000) {
+    if (busy) { toast("Wait for the current Android operation to finish.", true); return null; }
+    busy = true; statusLine.textContent = `Running ${human(type)}…`;
+    try { const result = await androidCommand(runId, type, payload, timeout); if (result.image_base64) screen.src = `data:image/png;base64,${result.image_base64}`; if (showResult) output.textContent = JSON.stringify(result, null, 2); statusLine.textContent = `${human(type)} completed`; return result; }
+    catch (failure) { statusLine.textContent = failure.message; toast(failure.message, true); return null; }
+    finally { busy = false; }
+  }
+  let pointerStart = null; screen.addEventListener("pointerdown", (event) => { pointerStart = { x: event.clientX, y: event.clientY, at: Date.now() }; screen.setPointerCapture(event.pointerId); }); screen.addEventListener("pointerup", async (event) => { if (!pointerStart) return; const rect = screen.getBoundingClientRect(); const scaleX = screen.naturalWidth / rect.width; const scaleY = screen.naturalHeight / rect.height; const start = { x: Math.round((pointerStart.x - rect.left) * scaleX), y: Math.round((pointerStart.y - rect.top) * scaleY) }; const end = { x: Math.round((event.clientX - rect.left) * scaleX), y: Math.round((event.clientY - rect.top) * scaleY) }; const distance = Math.hypot(end.x - start.x, end.y - start.y); const duration = Date.now() - pointerStart.at; pointerStart = null; if (distance > 30) await perform("swipe", { x1: start.x, y1: start.y, x2: end.x, y2: end.y, duration_ms: Math.max(100, duration) }); else await perform("tap", { x: end.x, y: end.y }); scheduleScreen(); });
+  function scheduleScreen() { if (screenTimer) window.clearTimeout(screenTimer); if (location.pathname !== `/analysis/${runId}/android` || state.androidTab !== "dynamic") return; screenTimer = window.setTimeout(async () => { await perform("screen"); scheduleScreen(); }, 1200); }
+  perform("screen").then(scheduleScreen);
 }
 
 function renderAndroidNetwork(content, workflow) {

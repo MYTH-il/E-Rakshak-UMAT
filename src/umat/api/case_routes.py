@@ -129,6 +129,7 @@ async def create_case(
         default="isolated_simulated"
     ),
     c2_analysis_enabled: bool = Form(default=False),
+    android_interactive: bool = Form(default=False),
     principal: Principal = Depends(current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> CreateCaseResponse:
@@ -219,6 +220,7 @@ async def create_case(
             platform=platform,
             network_mode=network_mode,
             c2_analysis_enabled=c2_analysis_enabled,
+            android_interactive=android_interactive if platform == Platform.ANDROID else False,
             status=RunStatus.AWAITING_CONFIRMATION if duplicates else RunStatus.QUEUED,
         )
         db.add(run)
@@ -258,6 +260,7 @@ async def create_case(
                 "platform": platform.value,
                 "network_mode": network_mode,
                 "c2_analysis_enabled": c2_analysis_enabled,
+                "android_interactive": android_interactive if platform == Platform.ANDROID else False,
             },
         )
         if duplicates:
@@ -321,6 +324,7 @@ def serialize_case(case: Case, report: dict[str, Any] | None = None) -> CaseResp
                 result=r.result.value if r.result else None,
                 network_mode=r.network_mode,
                 c2_analysis_enabled=r.c2_analysis_enabled,
+                android_interactive=r.android_interactive,
                 stages=[
                     StageResponse(
                         id=s.id,
@@ -432,6 +436,7 @@ async def create_run(
         platform=platform,
         network_mode=body.network_mode,
         c2_analysis_enabled=body.c2_analysis_enabled,
+        android_interactive=body.android_interactive if platform == Platform.ANDROID else False,
         status=RunStatus.QUEUED,
         confirmed_at=datetime.now(timezone.utc),
     )
@@ -477,6 +482,7 @@ async def create_run(
             "case_id": str(case.id),
             "network_mode": body.network_mode,
             "c2_analysis_enabled": body.c2_analysis_enabled,
+            "android_interactive": body.android_interactive if platform == Platform.ANDROID else False,
         },
     )
     await db.commit()

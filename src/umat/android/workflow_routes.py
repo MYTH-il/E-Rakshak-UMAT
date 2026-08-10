@@ -3,11 +3,13 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +22,15 @@ from umat.db.models import (
     AnalysisRun,
     AndroidAnalysisMetadata,
     AndroidCapability,
+    AndroidDynamicSession,
     AndroidFinding,
+    AndroidSessionCommand,
     Artifact,
     C2Finding,
     NetworkObservation,
     Platform,
     StaticIOC,
+    utcnow,
 )
 from umat.storage.local import DigestMismatchError
 
@@ -34,6 +39,7 @@ router = APIRouter(prefix="/api/v1/analysis-runs", tags=["android-workflow"])
 _REPORT_MEMBERS = {
     "static": "evidence/mobsf_static_report.json",
     "dynamic": "evidence/mobsf_dynamic_report.json",
+    "scan_logs": "evidence/scan_logs.json",
 }
 _EVIDENCE_MEMBERS = {
     "screenshot": ("evidence/screenshot.png", "image/png"),
@@ -42,6 +48,17 @@ _EVIDENCE_MEMBERS = {
 }
 _MAX_REPORT_BYTES = 16 * 1024 * 1024
 _MAX_INLINE_EVIDENCE_BYTES = 4 * 1024 * 1024
+_COMMANDS = {
+    "screen", "tap", "swipe", "key", "text", "start_activity", "deeplink",
+    "screenshot", "logcat", "frida", "api_monitor", "frida_logs",
+    "activity_test", "tls_test", "proxy", "root_ca", "dependencies",
+    "app_data", "list_files", "read_file", "extend", "finalize",
+}
+
+
+class AndroidCommandRequest(BaseModel):
+    command_type: str = Field(min_length=1, max_length=64)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 async def _android_run(
@@ -94,6 +111,15 @@ def _report(artifact: Artifact | None, kind: str) -> dict[str, Any] | None:
             status.HTTP_409_CONFLICT, "Registered Android report is not valid JSON"
         ) from exc
     return value if isinstance(value, dict) else None
+
+
+def _optional_report(artifact: Artifact | None, kind: str) -> dict[str, Any] | None:
+    try:
+        return _report(artifact, kind)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_404_NOT_FOUND:
+            return None
+        raise
 
 
 def _artifact_row(item: Artifact) -> dict[str, Any]:
@@ -153,6 +179,23 @@ async def android_workflow(
         .unique()
         .all()
     )
+    session = await db.scalar(
+        select(AndroidDynamicSession).where(AndroidDynamicSession.analysis_run_id == run.id)
+    )
+    commands = (
+        list(
+            (
+                await db.scalars(
+                    select(AndroidSessionCommand)
+                    .where(AndroidSessionCommand.session_id == session.id)
+                    .order_by(AndroidSessionCommand.created_at.desc())
+                    .limit(100)
+                )
+            ).all()
+        )
+        if session
+        else []
+    )
     return {
         "schema_version": "1.0",
         "run": {
@@ -162,6 +205,7 @@ async def android_workflow(
             "result": run.result.value if run.result else None,
             "network_mode": run.network_mode,
             "c2_analysis_enabled": run.c2_analysis_enabled,
+            "android_interactive": run.android_interactive,
             "profile": run.android_configuration.profile_snapshot
             if run.android_configuration
             else None,
@@ -192,7 +236,11 @@ async def android_workflow(
             if metadata
             else None
         ),
-        "mobsf": {"static": _report(bundle, "static"), "dynamic": _report(bundle, "dynamic")},
+        "mobsf": {
+            "static": _report(bundle, "static"),
+            "dynamic": _report(bundle, "dynamic"),
+            "scan_logs": _optional_report(bundle, "scan_logs"),
+        },
         "findings": [
             {
                 "phase": item.phase,
@@ -253,6 +301,156 @@ async def android_workflow(
             for name, (member, _) in _EVIDENCE_MEMBERS.items()
             if bundle is not None and _member_exists(bundle, member)
         },
+        "interactive_session": (
+            {
+                "id": str(session.id), "state": session.state,
+                "scan_hash": session.scan_hash, "package_name": session.package_name,
+                "main_activity": session.main_activity, "guest_ip": session.guest_ip,
+                "started_at": session.started_at, "last_seen_at": session.last_seen_at,
+                "expires_at": session.expires_at, "ended_at": session.ended_at,
+                "status_details": session.status_details,
+                "commands": [
+                    {
+                        "id": str(item.id), "type": item.command_type, "state": item.state,
+                        "result": item.result, "created_at": item.created_at,
+                        "completed_at": item.completed_at,
+                    }
+                    for item in commands
+                ],
+            }
+            if session
+            else None
+        ),
+    }
+
+
+def _validate_command(command_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if command_type not in _COMMANDS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "unsupported Android operation")
+    clean: dict[str, Any] = {}
+    if command_type == "tap":
+        clean = {"x": int(payload.get("x", -1)), "y": int(payload.get("y", -1))}
+        if not 0 <= clean["x"] <= 4096 or not 0 <= clean["y"] <= 4096:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "tap coordinates are invalid")
+    elif command_type == "swipe":
+        for name in ("x1", "y1", "x2", "y2"):
+            clean[name] = int(payload.get(name, -1))
+            if not 0 <= clean[name] <= 4096:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "swipe coordinates are invalid")
+        clean["duration_ms"] = min(max(int(payload.get("duration_ms", 300)), 50), 3000)
+    elif command_type == "key":
+        clean = {"keycode": int(payload.get("keycode", 0))}
+        if not 1 <= clean["keycode"] <= 400:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "keycode is invalid")
+    elif command_type == "text":
+        clean = {"text": str(payload.get("text", ""))[:2000]}
+    elif command_type in {"start_activity", "deeplink"}:
+        key = "activity" if command_type == "start_activity" else "url"
+        clean = {key: str(payload.get(key, ""))[:2048]}
+        if not clean[key]:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{key} is required")
+    elif command_type == "activity_test":
+        test = str(payload.get("test", ""))
+        if test not in {"exported", "all_activities"}:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "activity test is invalid")
+        clean = {"test": test}
+    elif command_type in {"proxy", "root_ca"}:
+        action = str(payload.get("action", ""))
+        allowed = {"set", "unset"} if command_type == "proxy" else {"install", "remove"}
+        if action not in allowed:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "operation action is invalid")
+        clean = {"action": action}
+    elif command_type == "frida":
+        action = str(payload.get("action", "spawn"))
+        if action not in {"spawn", "session", "ps", "get"}:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Frida action is invalid")
+        clean = {
+            "action": action,
+            "pid": str(payload.get("pid", ""))[:16],
+            "new_package": str(payload.get("new_package", ""))[:512],
+            "default_hooks": str(payload.get("default_hooks", ""))[:1024],
+            "auxiliary_hooks": str(payload.get("auxiliary_hooks", ""))[:1024],
+            "class_name": str(payload.get("class_name", ""))[:1024],
+            "class_search": str(payload.get("class_search", ""))[:1024],
+            "class_trace": str(payload.get("class_trace", ""))[:1024],
+            "frida_code": str(payload.get("frida_code", ""))[:65536],
+        }
+    elif command_type == "list_files":
+        clean = {"path": str(payload.get("path", "/data/data"))[:1024]}
+    elif command_type == "read_file":
+        clean = {"path": str(payload.get("path", ""))[:1024]}
+        if not clean["path"]:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "file path is required")
+    return clean
+
+
+@router.post("/{run_id}/android-commands", status_code=status.HTTP_202_ACCEPTED)
+async def create_android_command(
+    run_id: UUID,
+    body: AndroidCommandRequest,
+    principal: Principal = Depends(require_roles("analyst", "administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    run = await _android_run(db, principal, run_id)
+    session = await db.scalar(
+        select(AndroidDynamicSession)
+        .where(AndroidDynamicSession.analysis_run_id == run.id)
+        .with_for_update()
+    )
+    if not session or session.state != "ready":
+        raise HTTPException(status.HTTP_409_CONFLICT, "interactive Android session is not ready")
+    payload = _validate_command(body.command_type, body.payload)
+    if body.command_type == "extend":
+        maximum = session.started_at + timedelta(minutes=30)
+        session.expires_at = min(maximum, max(session.expires_at, utcnow()) + timedelta(minutes=5))
+        await append_audit(
+            db, actor_type="user", actor_id=str(principal.user.id),
+            action="android_session.extended", target_type="android_dynamic_session",
+            target_id=str(session.id), payload={"expires_at": session.expires_at.isoformat()},
+        )
+        await db.commit()
+        return {"command_id": None, "state": "completed", "expires_at": session.expires_at}
+    active = await db.scalar(
+        select(AndroidSessionCommand).where(
+            AndroidSessionCommand.session_id == session.id,
+            AndroidSessionCommand.state.in_(["queued", "running"]),
+        ).limit(1)
+    )
+    if active and body.command_type not in {"finalize"}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "another Android operation is still active")
+    command = AndroidSessionCommand(
+        session_id=session.id, requested_by_user_id=principal.user.id,
+        command_type=body.command_type, payload=payload,
+    )
+    db.add(command)
+    await db.flush()
+    await append_audit(
+        db, actor_type="user", actor_id=str(principal.user.id),
+        action="android_session.command_requested", target_type="android_session_command",
+        target_id=str(command.id), payload={"run_id": str(run.id), "command_type": body.command_type},
+    )
+    await db.commit()
+    return {"command_id": str(command.id), "state": command.state}
+
+
+@router.get("/{run_id}/android-commands/{command_id}")
+async def get_android_command(
+    run_id: UUID,
+    command_id: UUID,
+    principal: Principal = Depends(require_roles("analyst", "administrator")),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    run = await _android_run(db, principal, run_id)
+    session = await db.scalar(
+        select(AndroidDynamicSession).where(AndroidDynamicSession.analysis_run_id == run.id)
+    )
+    command = await db.get(AndroidSessionCommand, command_id)
+    if not session or not command or command.session_id != session.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Android operation not found")
+    return {
+        "command_id": str(command.id), "type": command.command_type,
+        "state": command.state, "result": command.result,
+        "created_at": command.created_at, "completed_at": command.completed_at,
     }
 
 

@@ -53,6 +53,13 @@ bridge address, not every host interface. If Docker uses a bridge other than
 `docker0`, supply that bridge's host IPv4 address. MobSF resolves
 `emulator-5554` to `host.docker.internal:5555` inside its container.
 
+Interactive runs are brokered through UMAT. The platform-analysis executor retains the disposable
+ReDroid worker only while an `android_dynamic_sessions` record is ready, polls allowlisted commands
+over its signed lease, and finalizes automatically on cancellation, stage timeout or session expiry.
+The default MobSF compose container name is `android-mobsf-1`; deployments using a different
+project name must set `UMAT_ANDROID_MOBSF_CONTAINER` so Java and Smali exports can be registered as
+UMAT evidence artifacts.
+
 The executor receives no PostgreSQL credentials. The default profile creates a
 run-specific privileged ReDroid container constrained to 4 vCPU/4096 MiB,
 validates the x86_64 guest ABI, proves `/system` writability, captures PCAP in

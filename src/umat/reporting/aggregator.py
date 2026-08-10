@@ -49,6 +49,7 @@ MALICIOUS_KINDS = {
 }
 NEGATIVE_BLOCKING_CAVEATS = {
     "android_api_monitoring_failed",
+    "application_data_collection_failed",
     "analysis_timed_out",
     "c2_analysis_failed",
     "host_telemetry_degraded",

@@ -14,6 +14,8 @@ def test_required_routes_exist() -> None:
         "/api/v1/analysis-runs/{run_id}/cancel", "/api/v1/artifacts/{artifact_id}",
         "/api/v1/analysis-runs/{run_id}/android-workflow",
         "/api/v1/analysis-runs/{run_id}/android-evidence/{evidence_name}",
+        "/api/v1/analysis-runs/{run_id}/android-commands",
+        "/api/v1/analysis-runs/{run_id}/android-commands/{command_id}",
         "/health/live", "/health/ready",
     }
     assert required <= paths
