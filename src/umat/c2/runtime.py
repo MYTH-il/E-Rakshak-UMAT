@@ -280,6 +280,11 @@ class SubprocessC2Runtime:
                     "artifact_id": str(source.artifact_id),
                     "sha256": source.sha256,
                     "source": item.get("source") or "android_network_activity",
+                    "provenance": item.get("provenance") or {},
+                }, {
+                    "artifact_id": str(context.pcap.artifact_id),
+                    "sha256": context.pcap.sha256,
+                    "source": "immutable_guest_pcap",
                 }],
             })
         return normalized

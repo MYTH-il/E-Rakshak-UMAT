@@ -444,8 +444,18 @@ class AndroidExecutor:
             ) from analysis_error
         evidence["pcap"] = pcap
         network_activity = workspace / "network-activity.json"
+        checkpoint_document: dict[str, Any] | None = None
+        checkpoint_path = evidence.get("network_checkpoints")
+        if checkpoint_path and checkpoint_path.is_file():
+            try:
+                loaded = json.loads(checkpoint_path.read_text())
+                if isinstance(loaded, dict):
+                    checkpoint_document = loaded
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                caveats.append("android_network_checkpoint_invalid")
         self._network_summary(
-            pcap, running.guest_ip if running else None, network_activity, dynamic
+            pcap, running.guest_ip if running else None, network_activity, dynamic,
+            checkpoint_document,
         )
         evidence["network_activity"] = network_activity
         dynamic_path: Path | None = None
@@ -500,6 +510,7 @@ class AndroidExecutor:
             ("analyst_session", evidence.get("analyst_session"), "application/json"),
             ("analyst_screenshots", evidence.get("analyst_screenshots"), "application/zip"),
             ("network_activity", evidence.get("network_activity"), "application/json"),
+            ("android_network_checkpoints", evidence.get("network_checkpoints"), "application/json"),
         ):
             if artifact_path and artifact_path.is_file():
                 self._upload(claim, artifact_path, kind, media_type)
@@ -608,10 +619,36 @@ class AndroidExecutor:
         response.raise_for_status()
         completed = 0
         records: list[dict[str, Any]] = []
+        network_checkpoints: list[dict[str, Any]] = []
+        last_checkpoint = 0.0
+
+        def checkpoint(reason: str) -> None:
+            nonlocal last_checkpoint
+            captured_at = datetime.now(timezone.utc).isoformat()
+            try:
+                report = self.mobsf.dynamic_report(scan_hash)
+                domains = report.get("domains") if isinstance(report, dict) else {}
+                urls = report.get("urls") if isinstance(report, dict) else []
+                network_checkpoints.append({
+                    "captured_at": captured_at, "reason": reason, "status": "ok",
+                    "domains": domains if isinstance(domains, dict) else {},
+                    "urls": urls if isinstance(urls, list) else [],
+                })
+            except Exception as exc:
+                network_checkpoints.append({
+                    "captured_at": captured_at, "reason": reason,
+                    "status": "unavailable", "error": str(exc)[:1000],
+                    "domains": {}, "urls": [],
+                })
+            last_checkpoint = time.monotonic()
+
         captures = workspace / "analyst-screenshots"
         captures.mkdir(mode=0o700)
+        checkpoint("interactive_session_ready")
         while True:
             check_stop()
+            if time.monotonic() - last_checkpoint >= 15:
+                checkpoint("periodic")
             poll_path = f"/api/internal/v1/stages/{claim['stage_id']}/android-session/poll"
             poll_deadline = time.monotonic() + 60
             while True:
@@ -627,6 +664,9 @@ class AndroidExecutor:
             value = poll.json()
             command = value.get("command")
             if command:
+                command_type = str(command["type"])
+                if command_type in {"tls_test", "proxy", "root_ca", "finalize"}:
+                    checkpoint(f"before_{command_type}")
                 success = True
                 try:
                     result = self._execute_interactive_command(
@@ -658,12 +698,22 @@ class AndroidExecutor:
                     complete_path, complete_body, claim["lease_token"]
                 )
                 completed_response.raise_for_status()
+                if command_type in {"tls_test", "proxy", "root_ca"}:
+                    checkpoint(f"after_{command_type}")
             if value.get("finalize"):
+                checkpoint("before_finalization")
                 break
             time.sleep(0.35)
         journal = workspace / "analyst-session.json"
         self._json(journal, {"schema_version": "1.0", "commands": records})
-        session_evidence = {"analyst_session": journal}
+        checkpoint_path = workspace / "android-network-checkpoints.json"
+        self._json(checkpoint_path, {
+            "schema_version": "1.0", "scan_hash": scan_hash,
+            "checkpoints": network_checkpoints,
+        })
+        session_evidence = {
+            "analyst_session": journal, "network_checkpoints": checkpoint_path,
+        }
         if any(captures.iterdir()):
             session_evidence["analyst_screenshots"] = Path(
                 shutil.make_archive(str(workspace / "analyst-screenshots"), "zip", captures)
@@ -680,6 +730,7 @@ class AndroidExecutor:
         guest_ip: str | None,
         destination: Path,
         dynamic: dict[str, Any] | None = None,
+        checkpoint_document: dict[str, Any] | None = None,
     ) -> None:
         display_filter = (
             f"ip.src == {guest_ip} && !(mdns) && !(tcp.srcport == 5555)"
@@ -717,8 +768,20 @@ class AndroidExecutor:
             for item in observations
         }
         captured_at = datetime.now(timezone.utc).isoformat()
+        pcap_digest = sha256_file(pcap)
+        proxy_sources: list[tuple[dict[str, Any], str, str]] = []
+        if isinstance(checkpoint_document, dict):
+            checkpoints = checkpoint_document.get("checkpoints") or []
+            for item in checkpoints if isinstance(checkpoints, list) else []:
+                if isinstance(item, dict) and item.get("status") == "ok":
+                    proxy_sources.append((
+                        item, str(item.get("captured_at") or captured_at),
+                        str(item.get("reason") or "periodic"),
+                    ))
         if isinstance(dynamic, dict):
-            domains = dynamic.get("domains") or {}
+            proxy_sources.append((dynamic, captured_at, "final_dynamic_report"))
+        for proxy_report, observed_at, checkpoint_reason in proxy_sources:
+            domains = proxy_report.get("domains") or {}
             if isinstance(domains, dict):
                 for domain, metadata in domains.items():
                     if not isinstance(domain, str) or not domain.strip():
@@ -731,14 +794,19 @@ class AndroidExecutor:
                         continue
                     seen.add(domain_key)
                     observations.append({
-                        "observed_at": captured_at,
+                        "observed_at": observed_at,
                         "destination_ip": address,
                         "destination_port": None,
                         "destination_domain": domain_key[0],
                         "protocol": "https_proxy",
-                        "source": "mobsf_dynamic_proxy",
+                        "source": "mobsf_proxy_checkpoint",
+                        "provenance": {
+                            "transport": "adb_reverse_https_proxy",
+                            "checkpoint_reason": checkpoint_reason,
+                            "pcap_sha256": pcap_digest,
+                        },
                     })
-            urls = dynamic.get("urls") or []
+            urls = proxy_report.get("urls") or []
             for raw in urls if isinstance(urls, list) else []:
                 value = raw if isinstance(raw, str) else raw.get("url") if isinstance(raw, dict) else None
                 if not value:
@@ -752,18 +820,24 @@ class AndroidExecutor:
                     continue
                 seen.add(url_key)
                 observations.append({
-                    "observed_at": captured_at,
+                    "observed_at": observed_at,
                     "destination_ip": None,
                     "destination_port": port,
                     "destination_domain": url_key[0],
                     "protocol": parsed.scheme.lower() or "proxy",
-                    "source": "mobsf_dynamic_proxy",
+                    "source": "mobsf_proxy_checkpoint",
+                    "provenance": {
+                        "transport": "adb_reverse_https_proxy",
+                        "checkpoint_reason": checkpoint_reason,
+                        "pcap_sha256": pcap_digest,
+                    },
                 })
         self._json(destination, {
             "schema_version": "1.0", "guest_ip": guest_ip,
             "capture_size_bytes": pcap.stat().st_size, "observations": observations,
             "parser_status": "ok" if result.returncode == 0 else "partial",
             "parser_error": result.stderr.decode(errors="replace")[:2000] or None,
+            "proxy_checkpoint_count": len(proxy_sources),
         })
 
     def _execute_interactive_command(

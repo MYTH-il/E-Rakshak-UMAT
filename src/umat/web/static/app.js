@@ -9,6 +9,7 @@ const CAVEAT_TEXT = {
   android_dynamic_stop_failed: "The device did not shut down cleanly after the test, so the final part of the recording may be incomplete.",
   android_package_process_not_observed: "The application package was installed, but its process was not running when activation was checked. Runtime conclusions are incomplete.",
   android_runtime_behavior_not_observed: "The application ran, but no package-attributable API activity, data access, or destination was recorded. This is an inconclusive dynamic result, not a clean result.",
+  android_network_checkpoint_invalid: "Saved Android proxy checkpoints could not be read. Direct PCAP evidence remains available, but tunneled HTTPS destinations may be missing.",
   explicit_activity_launch_failed: "An optional request to launch a specific activity failed. The application may still have launched through its normal entry point.",
   application_data_collection_failed: "The application ran, but its private files could not be archived at the end of the session.",
   c2_analysis_failed: "The examination of network traffic failed, even though the rest of the analysis completed. Any servers contacted are not reported here.",

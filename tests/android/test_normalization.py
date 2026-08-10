@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from typing import Any
 from uuid import uuid4
 
@@ -83,3 +85,30 @@ def test_dynamic_quality_accepts_api_monitor_events(tmp_path: Any) -> None:
     )
     assert quality["api_monitor_event_count"] == 1
     assert quality["runtime_behavior_observed"] is True
+
+
+def test_network_summary_merges_proxy_checkpoint_when_final_report_is_empty(
+    tmp_path: Any, monkeypatch: Any,
+) -> None:
+    pcap = tmp_path / "capture.pcap"
+    pcap.write_bytes(b"immutable-pcap")
+    destination = tmp_path / "network.json"
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, b"", b""),
+    )
+    AndroidExecutor._network_summary(  # noqa: SLF001
+        object.__new__(AndroidExecutor), pcap, "172.30.0.2", destination,
+        {"domains": {}, "urls": []},
+        {"checkpoints": [{
+            "status": "ok", "captured_at": "2026-08-10T12:00:00Z",
+            "reason": "before_tls_test",
+            "domains": {"api.example.test": {"geolocation": {"ip": "203.0.113.8"}}},
+            "urls": ["https://api.example.test/path"],
+        }]},
+    )
+    document = json.loads(destination.read_text())
+    assert document["proxy_checkpoint_count"] == 2
+    assert document["observations"][0]["destination_domain"] == "api.example.test"
+    assert document["observations"][0]["source"] == "mobsf_proxy_checkpoint"
+    assert document["observations"][0]["provenance"]["checkpoint_reason"] == "before_tls_test"
