@@ -14,14 +14,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "analysis_runs",
-        sa.Column("network_mode", sa.String(length=32), nullable=True),
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'analysis_runs' AND column_name = 'network_mode'"
+        )
     )
-    # Historic runs executed the C2 workflow and therefore represent the
-    # prior egress-capable behavior. New runs default fail-closed.
-    op.execute("UPDATE analysis_runs SET network_mode = 'real_world_egress'")
-    op.alter_column("analysis_runs", "network_mode", nullable=False)
+    if result.fetchone() is None:
+        op.add_column(
+            "analysis_runs",
+            sa.Column("network_mode", sa.String(length=32), nullable=True),
+        )
+        # Historic runs executed the C2 workflow and therefore represent the
+        # prior egress-capable behavior. New runs default fail-closed.
+        op.execute("UPDATE analysis_runs SET network_mode = 'real_world_egress'")
+        op.alter_column("analysis_runs", "network_mode", nullable=False)
 
 
 def downgrade() -> None:
