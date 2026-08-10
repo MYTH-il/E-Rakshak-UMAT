@@ -24,7 +24,7 @@ const CAVEAT_TEXT = {
   tls_pinning: "The file used encryption we could not read. We can see who it contacted and how often, but not the contents of what was sent."
 };
 
-const state = { session: null, cases: [], pollTimer: null, activeTab: "overview" };
+const state = { session: null, cases: [], pollTimer: null, activeTab: "overview", androidTab: "static" };
 const app = document.querySelector("#app");
 
 function node(tag, className, text) {
@@ -306,6 +306,7 @@ async function renderCase(caseId, preserveTab = false) {
   append(heroCopy, node("div", "eyebrow", report ? "Unified verdict" : "Analysis status"), node("h2", "", report ? human(report.verdict) : human(run?.status || "pending")), node("p", "muted", report?.headline || "Evidence is being collected and normalized. The report will appear after aggregation."));
   const actions = node("div", "actions-row");
   if (report) ["pdf", "json", "csv"].forEach((format) => { const exportButton = button(`Export ${format.toUpperCase()}`, "btn btn-small"); exportButton.addEventListener("click", () => exportReport(caseId, format)); actions.append(exportButton); });
+  if (run?.platform === "android" && state.session.roles.some((role) => ["analyst", "administrator"].includes(role))) actions.append(link("Open Android workflow", `/analysis/${run.id}/android`, "btn btn-small"));
   if (run && !["terminal", "cancelling"].includes(run.status)) { const cancel = button("Cancel run", "btn btn-danger btn-small"); cancel.addEventListener("click", async () => { try { await api(`/api/v1/analysis-runs/${run.id}/cancel`, { method: "POST" }); toast("Cancellation requested."); renderCase(caseId, true); } catch (failure) { toast(failure.message, true); } }); actions.append(cancel); }
   heroCopy.append(actions); append(hero, heroCopy, node("div", "verdict-orb", report ? report.verdict.slice(0, 1).toUpperCase() : "…")); content.append(hero);
 
@@ -398,6 +399,112 @@ function schedulePoll(caseId, runs) {
   state.pollTimer = window.setTimeout(() => renderCase(caseId, true), delay);
 }
 
+function valueItems(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.entries(value).map(([name, details]) => ({ name, details }));
+  return [];
+}
+
+function componentNames(value) {
+  if (Array.isArray(value)) return value.map((item) => typeof item === "string" ? item : item.name || item.value || JSON.stringify(item));
+  if (value && typeof value === "object") return Object.keys(value);
+  return [];
+}
+
+function compactJson(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+async function renderAndroidWorkflow(runId, quiet = false) {
+  let workflow;
+  try { workflow = await api(`/api/v1/analysis-runs/${runId}/android-workflow`); }
+  catch (failure) {
+    if (!quiet) { const content = node("div"); content.append(node("div", "notice notice-error", failure.message)); shell("Android analysis", content); }
+    return;
+  }
+  const run = workflow.run;
+  const metadata = workflow.metadata || {};
+  const staticReport = workflow.mobsf?.static || {};
+  const dynamicReport = workflow.mobsf?.dynamic || {};
+  const content = node("div");
+  const back = link("Back to case", `/cases/${run.case_id}`, "btn btn-ghost btn-small");
+  content.append(pageHead("Android analysis workflow", metadata.app_name || staticReport.app_name || "Android sample", "UMAT-controlled MobSF and ReDroid evidence. Static discovery, runtime observation, and C2 correlation remain explicitly separated.", back));
+
+  const summary = node("section", "card workflow-summary");
+  const copy = node("div");
+  append(copy, node("div", "eyebrow", metadata.package_name || staticReport.package_name || "Package pending"), node("h2", "", metadata.app_name || staticReport.file_name || "Analysis in progress"), node("p", "mono muted", `Run ${run.id}`));
+  const status = node("div", "actions-row"); append(status, badge(run.status), run.result ? badge(run.result) : null, badge(run.network_mode), badge(run.c2_analysis_enabled ? "c2 enabled" : "c2 disabled")); copy.append(status);
+  const metrics = node("div", "workflow-metrics");
+  [[metadata.api_level || run.profile?.api_level || "—", "API level"], [metadata.dynamic_completed ? "Complete" : "Pending", "Dynamic run"], [workflow.findings.length, "Findings"], [workflow.iocs.length, "Static IOCs"]].forEach(([value, label]) => { const item = node("div"); append(item, node("strong", "", value), node("small", "", label)); metrics.append(item); });
+  append(summary, copy, metrics); content.append(summary);
+
+  const track = node("div", "stage-track stage-track-spaced");
+  ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"].filter((kind) => run.c2_analysis_enabled || !kind.startsWith("c2_")).forEach((kind) => { const stageData = run.stages.find((item) => item.stage_type === kind); const stage = node("div", "stage"); append(stage, node("strong", "", human(kind)), node("span", `badge-${stageData?.state || "waiting"}`, human(stageData?.state || "waiting"))); track.append(stage); });
+  content.append(track);
+
+  const tabs = node("div", "tabs");
+  [["static", "Static analysis"], ["dynamic", "Dynamic analysis"], ["network", "Network & C2"], ["artifacts", "Evidence files"]].forEach(([key, label]) => { const tab = button(label, `tab${state.androidTab === key ? " active" : ""}`); tab.addEventListener("click", () => { state.androidTab = key; renderAndroidWorkflow(runId, true); }); tabs.append(tab); });
+  content.append(tabs);
+  if (state.androidTab === "static") renderAndroidStatic(content, workflow, staticReport);
+  else if (state.androidTab === "dynamic") renderAndroidDynamic(content, workflow, dynamicReport);
+  else if (state.androidTab === "network") renderAndroidNetwork(content, workflow);
+  else renderAndroidArtifacts(content, workflow);
+  shell("Android analysis", content);
+  if (run.status !== "terminal") state.pollTimer = window.setTimeout(() => renderAndroidWorkflow(runId, true), 3000);
+}
+
+function renderAndroidStatic(content, workflow, report) {
+  const identity = node("div", "grid grid-4");
+  [[report.package_name || report.package, "Package"], [report.version_name || "—", "Version"], [report.main_activity || "—", "Main activity"], [report.min_sdk || report.min_sdk_version || "—", "Minimum SDK"]].forEach(([value, label]) => { const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "mono", value)); identity.append(card); });
+  content.append(identity, node("h3", "section-title", "Permissions and data access"));
+  content.append(table(["Permission", "Status / details"], valueItems(report.permissions), (item) => [item.name || item.permission || compactJson(item), compactJson(item.details || item.status || item)]));
+  content.append(node("h3", "section-title", "Normalized capabilities"));
+  content.append(table(["Data type", "Evidence", "Confidence", "Source"], workflow.capabilities, (item) => [human(item.data_type), human(item.evidence_level), human(item.confidence), item.source]));
+  const components = node("div", "grid grid-2");
+  [["Activities", report.activities], ["Services", report.services], ["Receivers", report.receivers], ["Providers", report.providers]].forEach(([label, values]) => { const names = componentNames(values); components.append(listCard(`${label} (${names.length})`, names.slice(0, 100).map((name) => ({ name })), (item) => [item.name, null])); });
+  content.append(node("h3", "section-title", "Application components"), components, node("h3", "section-title", "Security findings"));
+  content.append(table(["Finding", "Phase", "Category", "Severity", "Evidence"], workflow.findings, (item) => [item.summary, item.phase, human(item.category), human(item.severity || "unrated"), human(item.evidence_level)]));
+  content.append(node("h3", "section-title", "Static indicators"));
+  content.append(table(["Type", "Value", "Confidence", "Traffic"], workflow.iocs, (item) => [item.type, item.value, human(item.confidence), item.seen_in_traffic ? "Observed" : "Not observed"]));
+}
+
+function renderAndroidDynamic(content, workflow, report) {
+  const stimulation = workflow.metadata?.stimulation || {};
+  const status = node("div", "grid grid-4");
+  [[workflow.metadata?.dynamic_completed ? "Complete" : "Pending", "MobSF dynamic report"], [`${stimulation.actions_completed || 0}/${stimulation.actions_attempted || stimulation.actions_total || "?"}`, "Stimulation actions"], [stimulation.complete ? "Complete" : "Incomplete", "Stimulation coverage"], [workflow.metadata?.guest_ip || "Destroyed after run", "Guest lifecycle"]].forEach(([value, label]) => { const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "", value)); status.append(card); });
+  content.append(status);
+  if (workflow.inline_evidence.screenshot) { const screenCard = node("section", "card card-body android-screen-card"); append(screenCard, node("h3", "card-title", "Final guest screenshot")); const image = node("img", "android-screen"); image.src = workflow.inline_evidence.screenshot; image.alt = "Final captured Android guest screen"; screenCard.append(image); content.append(node("h3", "section-title", "Captured device"), screenCard); }
+  content.append(node("h3", "section-title", "Runtime observations"));
+  const runtimeRows = [];
+  Object.entries(report).forEach(([name, value]) => { if (["domains", "urls", "traffic", "http_tools", "screenshots"].includes(name) || Array.isArray(value)) runtimeRows.push({ name, value }); });
+  content.append(table(["Section", "Captured data"], runtimeRows.slice(0, 100), (item) => [human(item.name), compactJson(item.value).slice(0, 4000)]));
+  const controls = node("div", "notice", "This completed run used deterministic UMAT stimulation. The ReDroid guest was destroyed after evidence collection; controls are intentionally unavailable once cleanup succeeds."); content.append(controls);
+  const links = node("div", "actions-row");
+  if (workflow.inline_evidence.logcat) { const item = link("Open logcat", workflow.inline_evidence.logcat, "btn btn-small"); item.removeEventListener("click", navigateEvent); item.target = "_blank"; links.append(item); }
+  if (workflow.inline_evidence["frida-logs"]) { const item = link("Open Frida logs", workflow.inline_evidence["frida-logs"], "btn btn-small"); item.removeEventListener("click", navigateEvent); item.target = "_blank"; links.append(item); }
+  content.append(links);
+}
+
+function renderAndroidNetwork(content, workflow) {
+  const mode = node("div", `notice${workflow.run.network_mode === "real_world_egress" ? " notice-warn" : ""}`, workflow.run.network_mode === "isolated_simulated" ? "This run used the isolated/simulated malware-safe baseline. C2 analysis inspected captured connection attempts without granting unrestricted Internet access." : "This run requested real-world egress. Treat all resulting destinations and responses as potentially hostile.");
+  content.append(mode, node("h3", "section-title", "Observed network destinations"));
+  content.append(table(["Time", "Domain", "IP", "Port", "Protocol"], workflow.network_observations, (item) => [formatDate(item.observed_at), item.destination_domain || "—", item.destination_ip || "—", item.destination_port || "—", item.protocol || "—"]));
+  content.append(node("h3", "section-title", "C2 analyzer findings"));
+  content.append(table(["Finding", "Kind", "Confidence", "Limitation"], workflow.c2_findings, (item) => [item.summary, human(item.kind), human(item.confidence), item.capped_by_caveat ? CAVEAT_TEXT[item.capped_by_caveat] || human(item.capped_by_caveat) : "—"]));
+  content.append(node("h3", "section-title", "Static destinations (not necessarily contacted)"));
+  content.append(table(["Type", "Value", "Confidence", "Observed"], workflow.iocs.filter((item) => ["domain", "ip", "url"].includes(item.type)), (item) => [item.type, item.value, human(item.confidence), item.seen_in_traffic ? "Yes" : "No"]));
+}
+
+function renderAndroidArtifacts(content, workflow) {
+  content.append(node("div", "notice", "Downloads remain access-controlled, integrity-verified, and audit-logged by UMAT."));
+  const list = node("div", "case-list");
+  workflow.artifacts.forEach((item) => { const row = node("div", "card case-row"); const identity = node("div"); append(identity, node("h3", "", human(item.kind)), node("div", "mono muted", item.sha256)); const download = link("Download", item.download_path, "btn btn-small"); download.removeEventListener("click", navigateEvent); append(row, identity, node("div", "", formatBytes(item.size_bytes)), badge(item.access_tier), download); list.append(row); });
+  if (!workflow.artifacts.length) list.append(node("div", "card empty", "No evidence files are currently available."));
+  content.append(node("h3", "section-title", "Registered evidence"), list);
+}
+
 async function renderWindowsAdmin() {
   if (!state.session.roles.includes("administrator")) { go("/cases"); return; }
   const content = node("div");
@@ -451,6 +558,8 @@ async function renderRoute() {
   if (path === "/submit") return renderSubmit();
   if (path === "/admin/windows") return renderWindowsAdmin();
   if (path === "/admin/android") return renderAndroidAdmin();
+  const androidMatch = path.match(/^\/analysis\/([0-9a-f-]+)\/android$/i);
+  if (androidMatch) return renderAndroidWorkflow(androidMatch[1]);
   const match = path.match(/^\/cases\/([0-9a-f-]+)$/i);
   if (match) return renderCase(match[1]);
   go("/cases");

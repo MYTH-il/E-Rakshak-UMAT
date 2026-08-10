@@ -17,6 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from umat import __version__
 from umat.android.profile_routes import router as android_profile_router
+from umat.android.workflow_routes import router as android_workflow_router
 from umat.api.artifact_routes import router as artifact_router
 from umat.api.auth_routes import router as auth_router
 from umat.api.case_routes import router as case_router
@@ -59,6 +60,7 @@ def create_app() -> FastAPI:
     application.include_router(report_router)
     application.include_router(windows_profile_router)
     application.include_router(android_profile_router)
+    application.include_router(android_workflow_router)
 
     web_root = Path(__file__).parents[1] / "web"
     application.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
@@ -108,10 +110,13 @@ def create_app() -> FastAPI:
     @application.get("/cases", include_in_schema=False)
     @application.get("/submit", include_in_schema=False)
     @application.get("/cases/{case_id}", include_in_schema=False)
+    @application.get("/analysis/{run_id}/android", include_in_schema=False)
     @application.get("/admin/windows", include_in_schema=False)
     @application.get("/admin/android", include_in_schema=False)
-    async def web_application(case_id: str | None = None) -> FileResponse:
-        del case_id
+    async def web_application(
+        case_id: str | None = None, run_id: str | None = None
+    ) -> FileResponse:
+        del case_id, run_id
         return FileResponse(
             web_root / "index.html",
             media_type="text/html",

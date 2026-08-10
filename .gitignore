@@ -13,3 +13,4 @@
 /ACTUAL_MALWARE/
 /var/
 *.egg-info/
+*.webm
