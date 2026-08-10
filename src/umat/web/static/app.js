@@ -581,13 +581,51 @@ function renderOverview(content, report, run) {
   }
   const grid = node("div", "grid grid-2");
   grid.append(listCard("Information accessed", report.information_accessed, (item) => [human(item.data_type), `${human(item.evidence_level)} · ${human(item.confidence)}`]));
-  grid.append(listCard("Destinations and protocols", report.destinations, (item) => [item.value, `${item.protocol || "unknown"}${item.port ? ` · port ${item.port}` : ""}`]));
+  grid.append(destinationsCard(report.destinations));
   content.append(grid);
   content.append(node("h3", "section-title", "Important provenance"), listCard(null, report.provenance, (item) => [item.statement, [human(item.item_type), item.destination].filter(Boolean).join(" · ")]));
   content.append(node("h3", "section-title", "Analysis limitations"));
   if (report.caveats.length) content.append(listCard(null, report.caveats.map((value) => ({ value })), (item) => [CAVEAT_TEXT[item.value] || human(item.value), human(item.value)]));
   else content.append(node("div", "notice", "No material analysis limitations were recorded."));
   if (report.tested_profile) content.append(node("h3", "section-title", "Tested OS profile"), listCard(null, [report.tested_profile], (item) => [item.name || item.windows_version || "Windows profile", `${item.windows_version || ""} · ${item.vcpus || "?"} vCPU · ${item.ram_mb ? formatBytes(item.ram_mb * 1024 * 1024) : "RAM unknown"}`]));
+}
+
+// "185.199.110.153 · tcp · port 443" tells an officer nothing. Country, network
+// operator and an independent intel hit are what make a destination actionable.
+function destinationDetail(item) {
+  const parts = [];
+  if (item.protocol) parts.push(item.protocol);
+  if (item.port) parts.push(`port ${item.port}`);
+  if (item.geo_country) parts.push(`server in ${item.geo_country}`);
+  if (item.asn_org) parts.push(`operated by ${item.asn_org}`);
+  else if (item.asn) parts.push(`network ${item.asn}`);
+  if (item.observation_count > 1) parts.push(`${item.observation_count} connections`);
+  return parts.join(" · ") || "no further detail recorded";
+}
+
+function destinationsCard(destinations) {
+  const card = node("section", "card card-body");
+  card.append(node("h3", "card-title", "Destinations contacted"));
+  const list = node("ul", "data-list");
+  if (!destinations?.length) list.append(node("li", "empty", "No outbound destinations were recorded."));
+  (destinations || []).forEach((item) => {
+    const row = node("li", `data-item${item.known_bad ? " data-item-alert" : ""}`);
+    const copy = node("div");
+    append(copy, node("strong", "", item.value), node("small", "", destinationDetail(item)));
+    if (item.known_bad) {
+      const reason = item.reputation_note
+        ? `Known malicious: ${item.reputation_note}`
+        : "Listed on threat intelligence as malicious.";
+      append(copy, node("small", "alert-text", item.reputation_source
+        ? `${reason} (source: ${item.reputation_source})`
+        : reason));
+    }
+    row.append(copy);
+    if (item.known_bad) row.append(badge("known bad"));
+    list.append(row);
+  });
+  card.append(list);
+  return card;
 }
 
 function listCard(title, items, mapper) {
