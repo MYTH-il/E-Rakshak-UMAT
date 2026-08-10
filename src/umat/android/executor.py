@@ -542,7 +542,8 @@ class AndroidExecutor:
                 success = True
                 try:
                     result = self._execute_interactive_command(
-                        avd, scan_hash, body.get("package_name"), command["type"], command["payload"]
+                        avd, scan_hash, body.get("package_name"), static,
+                        command["type"], command["payload"]
                     )
                     completed += 1
                 except Exception as exc:
@@ -572,6 +573,7 @@ class AndroidExecutor:
         avd: RedroidManager,
         scan_hash: str,
         package_name: str | None,
+        static_report: dict[str, Any],
         command_type: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
@@ -608,7 +610,17 @@ class AndroidExecutor:
             data["frida_action"] = data.pop("action")
             return self.mobsf.android_operation("frida", scan_hash, data)
         elif command_type == "activity_test":
-            return self.mobsf.android_operation("activity", scan_hash, payload)
+            if payload.get("test") == "exported":
+                counts = static_report.get("exported_count") or {}
+                exported = static_report.get("exported_activities")
+                if counts.get("exported_activities") == 0 or exported in {None, "[]"}:
+                    return {
+                        "status": "ok", "activities_tested": 0,
+                        "message": "No exported activities were identified in the APK.",
+                    }
+            activity_result = self.mobsf.android_operation("activity", scan_hash, payload)
+            activity_result["image_base64"] = base64.b64encode(avd.screenshot()).decode()
+            return activity_result
         elif command_type == "tls_test":
             return self.mobsf.android_operation("tls_tests", scan_hash)
         elif command_type == "proxy":

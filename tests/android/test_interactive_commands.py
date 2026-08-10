@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
+from umat.android.executor import AndroidExecutor
 from umat.android.workflow_routes import _validate_command
 
 
@@ -30,3 +31,20 @@ def test_interactive_command_validation_rejects_unallowlisted_operations(
 ) -> None:
     with pytest.raises(HTTPException):
         _validate_command(command, payload)
+
+
+def test_exported_activity_test_normalizes_empty_static_result() -> None:
+    executor = object.__new__(AndroidExecutor)
+    result = executor._execute_interactive_command(  # noqa: SLF001
+        None,  # type: ignore[arg-type]
+        "a" * 32,
+        "com.example.test",
+        {"exported_count": {"exported_activities": 0}, "exported_activities": "[]"},
+        "activity_test",
+        {"test": "exported"},
+    )
+    assert result == {
+        "status": "ok",
+        "activities_tested": 0,
+        "message": "No exported activities were identified in the APK.",
+    }
