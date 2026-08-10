@@ -28,7 +28,21 @@ const CAVEAT_TEXT = {
   tls_pinning: "The file used encryption we could not read. We can see who it contacted and how often, but not the contents of what was sent."
 };
 
-const state = { session: null, cases: [], pollTimer: null, activeTab: "overview", androidTab: "static", androidLiveCleanup: null };
+const state = {
+  session: null, cases: [], pollTimer: null, activeTab: "overview",
+  caseFilter: { query: "", status: "", platform: "", verdict: "" },
+  activeRunId: null, androidTab: "static", androidLiveCleanup: null
+};
+
+// --- role helpers ---------------------------------------------------------
+// The API already filters responses by role; the UI must additionally avoid
+// showing controls a role cannot use, so an officer is never presented an
+// action that will fail.
+function hasRole(role) { return Boolean(state.session && state.session.roles.includes(role)); }
+function isAdmin() { return hasRole("administrator"); }
+function isAnalyst() { return hasRole("analyst") || isAdmin(); }
+function canSubmit() { return isAnalyst() || hasRole("officer"); }
+function canControlRuns() { return isAnalyst(); }
 const app = document.querySelector("#app");
 
 function node(tag, className, text) {
@@ -212,27 +226,90 @@ function field(label, type, name, required = false) {
   return { wrap, input };
 }
 
+function selectField(label, name, options, value) {
+  const wrap = node("div", "field");
+  const labelNode = node("label", "", label); labelNode.htmlFor = `filter-${name}`;
+  const select = node("select"); select.name = name; select.id = `filter-${name}`;
+  options.forEach(([text, val]) => { const option = node("option", "", text); option.value = val; select.append(option); });
+  select.value = value || "";
+  append(wrap, labelNode, select);
+  return { wrap, select };
+}
+
+function matchesFilter(item) {
+  const f = state.caseFilter;
+  if (f.status && (item.latest_status || "") !== f.status) return false;
+  if (f.platform && (item.latest_platform || "") !== f.platform) return false;
+  if (f.verdict && (item.latest_verdict || "") !== f.verdict) return false;
+  if (f.query) {
+    const hay = [item.title, item.reference, item.case_id, item.latest_headline]
+      .filter(Boolean).join(" ").toLowerCase();
+    if (!hay.includes(f.query.toLowerCase())) return false;
+  }
+  return true;
+}
+
 async function renderCases() {
   const content = node("div");
-  content.append(pageHead("Investigation workspace", "Case queue", "Track submissions, analysis progress, and finalized verdicts.", null));
-  try { state.cases = await api("/api/v1/cases"); } catch (failure) { content.append(node("div", "notice notice-error", failure.message)); shell("Case queue", content); return; }
+  content.append(pageHead("Investigation workspace", "Case queue",
+    "Search, filter and open cases. Each case can hold several analysis runs.", null));
+  try { state.cases = await api("/api/v1/cases"); }
+  catch (failure) { content.append(node("div", "notice notice-error", failure.message)); shell("Case queue", content); return; }
+
   const terminal = state.cases.filter((item) => item.latest_status === "terminal").length;
-  const suspicious = state.cases.filter((item) => ["malicious", "suspicious"].includes(item.latest_verdict)).length;
+  const attention = state.cases.filter((item) => ["malicious", "suspicious"].includes(item.latest_verdict)).length;
   const stats = node("div", "grid grid-3");
-  [[state.cases.length, "Accessible cases"], [state.cases.length - terminal, "Active analyses"], [suspicious, "Require review"]].forEach(([value, label]) => {
-    const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "", value)); stats.append(card);
-  });
-  content.append(stats, node("h3", "section-title", "Recent cases"));
+  [[state.cases.length, "Accessible cases"], [state.cases.length - terminal, "Active analyses"], [attention, "Require review"]]
+    .forEach(([value, label]) => { const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "", value)); stats.append(card); });
+  content.append(stats);
+
+  // --- filter bar --------------------------------------------------------
+  const filters = node("section", "card card-body");
+  const bar = node("div", "field-grid");
+  const search = field("Search title, reference, ID or headline", "search", "case-search");
+  search.input.value = state.caseFilter.query;
+  search.wrap.classList.add("full");
+  const uniq = (key) => [...new Set(state.cases.map((c) => c[key]).filter(Boolean))].sort();
+  const statusSel = selectField("Status", "status", [["Any status", ""], ...uniq("latest_status").map((v) => [human(v), v])], state.caseFilter.status);
+  const platformSel = selectField("Platform", "platform", [["Any platform", ""], ...uniq("latest_platform").map((v) => [human(v), v])], state.caseFilter.platform);
+  const verdictSel = selectField("Verdict", "verdict", [["Any verdict", ""], ...uniq("latest_verdict").map((v) => [human(v), v])], state.caseFilter.verdict);
+  append(bar, search.wrap, statusSel.wrap, platformSel.wrap, verdictSel.wrap);
+  filters.append(bar);
+  content.append(filters);
+
+  const heading = node("h3", "section-title", "Cases");
   const list = node("div", "case-list");
-  if (!state.cases.length) list.append(node("div", "card empty", "No cases yet. Start a new analysis to populate the queue."));
-  state.cases.forEach((item) => {
-    const row = link("", `/cases/${item.case_id}`, "card case-row");
-    const identity = node("div");
-    append(identity, node("h3", "", item.title || "Untitled case"), node("div", "mono muted", item.reference || item.case_id));
-    append(row, identity, node("div", "", human(item.latest_platform || "pending")), node("div", "muted", formatDate(item.created_at)), badge(item.latest_verdict || item.latest_status || "pending"));
-    list.append(row);
+  content.append(heading, list);
+
+  function paint() {
+    const rows = state.cases.filter(matchesFilter);
+    heading.textContent = rows.length === state.cases.length
+      ? `Cases (${rows.length})`
+      : `Cases (${rows.length} of ${state.cases.length})`;
+    list.replaceChildren();
+    if (!state.cases.length) { list.append(node("div", "card empty", "No cases yet. Start a new analysis to populate the queue.")); return; }
+    if (!rows.length) { list.append(node("div", "card empty", "No cases match the current filters.")); return; }
+    rows.forEach((item) => {
+      const row = link("", `/cases/${item.case_id}`, "card case-row");
+      const identity = node("div");
+      append(identity,
+        node("h3", "", item.title || "Untitled case"),
+        node("div", "mono muted", item.reference || item.case_id),
+        item.latest_headline ? node("small", "muted", item.latest_headline) : null);
+      append(row, identity,
+        node("div", "", human(item.latest_platform || "pending")),
+        node("div", "muted", formatDate(item.created_at)),
+        badge(item.latest_status || "pending"),
+        badge(item.latest_verdict || "pending"));
+      list.append(row);
+    });
+  }
+  search.input.addEventListener("input", () => { state.caseFilter.query = search.input.value; paint(); });
+  [["status", statusSel], ["platform", platformSel], ["verdict", verdictSel]].forEach(([key, control]) => {
+    control.select.addEventListener("change", () => { state.caseFilter[key] = control.select.value; paint(); });
   });
-  content.append(list); shell("Case queue", content);
+  paint();
+  shell("Case queue", content);
 }
 
 async function renderSubmit() {
@@ -289,58 +366,276 @@ async function renderSubmit() {
   card.append(form); content.append(card); shell("New analysis", content);
 }
 
+// A finished run with no report is a failure, not progress. Saying "the report
+// will appear after aggregation" under a terminal run sends the reader away to
+// wait for something that is never coming.
+function statusExplanation(run) {
+  if (!run) return "No analysis run exists for this case yet.";
+  if (run.status === "terminal") {
+    const failed = (run.stages || []).filter((item) => item.state === "failed");
+    if (failed.length) {
+      const first = failed[0];
+      return `This run finished without producing a report. The ${human(first.stage_type)} stage failed`
+        + (first.failure_code ? ` (${first.failure_code})` : "")
+        + ". Open Run progress for the full diagnostics.";
+    }
+    if (run.result === "cancelled") return "This run was cancelled before a report was produced.";
+    return "This run finished without producing a report. Open Run progress to see how far it got.";
+  }
+  if (run.status === "awaiting_confirmation") return "This run is waiting for confirmation before any analysis starts.";
+  if (run.status === "cancelling") return "Cancellation has been requested; the run is stopping.";
+  return "Evidence is being collected and normalized. The report will appear after aggregation.";
+}
+
 function latestRun(caseData) {
-  return [...caseData.analysis_runs].sort((a, b) => String(b.id).localeCompare(String(a.id)))[0] || null;
+  return caseData.analysis_runs?.[caseData.analysis_runs.length - 1] || null;
+}
+
+function activeRun(caseData) {
+  if (state.activeRunId) {
+    const match = caseData.analysis_runs?.find((run) => run.id === state.activeRunId);
+    if (match) return match;
+  }
+  return latestRun(caseData);
+}
+
+// A case may hold several runs — reruns, other profiles, other samples. The
+// officer must be able to tell which run produced the report they are reading.
+function runSelector(caseData, run, onPick) {
+  const runs = caseData.analysis_runs || [];
+  if (runs.length < 2) return null;
+  const wrap = node("section", "card card-body");
+  append(wrap, node("h3", "card-title", `Analysis runs (${runs.length})`),
+    node("p", "muted", "This case contains more than one run. Select which run's report to display."));
+  const listing = node("div", "case-list");
+  runs.forEach((item, index) => {
+    const isActive = item.id === run?.id;
+    const row = node("div", `card case-row${isActive ? " active" : ""}`);
+    const copy = node("div");
+    const profile = item.windows_profile?.display_name || item.android_profile?.display_name || "default profile";
+    append(copy,
+      node("h3", "", `Run ${index + 1} · ${human(item.platform)}`),
+      node("div", "mono muted", `${profile} · ${human(item.network_mode)} · C2 ${item.c2_analysis_enabled ? "on" : "off"}`),
+      node("div", "mono muted", item.id));
+    const pick = button(isActive ? "Showing" : "Show report", "btn btn-small");
+    pick.disabled = isActive;
+    pick.addEventListener("click", () => onPick(item.id));
+    append(row, copy, badge(item.status), item.result ? badge(item.result) : null, pick);
+    listing.append(row);
+  });
+  wrap.append(listing);
+  return wrap;
+}
+
+// Re-run an existing sample without creating a duplicate case.
+function rerunCard(caseData, run) {
+  if (!canControlRuns()) return null;
+  const submissions = caseData.submissions || [];
+  if (!submissions.length) return null;
+  const card = node("section", "card card-body");
+  append(card, node("h3", "card-title", "Run this sample again"),
+    node("p", "muted", "Creates an additional run on this case rather than a duplicate case."));
+  const form = node("form");
+  const grid = node("div", "field-grid");
+
+  const sampleWrap = node("div", "field full");
+  const sampleLabel = node("label", "", "Sample");
+  const sample = node("select"); sample.name = "submission_id";
+  submissions.forEach((item) => {
+    const option = node("option", "", `${item.original_filename} · ${item.sample_sha256.slice(0, 16)}`);
+    option.value = item.id; sample.append(option);
+  });
+  append(sampleWrap, sampleLabel, sample);
+
+  const networkWrap = node("div", "field");
+  const networkLabel = node("label", "", "Analysis network");
+  const network = node("select"); network.name = "network_mode";
+  [["Isolated / simulated (recommended)", "isolated_simulated"],
+   ["Real-world egress (not containment-qualified)", "real_world_egress"]]
+    .forEach(([label, value]) => { const option = node("option", "", label); option.value = value; network.append(option); });
+  network.value = run?.network_mode || "isolated_simulated";
+  append(networkWrap, networkLabel, network);
+
+  const c2Wrap = node("label", "field checkbox-field");
+  const c2 = node("input"); c2.type = "checkbox"; c2.name = "c2_analysis_enabled";
+  c2.checked = Boolean(run?.c2_analysis_enabled);
+  append(c2Wrap, c2, node("span", "", "Run the C2 network analyzer"));
+
+  append(grid, sampleWrap, networkWrap, c2Wrap);
+  const submit = button("Queue additional run", "btn btn-primary"); submit.type = "submit";
+  append(form, grid, append(node("div", "form-actions"), submit));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); submit.disabled = true;
+    try {
+      const body = {
+        submission_id: sample.value,
+        network_mode: network.value,
+        c2_analysis_enabled: c2.checked
+      };
+      if (run?.windows_profile?.id) body.windows_profile_id = run.windows_profile.id;
+      if (run?.android_profile?.id) body.android_profile_id = run.android_profile.id;
+      const result = await api(`/api/v1/cases/${caseData.case_id}/analysis-runs`, { method: "POST", body });
+      toast("Additional run queued.");
+      state.activeRunId = result.analysis_run_id;
+      renderCase(caseData.case_id, true);
+    } catch (failure) { toast(failure.message, true); }
+    finally { submit.disabled = false; }
+  });
+  card.append(form);
+  return card;
 }
 
 async function renderCase(caseId, preserveTab = false) {
   if (!preserveTab) state.activeTab = "overview";
   const content = node("div");
   let caseData;
-  try { caseData = await api(`/api/v1/cases/${caseId}`); } catch (failure) { content.append(node("div", "notice notice-error", failure.message)); shell("Case", content); return; }
-  const run = latestRun(caseData);
-  const report = caseData.report;
-  content.append(pageHead("Case investigation", caseData.title || "Untitled case", `${caseData.reference || caseData.case_id} · received ${formatDate(caseData.created_at)}`, null));
+  try { caseData = await api(`/api/v1/cases/${caseId}`); }
+  catch (failure) { content.append(node("div", "notice notice-error", failure.message)); shell("Case", content); return; }
+  const run = activeRun(caseData);
+
+  // The case response carries the latest report; for any other run, fetch that
+  // run's snapshot so the displayed verdict always matches the selected run.
+  let report = caseData.report;
+  if (run && state.activeRunId && run.id !== latestRun(caseData)?.id) {
+    try { report = (await api(`/api/v1/cases/${caseId}/report?run_id=${run.id}`)).report; }
+    catch (_) { report = null; }
+  }
+
+  content.append(pageHead("Case investigation", caseData.title || "Untitled case",
+    `${caseData.reference || caseData.case_id} · received ${formatDate(caseData.created_at)}`, null));
+
   if (run && run.status === "awaiting_confirmation") {
     const warning = node("div", "notice notice-warn");
     const confirm = button("Confirm new analysis", "btn btn-primary btn-small");
-    confirm.addEventListener("click", async () => { try { await api(`/api/v1/analysis-runs/${run.id}/confirm`, { method: "POST" }); toast("Analysis confirmed and queued."); renderCase(caseId, true); } catch (failure) { toast(failure.message, true); } });
-    append(warning, node("strong", "", "Duplicate sample detected. "), node("span", "", "No analysis stage will start until you confirm this run. "), confirm);
+    confirm.disabled = !canControlRuns();
+    confirm.addEventListener("click", async () => {
+      try { await api(`/api/v1/analysis-runs/${run.id}/confirm`, { method: "POST" }); toast("Analysis confirmed and queued."); renderCase(caseId, true); }
+      catch (failure) { toast(failure.message, true); }
+    });
+    append(warning, node("strong", "", "Duplicate sample detected. "),
+      node("span", "", canControlRuns()
+        ? "No analysis stage will start until you confirm this run. "
+        : "An analyst must confirm this run before analysis starts. "), confirm);
     content.append(warning);
   }
+
   const hero = node("section", "card verdict-hero");
   const heroCopy = node("div");
-  append(heroCopy, node("div", "eyebrow", report ? "Unified verdict" : "Analysis status"), node("h2", "", report ? human(report.verdict) : human(run?.status || "pending")), node("p", "muted", report?.headline || "Evidence is being collected and normalized. The report will appear after aggregation."));
+  append(heroCopy,
+    node("div", "eyebrow", report ? "Unified verdict" : "Analysis status"),
+    node("h2", "", report ? human(report.verdict) : human(run?.status || "pending")),
+    node("p", "muted", report?.headline || statusExplanation(run)));
   const actions = node("div", "actions-row");
-  if (report) ["pdf", "json", "csv"].forEach((format) => { const exportButton = button(`Export ${format.toUpperCase()}`, "btn btn-small"); exportButton.addEventListener("click", () => exportReport(caseId, format)); actions.append(exportButton); });
-  if (run?.platform === "android" && state.session.roles.some((role) => ["analyst", "administrator"].includes(role))) actions.append(link("Open Android workflow", `/analysis/${run.id}/android`, "btn btn-small"));
-  if (run && !["terminal", "cancelling"].includes(run.status)) { const cancel = button("Cancel run", "btn btn-danger btn-small"); cancel.addEventListener("click", async () => { try { await api(`/api/v1/analysis-runs/${run.id}/cancel`, { method: "POST" }); toast("Cancellation requested."); renderCase(caseId, true); } catch (failure) { toast(failure.message, true); } }); actions.append(cancel); }
-  heroCopy.append(actions); append(hero, heroCopy, node("div", "verdict-orb", report ? report.verdict.slice(0, 1).toUpperCase() : "…")); content.append(hero);
+  if (report) ["pdf", "json", "csv"].forEach((format) => {
+    const exportButton = button(`Export ${format.toUpperCase()}`, "btn btn-small");
+    exportButton.addEventListener("click", () => exportReport(caseId, format));
+    actions.append(exportButton);
+  });
+  if (run?.platform === "android" && canControlRuns()) {
+    actions.append(link("Open Android workflow", `/analysis/${run.id}/android`, "btn btn-small"));
+  }
+  if (run && !["terminal", "cancelling"].includes(run.status) && canControlRuns()) {
+    const cancel = button("Cancel run", "btn btn-danger btn-small");
+    cancel.addEventListener("click", async () => {
+      try { await api(`/api/v1/analysis-runs/${run.id}/cancel`, { method: "POST" }); toast("Cancellation requested."); renderCase(caseId, true); }
+      catch (failure) { toast(failure.message, true); }
+    });
+    actions.append(cancel);
+  }
+  heroCopy.append(actions);
+  append(hero, heroCopy, node("div", "verdict-orb", report ? report.verdict.slice(0, 1).toUpperCase() : "…"));
+  content.append(hero);
+
+  const selector = runSelector(caseData, run, (id) => { state.activeRunId = id; renderCase(caseId, true); });
+  if (selector) content.append(selector);
 
   const tabs = node("div", "tabs");
   const availableTabs = [["overview", "L1 Overview"], ["progress", "Run progress"], ["evidence", report?.technical ? "L3 Evidence" : "Evidence"]];
   if (report?.technical) availableTabs.splice(1, 0, ["findings", "L2 Findings"]);
-  availableTabs.forEach(([key, label]) => { const tab = button(label, `tab${state.activeTab === key ? " active" : ""}`); tab.addEventListener("click", () => { state.activeTab = key; renderCase(caseId, true); }); tabs.append(tab); });
+  availableTabs.forEach(([key, label]) => {
+    const tab = button(label, `tab${state.activeTab === key ? " active" : ""}`);
+    tab.setAttribute("aria-selected", state.activeTab === key ? "true" : "false");
+    tab.addEventListener("click", () => { state.activeTab = key; renderCase(caseId, true); });
+    tabs.append(tab);
+  });
   content.append(tabs);
   if (state.activeTab === "overview") renderOverview(content, report, run);
   else if (state.activeTab === "findings") renderFindings(content, report);
   else if (state.activeTab === "evidence") renderEvidence(content, report);
-  else renderProgress(content, caseData.analysis_runs);
+  else renderProgress(content, caseData.analysis_runs, caseId);
+
+  if (state.activeTab === "overview") {
+    const rerun = rerunCard(caseData, run);
+    if (rerun) content.append(rerun);
+  }
   shell("Case report", content);
   schedulePoll(caseId, caseData.analysis_runs);
 }
 
 function renderOverview(content, report, run) {
-  if (!report) { content.append(node("div", "card empty", `Current run state: ${human(run?.status || "pending")}. This page refreshes automatically while work is active.`)); return; }
+  if (!report) {
+    const terminal = run?.status === "terminal";
+    const card = node("div", `card ${terminal ? "notice notice-warn" : "empty"}`);
+    append(card,
+      node("strong", "", terminal ? "No report was produced" : `Current run state: ${human(run?.status || "pending")}`),
+      node("p", "", statusExplanation(run)));
+    if (terminal) {
+      const jump = button("Open run progress", "btn btn-small");
+      jump.addEventListener("click", () => { state.activeTab = "progress"; renderCase(run.id ? location.pathname.split("/").pop() : "", true); });
+      card.append(jump);
+    } else {
+      card.append(node("small", "muted", "This page refreshes automatically while work is active."));
+    }
+    content.append(card);
+    return;
+  }
   const grid = node("div", "grid grid-2");
   grid.append(listCard("Information accessed", report.information_accessed, (item) => [human(item.data_type), `${human(item.evidence_level)} · ${human(item.confidence)}`]));
-  grid.append(listCard("Destinations and protocols", report.destinations, (item) => [item.value, `${item.protocol || "unknown"}${item.port ? ` · port ${item.port}` : ""}`]));
+  grid.append(destinationsCard(report.destinations));
   content.append(grid);
   content.append(node("h3", "section-title", "Important provenance"), listCard(null, report.provenance, (item) => [item.statement, [human(item.item_type), item.destination].filter(Boolean).join(" · ")]));
   content.append(node("h3", "section-title", "Analysis limitations"));
   if (report.caveats.length) content.append(listCard(null, report.caveats.map((value) => ({ value })), (item) => [CAVEAT_TEXT[item.value] || human(item.value), human(item.value)]));
   else content.append(node("div", "notice", "No material analysis limitations were recorded."));
   if (report.tested_profile) content.append(node("h3", "section-title", "Tested OS profile"), listCard(null, [report.tested_profile], (item) => [item.name || item.windows_version || "Windows profile", `${item.windows_version || ""} · ${item.vcpus || "?"} vCPU · ${item.ram_mb ? formatBytes(item.ram_mb * 1024 * 1024) : "RAM unknown"}`]));
+}
+
+// "185.199.110.153 · tcp · port 443" tells an officer nothing. Country, network
+// operator and an independent intel hit are what make a destination actionable.
+function destinationDetail(item) {
+  const parts = [];
+  if (item.protocol) parts.push(item.protocol);
+  if (item.port) parts.push(`port ${item.port}`);
+  if (item.geo_country) parts.push(`server in ${item.geo_country}`);
+  if (item.asn_org) parts.push(`operated by ${item.asn_org}`);
+  else if (item.asn) parts.push(`network ${item.asn}`);
+  if (item.observation_count > 1) parts.push(`${item.observation_count} connections`);
+  return parts.join(" · ") || "no further detail recorded";
+}
+
+function destinationsCard(destinations) {
+  const card = node("section", "card card-body");
+  card.append(node("h3", "card-title", "Destinations contacted"));
+  const list = node("ul", "data-list");
+  if (!destinations?.length) list.append(node("li", "empty", "No outbound destinations were recorded."));
+  (destinations || []).forEach((item) => {
+    const row = node("li", `data-item${item.known_bad ? " data-item-alert" : ""}`);
+    const copy = node("div");
+    append(copy, node("strong", "", item.value), node("small", "", destinationDetail(item)));
+    if (item.known_bad) {
+      const reason = item.reputation_note
+        ? `Known malicious: ${item.reputation_note}`
+        : "Listed on threat intelligence as malicious.";
+      append(copy, node("small", "alert-text", item.reputation_source
+        ? `${reason} (source: ${item.reputation_source})`
+        : reason));
+    }
+    row.append(copy);
+    if (item.known_bad) row.append(badge("known bad"));
+    list.append(row);
+  });
+  card.append(list);
+  return card;
 }
 
 function listCard(title, items, mapper) {
@@ -382,14 +677,63 @@ function renderEvidence(content, report) {
   content.append(list);
 }
 
-function renderProgress(content, runs) {
-  [...runs].reverse().forEach((run, index) => {
-    const title = node("h3", "section-title", `${index ? "Earlier" : "Current"} ${human(run.platform)} run`); content.append(title);
-    const card = node("section", "card card-body"); const head = node("div", "actions-row"); append(head, badge(run.status), run.result ? badge(run.result) : null, node("span", "mono muted", run.id)); card.append(head);
+// Diagnostics matter as much as progress: a stalled or failed run must say why
+// and offer the action that resolves it, rather than showing a silent grey box.
+function renderProgress(content, runs, caseId) {
+  const ordered = [...runs].reverse();
+  ordered.forEach((run, index) => {
+    content.append(node("h3", "section-title", `${index ? "Earlier" : "Current"} ${human(run.platform)} run`));
+    const card = node("section", "card card-body");
+    const head = node("div", "actions-row");
+    append(head, badge(run.status), run.result ? badge(run.result) : null,
+      node("span", "mono muted", run.id));
+    if (!["terminal", "cancelling"].includes(run.status) && canControlRuns() && caseId) {
+      const cancel = button("Cancel", "btn btn-danger btn-small");
+      cancel.addEventListener("click", async () => {
+        try { await api(`/api/v1/analysis-runs/${run.id}/cancel`, { method: "POST" }); toast("Cancellation requested."); renderCase(caseId, true); }
+        catch (failure) { toast(failure.message, true); }
+      });
+      head.append(cancel);
+    }
+    card.append(head);
+
+    const policy = node("div", "mono muted",
+      `network ${human(run.network_mode)} · C2 analyzer ${run.c2_analysis_enabled ? "enabled" : "disabled"}` +
+      (run.windows_profile?.display_name ? ` · ${run.windows_profile.display_name}` : "") +
+      (run.android_profile?.display_name ? ` · ${run.android_profile.display_name}` : ""));
+    card.append(policy);
+
+    const order = run.c2_analysis_enabled
+      ? ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"]
+      : ["platform_analysis", "platform_adaptation", "case_aggregation", "report_generation"];
     const track = node("div", "stage-track stage-track-spaced");
-    const order = run.c2_analysis_enabled ? ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"] : ["platform_analysis", "platform_adaptation", "case_aggregation", "report_generation"];
-    order.forEach((kind) => { const stageData = run.stages.find((item) => item.stage_type === kind); const stage = node("div", "stage"); append(stage, node("strong", "", human(kind)), node("span", `badge-${stageData?.state || "waiting"}`, human(stageData?.state || "waiting"))); track.append(stage); });
-    card.append(track); content.append(card);
+    order.forEach((kind) => {
+      const stageData = run.stages.find((item) => item.stage_type === kind);
+      const stage = node("div", "stage");
+      append(stage, node("strong", "", human(kind)),
+        node("span", `badge-${stageData?.state || "waiting"}`, human(stageData?.state || "waiting")));
+      track.append(stage);
+    });
+    card.append(track);
+
+    // Surface every failure reason the API gives us. A run that failed with no
+    // visible cause is the single most common support question.
+    const failures = run.stages.filter((item) => item.failure_code || item.failure_detail);
+    if (failures.length) {
+      card.append(node("h4", "card-title", "Diagnostics"));
+      const table = node("div", "case-list");
+      failures.forEach((item) => {
+        const row = node("div", "card case-row");
+        const copy = node("div");
+        append(copy, node("h3", "", human(item.stage_type)),
+          node("div", "mono muted", item.failure_code || "no code reported"),
+          item.failure_detail ? node("small", "muted", item.failure_detail) : null);
+        append(row, copy, badge(item.state));
+        table.append(row);
+      });
+      card.append(table);
+    }
+    content.append(card);
   });
 }
 
@@ -664,7 +1008,7 @@ async function renderAndroidAdmin() {
   async function load() {
     const items = await api("/api/v1/android/profiles?include_inactive=true"); list.replaceChildren();
     if (!items.length) list.append(node("div", "card empty", "No Android profiles configured."));
-    items.forEach((item) => { const row = node("div", "card case-row"); const copy = node("div"); append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · Android ${item.android_version} / API ${item.api_level} · ${item.architecture} · ${item.vcpus} vCPU · ${item.ram_mb} MiB`), node("div", "mono muted", item.system_image)); const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = item.state !== "active" || item.is_default; remove.title = item.is_default ? "Select another default before retiring this profile" : "Retire profile"; remove.addEventListener("click", async () => { try { await api(`/api/v1/android/profiles/${item.id}`, { method: "DELETE" }); toast("Android profile retired; existing run snapshots are preserved."); load(); } catch (failure) { toast(failure.message, true); } }); append(row, copy, node("div", "", item.is_default ? "Default" : human(item.qualification?.status || "candidate")), badge(item.state), remove); list.append(row); });
+    items.forEach((item) => { const row = node("div", "card case-row"); const copy = node("div"); append(copy, node("h3", "", item.display_name), node("div", "mono muted", `${item.name} · Android ${item.android_version} / API ${item.api_level} · ${item.architecture} · ${item.vcpus} vCPU · ${item.ram_mb} MiB`), node("div", "mono muted", item.system_image)); const remove = button("Retire", "btn btn-danger btn-small"); remove.disabled = item.state !== "active" || item.is_default; remove.title = item.is_default ? "Select another default before retiring this profile" : "Retire profile"; remove.addEventListener("click", async () => { try { await api(`/api/v1/android/profiles/${item.id}`, { method: "DELETE" }); toast("Android profile retired; existing run snapshots are preserved."); load(); } catch (failure) { toast(failure.message, true); } }); const qualify = button("Qualify", "btn btn-small"); qualify.disabled = item.state !== "active" || item.qualification?.status === "qualified"; qualify.title = "Record a completed evidence run that qualifies this profile"; qualify.addEventListener("click", async () => { const runId = window.prompt("Evidence analysis run ID that qualifies this profile:"); if (!runId) return; try { await api(`/api/v1/android/profiles/${item.id}/qualify`, { method: "POST", body: { evidence_run_id: runId.trim() } }); toast("Profile qualified against the supplied evidence run."); load(); } catch (failure) { toast(failure.message, true); } }); append(row, copy, node("div", "", item.is_default ? "Default" : human(item.qualification?.status || "candidate")), badge(item.state), qualify, remove); list.append(row); });
   }
   form.addEventListener("submit", async (event) => { event.preventDefault(); const redroid = runtime.value === "redroid"; try { await api("/api/v1/android/profiles", { method: "POST", body: { name: name.input.value, display_name: display.input.value, system_image: redroid ? "docker.io/redroid/redroid@sha256:d1ca0815eb68139a43d25a835e374559e9d18f5d5cea1a4288d4657c0074fb8d" : "system-images;android-30;default;x86_64", emulator_version: redroid ? "redroid-11-d1ca0815" : "34.1.19", is_default: isDefault.checked } }); toast("Android candidate profile created."); form.reset(); load(); } catch (failure) { toast(failure.message, true); } });
   try { await load(); } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }

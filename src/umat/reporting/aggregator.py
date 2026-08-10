@@ -498,20 +498,58 @@ class CaseAggregator:
 
     @staticmethod
     def _destinations(observations: list[NetworkObservation]) -> list[dict[str, Any]]:
+        """Destinations with the attribution the C2 module already produced.
+
+        The adapter stores the whole normalized event in NetworkObservation.details,
+        so geo/ASN/reputation are already persisted — they were simply never read
+        here. Without them an officer sees a bare address and port; with them the
+        report can say which country, which network operator, and whether the
+        destination is independently known to be malicious.
+
+        Enrichment is merged across observations for the same destination: a
+        destination seen several times may only carry attribution on one of them.
+        """
         grouped: dict[tuple[str, int | None], dict[str, Any]] = {}
         for item in observations:
             value = item.destination_domain or item.destination_ip
             if not value:
                 continue
             key = (value, item.destination_port)
-            grouped[key] = {
-                "value": value,
-                "ip": item.destination_ip,
-                "domain": item.destination_domain,
-                "port": item.destination_port,
-                "protocol": item.protocol,
-                "first_observed_at": _iso(item.observed_at),
-            }
+            detail = item.details if isinstance(item.details, dict) else {}
+            existing = grouped.get(key)
+            if existing is None:
+                existing = {
+                    "value": value,
+                    "ip": item.destination_ip,
+                    "domain": item.destination_domain,
+                    "port": item.destination_port,
+                    "protocol": item.protocol,
+                    "first_observed_at": _iso(item.observed_at),
+                    "geo_country": None,
+                    "asn": None,
+                    "asn_org": None,
+                    "reputation_score": None,
+                    "reputation_note": None,
+                    "reputation_source": None,
+                    "observation_count": 0,
+                }
+                grouped[key] = existing
+            existing["observation_count"] += 1
+            # keep the earliest sighting, and the first non-empty attribution
+            if _iso(item.observed_at) < existing["first_observed_at"]:
+                existing["first_observed_at"] = _iso(item.observed_at)
+            for field in ("geo_country", "asn", "asn_org", "reputation_note", "reputation_source"):
+                if existing[field] in (None, "") and detail.get(field) not in (None, ""):
+                    existing[field] = detail[field]
+            score = detail.get("reputation_score")
+            if isinstance(score, (int, float)):
+                current = existing["reputation_score"]
+                if current is None or score > current:
+                    existing["reputation_score"] = float(score)
+        for entry in grouped.values():
+            # A destination is "known bad" only on an independent intel hit, not
+            # on behaviour. Behaviour is already carried by the finding tier.
+            entry["known_bad"] = bool(entry["reputation_score"]) and entry["reputation_score"] > 0
         return sorted(grouped.values(), key=lambda item: (str(item["value"]), item["port"] or 0))
 
     @staticmethod
