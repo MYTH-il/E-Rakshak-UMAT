@@ -14,6 +14,13 @@ def test_interactive_command_validation_normalizes_safe_inputs() -> None:
     }
     assert _validate_command("proxy", {"action": "set"}) == {"action": "set"}
     assert _validate_command("text", {"text": "x" * 3000}) == {"text": "x" * 2000}
+    frida = _validate_command("frida", {
+        "action": "session",
+        "default_hooks": "root_bypass,api_monitor",
+        "auxiliary_hooks": "string_catch,string_compare",
+    })
+    assert frida["default_hooks"] == "api_monitor,root_bypass"
+    assert frida["auxiliary_hooks"] == "string_catch,string_compare"
 
 
 @pytest.mark.parametrize(
@@ -24,6 +31,8 @@ def test_interactive_command_validation_normalizes_safe_inputs() -> None:
         ("activity_test", {"test": "arbitrary"}),
         ("root_ca", {"action": "replace"}),
         ("frida", {"action": "shell"}),
+        ("frida", {"action": "session", "default_hooks": "arbitrary_hook"}),
+        ("frida", {"action": "session", "auxiliary_hooks": "trace_class"}),
     ],
 )
 def test_interactive_command_validation_rejects_unallowlisted_operations(

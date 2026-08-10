@@ -366,17 +366,41 @@ def _validate_command(command_type: str, payload: dict[str, Any]) -> dict[str, A
         action = str(payload.get("action", "spawn"))
         if action not in {"spawn", "session", "ps", "get"}:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Frida action is invalid")
+        default_allowlist = {
+            "api_monitor", "ssl_pinning_bypass", "root_bypass",
+            "debugger_check_bypass", "dump_clipboard",
+        }
+        auxiliary_allowlist = {
+            "enum_class", "enum_methods", "search_class", "trace_class",
+            "string_catch", "string_compare", "get_dependencies",
+        }
+        default_hooks = {
+            value.strip() for value in str(payload.get("default_hooks", "")).split(",")
+            if value.strip()
+        }
+        auxiliary_hooks = {
+            value.strip() for value in str(payload.get("auxiliary_hooks", "")).split(",")
+            if value.strip()
+        }
+        if not default_hooks <= default_allowlist or not auxiliary_hooks <= auxiliary_allowlist:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Frida hook selection is invalid")
         clean = {
             "action": action,
             "pid": str(payload.get("pid", ""))[:16],
             "new_package": str(payload.get("new_package", ""))[:512],
-            "default_hooks": str(payload.get("default_hooks", ""))[:1024],
-            "auxiliary_hooks": str(payload.get("auxiliary_hooks", ""))[:1024],
+            "default_hooks": ",".join(sorted(default_hooks)),
+            "auxiliary_hooks": ",".join(sorted(auxiliary_hooks)),
             "class_name": str(payload.get("class_name", ""))[:1024],
             "class_search": str(payload.get("class_search", ""))[:1024],
             "class_trace": str(payload.get("class_trace", ""))[:1024],
             "frida_code": str(payload.get("frida_code", ""))[:65536],
         }
+        if "enum_methods" in auxiliary_hooks and not clean["class_name"]:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Class name is required")
+        if "search_class" in auxiliary_hooks and not clean["class_search"]:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Class search is required")
+        if "trace_class" in auxiliary_hooks and not clean["class_trace"]:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Class trace is required")
     elif command_type == "list_files":
         clean = {"path": str(payload.get("path", "/data/data"))[:1024]}
     elif command_type == "read_file":

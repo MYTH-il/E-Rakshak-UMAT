@@ -830,7 +830,22 @@ class AndroidExecutor:
         elif command_type == "frida":
             data = dict(payload)
             data["frida_action"] = data.pop("action")
-            return self.mobsf.android_operation("frida", scan_hash, data)
+            if data["frida_action"] == "session" and package_name:
+                process_ids = avd.package_process_ids(package_name)
+                if not process_ids:
+                    raise RuntimeError("analyzed package process is not running")
+                data["pid"] = process_ids[0]
+                data["new_package"] = package_name
+            frida_result = self.mobsf.android_operation("frida", scan_hash, data)
+            if frida_result.get("status") == "failed":
+                raise RuntimeError(str(frida_result.get("message") or "Frida operation failed"))
+            return frida_result | {
+                "selected_default_hooks": data.get("default_hooks", "").split(",")
+                if data.get("default_hooks") else [],
+                "selected_auxiliary_hooks": data.get("auxiliary_hooks", "").split(",")
+                if data.get("auxiliary_hooks") else [],
+                "attached_pid": data.get("pid") or None,
+            }
         elif command_type == "activity_test":
             if payload.get("test") == "exported":
                 counts = static_report.get("exported_count") or {}

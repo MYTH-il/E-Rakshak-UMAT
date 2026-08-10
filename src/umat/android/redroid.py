@@ -365,6 +365,12 @@ class RedroidManager:
         output = self._adb("-s", self.adb_address, "logcat", "-d", "-t", str(lines), check=False)
         return output.stdout.decode(errors="replace")[-262144:]
 
+    def package_process_ids(self, package_name: str) -> list[str]:
+        output = self._adb(
+            "-s", self.adb_address, "shell", "pidof", package_name, check=False
+        )
+        return [value for value in output.stdout.decode(errors="replace").split() if value.isdigit()]
+
     def list_app_files(self, package_name: str, path: str) -> list[dict[str, Any]]:
         root = f"/data/data/{package_name}"
         requested = path.rstrip("/") or root
