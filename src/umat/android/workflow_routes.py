@@ -237,8 +237,10 @@ async def android_workflow(
             else None
         ),
         "mobsf": {
-            "static": _report(bundle, "static"),
-            "dynamic": _report(bundle, "dynamic"),
+            # Partial and failed runs legitimately omit one or both MobSF reports.
+            # Keep the analyst workflow available for the evidence that survived.
+            "static": _optional_report(bundle, "static"),
+            "dynamic": _optional_report(bundle, "dynamic"),
             "scan_logs": _optional_report(bundle, "scan_logs"),
         },
         "findings": [
