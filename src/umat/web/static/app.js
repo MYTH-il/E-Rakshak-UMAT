@@ -480,9 +480,18 @@ function renderAndroidStatic(content, workflow, report) {
 
 function renderAndroidDynamic(content, workflow, report) {
   const stimulation = workflow.metadata?.stimulation || {};
+  const terminal = workflow.run.status === "terminal";
+  const sessionEnded = ["ended", "expired", "cancelled"].includes(workflow.interactive_session?.state);
+  const dynamicState = workflow.metadata?.dynamic_completed ? "Complete" : terminal ? "Unavailable" : "Pending";
+  const actionState = stimulation.actions_attempted || stimulation.actions_total
+    ? `${stimulation.actions_completed || 0}/${stimulation.actions_attempted || stimulation.actions_total}`
+    : terminal ? "Not recorded" : "0/?";
+  const coverageState = stimulation.complete ? "Complete" : terminal ? "Unavailable" : "Incomplete";
+  const guestState = sessionEnded || terminal ? "Guest destroyed" : workflow.metadata?.guest_ip || "Starting";
   const status = node("div", "grid grid-4");
-  [[workflow.metadata?.dynamic_completed ? "Complete" : "Pending", "MobSF dynamic report"], [`${stimulation.actions_completed || 0}/${stimulation.actions_attempted || stimulation.actions_total || "?"}`, "Stimulation actions"], [stimulation.complete ? "Complete" : "Incomplete", "Stimulation coverage"], [workflow.metadata?.guest_ip || "Destroyed after run", "Guest lifecycle"]].forEach(([value, label]) => { const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "", value)); status.append(card); });
+  [[dynamicState, "MobSF dynamic report"], [actionState, "Stimulation actions"], [coverageState, "Stimulation coverage"], [guestState, "Guest lifecycle"]].forEach(([value, label]) => { const card = node("div", "card metric"); append(card, node("small", "", label), node("strong", "", value)); status.append(card); });
   content.append(status);
+  if (terminal && !workflow.metadata?.dynamic_completed) content.append(node("div", "notice notice-warn", "This run ended without a MobSF dynamic report. Static findings and surviving evidence remain available, but runtime behavior must not be interpreted as complete."));
   const session = workflow.interactive_session;
   if (session?.state === "ready") renderLiveAndroidSession(content, workflow);
   else if (workflow.inline_evidence.screenshot) { const screenCard = node("section", "card card-body android-screen-card"); append(screenCard, node("h3", "card-title", "Final guest screenshot")); const image = node("img", "android-screen"); image.src = workflow.inline_evidence.screenshot; image.alt = "Final captured Android guest screen"; screenCard.append(image); content.append(node("h3", "section-title", "Captured device"), screenCard); }

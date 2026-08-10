@@ -249,16 +249,20 @@ class AndroidExecutor:
         failures: list[Exception] = []
 
         def renew() -> None:
+            outage_started: float | None = None
             while not stopped.wait(15):
                 try:
                     self._heartbeat(claim, common)
+                    outage_started = None
                 except ExecutorStopRequested as stop:
                     stop_reasons.append(stop.reason)
                     stop_requested.set()
                     return
                 except Exception as exc:
-                    failures.append(exc)
-                    return
+                    outage_started = outage_started or time.monotonic()
+                    if time.monotonic() - outage_started >= 60:
+                        failures.append(exc)
+                        return
 
         self._heartbeat(claim, common)
         thread = threading.Thread(target=renew, name="umat-android-lease-heartbeat", daemon=True)
@@ -521,7 +525,16 @@ class AndroidExecutor:
         while True:
             check_stop()
             poll_path = f"/api/internal/v1/stages/{claim['stage_id']}/android-session/poll"
-            poll = self.mutate(poll_path, common, claim["lease_token"])
+            poll_deadline = time.monotonic() + 60
+            while True:
+                try:
+                    poll = self.mutate(poll_path, common, claim["lease_token"])
+                    break
+                except httpx.TransportError:
+                    check_stop()
+                    if time.monotonic() >= poll_deadline:
+                        raise
+                    time.sleep(1)
             poll.raise_for_status()
             value = poll.json()
             command = value.get("command")
