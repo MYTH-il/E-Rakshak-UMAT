@@ -149,6 +149,9 @@ ip route show table 51820 default
 ```
 
 Do not weaken the broker to use `eth0`, `wlan0`, Docker's default bridge or the host's main route.
+The [AWS sacrificial egress gateway runbook](aws-egress-gateway.md) describes a reproducible remote
+gateway, recording resolver, evidence controls, benign qualification, and complete teardown for
+this exact host-side contract.
 
 Platform adaptation is independent of both network mode and C2 policy. CAPE/MobSF findings are
 always normalized into the UMAT report. When C2 is disabled, aggregation consumes platform

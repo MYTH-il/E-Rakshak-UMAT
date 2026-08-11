@@ -109,7 +109,9 @@ Use `http://127.0.0.1:8080` for the current UMAT console. Create a case, upload 
 a Windows or Android run. `isolated_simulated` is the qualified default. Offline C2 analysis is an
 independent policy and may be enabled without allowing Internet egress. Real-world egress must
 remain disabled until the dedicated, recorded sacrificial egress tier in
-[the network architecture](../../docs/network-architecture.md) exists.
+[the network architecture](../../docs/network-architecture.md) exists. Provision and qualify that
+tier with the [AWS egress gateway runbook](../../docs/aws-egress-gateway.md); do not substitute the
+workstation's ordinary route or an unrecorded VPN.
 
 CAPE's configured analysis timeout covers guest detonation, not the complete platform stage. VM
 startup, dump extraction, Vivisect, YARA, signatures, WinST/DT finalization, evidence download, and

@@ -50,9 +50,9 @@ As of 2026-08-11:
 
 - Ruff passes for `src` and `tests`.
 - Strict mypy passes for the application source tree.
-- The default offline suite passes: **111 passed, 9 skipped**. The skipped tests require explicitly
+- The default offline suite passes: **113 passed, 9 skipped**. The skipped tests require explicitly
   configured disposable PostgreSQL integration/migration databases.
-- The CI-equivalent database-backed suite passes with **119 passed, 0 skipped** against disposable
+- The CI-equivalent database-backed suite passes with **122 passed, 0 skipped** against disposable
   PostgreSQL 18.4 databases, including migration downgrade/re-upgrade tests. CI also runs four
   Playwright workflow groups covering authentication, intake, duplicate confirmation,
   reruns, retries, cancellation, case editing, in-case submission, run diagnosis, worker inventory,
@@ -95,6 +95,10 @@ Windows, Android, and C2 executors are installed as isolated systemd services on
 on `127.0.0.1:8080`; CAPE retains port 8000 and the gateway uses `127.0.0.1:8091`. The Windows
 executor environments contain no PostgreSQL credential. New runs default to isolated/simulated
 networking; see the [network architecture and real-egress target](docs/network-architecture.md).
+Operators reproducing the sacrificial gateway should follow the
+[AWS egress gateway runbook](docs/aws-egress-gateway.md); it documents the exact local contract,
+AWS resources, qualification checks, emergency stop, and teardown sequence without embedding
+deployment secrets.
 
 ## Known implementation and promotion gaps
 
@@ -266,6 +270,7 @@ systemctl status umat-windows-executor umat-c2-executor umat-android-executor
 - [Full-stack deployment](deployment/full-stack/README.md)
 - [Phase 2 shared C2](docs/phase2-c2.md)
 - [Malware analysis network architecture](docs/network-architecture.md)
+- [AWS sacrificial egress gateway runbook](docs/aws-egress-gateway.md)
 - [Phase 3 Windows/CAPE](docs/phase3-windows.md)
 - [Phase 4 unified UI and reports](docs/phase4-unified-ui.md)
 - [Phase 5 Android/MobSF](deployment/android/README.md)
