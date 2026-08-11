@@ -335,7 +335,7 @@ def run(
     ),
     work_root: Path = typer.Option(Path("var/c2-work"), envvar="UMAT_C2_WORK_ROOT"),
     runtime_root: Path | None = typer.Option(None, envvar="UMAT_C2_RUNTIME_ROOT"),
-    runtime_commit: str = typer.Option("f3e89cc54d368259eb8dc2bf895260b90dbb504a"),
+    runtime_commit: str = typer.Option("478f131de510ad580754f152d946086b3aeacf05"),
     runtime_patch_sha256: str = typer.Option(
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     ),

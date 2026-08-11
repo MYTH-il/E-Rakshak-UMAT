@@ -57,11 +57,11 @@
       "name": "C2 Exfil analyzer",
       "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
       "lock_file": "dependency-locks/c2-exfil.json",
-      "commit": "f3e89cc54d368259eb8dc2bf895260b90dbb504a",
+      "commit": "478f131de510ad580754f152d946086b3aeacf05",
       "license": null,
       "license_evidence": "No explicit upstream license file recorded",
       "redistribution_allowed": false,
-      "runtime_status": "schema_v1_3_f3e89cc_runtime_validated_authorization_required"
+      "runtime_status": "schema_v1_3_478f131_runtime_validated_authorization_required"
     }
   ]
 }

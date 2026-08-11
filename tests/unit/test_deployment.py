@@ -220,6 +220,16 @@ def test_c2_installers_enforce_every_locked_runtime_identity_field() -> None:
     ):
         assert value in runtime_installer
     assert c2["effective_version"] in service_installer
+    validation = c2["validation"]
+    expected_result = (
+        f"{validation['upstream_tests_passed']} passed, "
+        f"{validation['upstream_tests_skipped']} skipped"
+    )
+    assert expected_result in runtime_installer
+    assert (
+        f'"upstream_tests_collected": {validation["upstream_tests_collected"]}'
+        in runtime_installer
+    )
 
 
 def test_android_runtime_installer_enforces_locked_emulator_and_license() -> None:

@@ -143,7 +143,7 @@ ReadWritePaths=/var/lib/umat/executors/${executor_name} /var/lib/umat/${executor
 WantedBy=multi-user.target
 EOF
   if [[ "$executor_name" == "c2" ]]; then
-    sed -i '/ReadWritePaths=/i ReadOnlyPaths=/srv/winstdt/libexec/c2-exfil/f3e89cc-umat.1' "$executor_unit"
+    sed -i '/ReadWritePaths=/i ReadOnlyPaths=/srv/winstdt/libexec/c2-exfil/478f131-umat.1' "$executor_unit"
   else
     sed -i '/ReadWritePaths=/i SupplementaryGroups=kvm docker' "$executor_unit"
   fi
@@ -201,7 +201,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     'UMAT_EXECUTOR_URL=http://127.0.0.1:8080' \
     'UMAT_C2_STATE_PATH=/var/lib/umat/executors/c2/state.json' \
     'UMAT_C2_WORK_ROOT=/var/lib/umat/c2-work' \
-    'UMAT_C2_RUNTIME_ROOT=/srv/winstdt/libexec/c2-exfil/f3e89cc-umat.1' \
+    'UMAT_C2_RUNTIME_ROOT=/srv/winstdt/libexec/c2-exfil/478f131-umat.1' \
     'UMAT_C2_EXECUTOR_NAME=c2-executor' >"$c2_env"
   mobsf_api_key="$(sudo -n awk -F= '$1 == "MOBSF_API_KEY" {print substr($0, index($0, "=") + 1)}' "$ENV_FILE")"
   [[ -n "$mobsf_api_key" ]] || { echo 'MOBSF_API_KEY is missing' >&2; exit 1; }

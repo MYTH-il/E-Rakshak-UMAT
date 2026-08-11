@@ -14,9 +14,11 @@ Implemented and verified:
   credential revocation.
 - Fresh migration, downgrade/re-upgrade, role-seed, append-only audit, and custody-FK tests.
 - Immutable WinST schema worktree at commit `7bc74765e9d38d7ba6df3f2115db67761cb4cbd8`.
-- C2 execution pinned to effective runtime `f3e89cc-umat.1` and an empty patch-series digest
+- C2 execution pinned to effective runtime `478f131-umat.1` and an empty patch-series digest
   `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
-  The newer repository schema v1.3 is used only as the normalized contract reference.
+  The unchanged schema-v1.3 boundary is the normalized contract reference. The promoted runtime
+  suppresses URL-feed false positives for shared hosts, rolls tunnel subdomains into their claimed
+  parent, keeps HTTP destination domains correctly typed, and hashes large captures in chunks.
 - Android PCAP-only execution through the effective C2 runtime, followed by signed schema-v1.3
   result-bundle verification. The PCAP-only shim cannot load host-access evidence.
 
