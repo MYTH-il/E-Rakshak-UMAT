@@ -27,7 +27,7 @@ def test_egress_lease_schema_rejects_unbounded_ttl() -> None:
 
 
 def test_unprovisioned_egress_manager_is_fail_closed(tmp_path: Path) -> None:
-    manager = EgressManager("wg-umat-egress", "10.77.0.53", tmp_path)
+    manager = EgressManager("wg-umat-missing", "10.77.0.53", tmp_path)
     readiness = manager.readiness()
     assert readiness.status == "not_ready"
     assert readiness.checks["uplink_present"] is False
