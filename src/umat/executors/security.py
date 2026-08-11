@@ -23,10 +23,16 @@ async def current_executor(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "executor credential required")
     credential = await db.scalar(
-        select(ExecutorCredential).where(ExecutorCredential.token_hash == token_hash(authorization[7:]))
+        select(ExecutorCredential).where(
+            ExecutorCredential.token_hash == token_hash(authorization[7:])
+        )
     )
     now = datetime.now(timezone.utc)
-    if not credential or credential.revoked_at or (credential.expires_at and credential.expires_at <= now):
+    if (
+        not credential
+        or credential.revoked_at
+        or (credential.expires_at and credential.expires_at <= now)
+    ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid executor credential")
     executor = await db.get(Executor, credential.executor_id)
     if not executor or executor.status != ExecutorStatus.ACTIVE:
@@ -45,10 +51,19 @@ def verify_executor_signature(
 ) -> str:
     try:
         observed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if observed.tzinfo is None or abs(datetime.now(timezone.utc) - observed) > timedelta(minutes=5):
+        if observed.tzinfo is None or abs(datetime.now(timezone.utc) - observed) > timedelta(
+            minutes=5
+        ):
             raise ValueError("timestamp outside accepted window")
         decoded = base64.b64decode(signature, validate=True)
-        message = signature_message(method=request.method, path=request.url.path, timestamp=timestamp, nonce=nonce, idempotency_key=idempotency_key, body=body)
+        message = signature_message(
+            method=request.method,
+            path=request.url.path,
+            timestamp=timestamp,
+            nonce=nonce,
+            idempotency_key=idempotency_key,
+            body=body,
+        )
         Ed25519PublicKey.from_public_bytes(executor.public_key).verify(decoded, message)
         import hashlib
 

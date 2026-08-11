@@ -26,9 +26,7 @@ async def process_once(db: AsyncSession) -> bool:
     stage = await db.scalar(
         select(AnalysisStage)
         .where(
-            AnalysisStage.stage_type.in_(
-                [StageType.PLATFORM_ADAPTATION, StageType.C2_ADAPTATION]
-            ),
+            AnalysisStage.stage_type.in_([StageType.PLATFORM_ADAPTATION, StageType.C2_ADAPTATION]),
             AnalysisStage.state == StageState.QUEUED,
         )
         .order_by(AnalysisStage.created_at)

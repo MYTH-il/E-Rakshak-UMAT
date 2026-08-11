@@ -70,7 +70,9 @@ async def verify_audit_chain(db: AsyncSession) -> tuple[bool, int | None]:
             "payload": event.payload,
             "created_at": event.created_at.isoformat(),
         }
-        if event.previous_hash != previous_hash or event.event_hash != calculate_event_hash(previous_hash, fields):
+        if event.previous_hash != previous_hash or event.event_hash != calculate_event_hash(
+            previous_hash, fields
+        ):
             return False, event.sequence
         previous_hash = event.event_hash
     return True, None

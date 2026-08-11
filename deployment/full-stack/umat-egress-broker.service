@@ -1,0 +1,30 @@
+[Unit]
+Description=UMAT fail-closed controlled malware egress broker
+After=network-online.target umat-guest-guard.service
+Requires=umat-guest-guard.service
+Before=umat-android-executor.service umat-windows-executor.service
+
+[Service]
+Type=simple
+User=root
+Group=SERVICE_GROUP_PLACEHOLDER
+UMask=0027
+WorkingDirectory=PROJECT_ROOT_PLACEHOLDER
+EnvironmentFile=/etc/umat/egress-broker.env
+ExecStartPre=/usr/sbin/ip rule add priority 110 from 10.66.0.0/24 lookup 51820
+ExecStartPre=/usr/sbin/ip rule add priority 111 from 172.31.0.0/24 lookup 51820
+ExecStart=PROJECT_ROOT_PLACEHOLDER/.venv/bin/umat-egress-broker
+ExecStopPost=-/usr/sbin/ip rule del priority 110
+ExecStopPost=-/usr/sbin/ip rule del priority 111
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/umat-egress
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_KILL
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_KILL
+
+[Install]
+WantedBy=multi-user.target

@@ -72,9 +72,10 @@ class SubprocessC2Runtime:
             manifest = json.loads(runtime_manifest.read_text())
             observed = str(manifest.get("upstream_commit"))
             self.effective_version = str(manifest.get("effective_version") or observed)
-            if self.expected_patch_sha256 and manifest.get(
-                "patch_series_sha256"
-            ) != self.expected_patch_sha256:
+            if (
+                self.expected_patch_sha256
+                and manifest.get("patch_series_sha256") != self.expected_patch_sha256
+            ):
                 raise C2RuntimeError("C2 runtime patch-series digest mismatch")
             if not manifest.get("effective_tree_sha256") or not manifest.get(
                 "dependency_lock_sha256"
@@ -105,11 +106,7 @@ class SubprocessC2Runtime:
     def _tree_hash(root: Path) -> str:
         lines: list[str] = []
         for path in sorted(root.rglob("*")):
-            if (
-                not path.is_file()
-                or "__pycache__" in path.parts
-                or ".pytest_cache" in path.parts
-            ):
+            if not path.is_file() or "__pycache__" in path.parts or ".pytest_cache" in path.parts:
                 continue
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             lines.append(f"{digest}  {path.relative_to(root)}\n")
@@ -256,37 +253,43 @@ class SubprocessC2Runtime:
             if not isinstance(item, dict):
                 continue
             key = (
-                item.get("destination_domain"), item.get("destination_ip"),
+                item.get("destination_domain"),
+                item.get("destination_ip"),
                 item.get("destination_port"),
             )
             if key in seen or not (key[0] or key[1]):
                 continue
             seen.add(key)
             destination = key[0] or key[1]
-            normalized.append({
-                "timestamp": item.get("observed_at") or context.analysis_started_at.isoformat(),
-                "destination_domain": key[0],
-                "destination_ip": key[1],
-                "destination_port": key[2],
-                "confidence_score": 0.55,
-                "confidence_tier": "weak",
-                "finding_kind": "beacon",
-                "plain_language": (
-                    f"Android runtime telemetry observed a connection to {destination}; "
-                    "this alone does not confirm C2 behavior."
-                ),
-                "capped_by_caveat": "c2_network_only",
-                "evidence_refs": [{
-                    "artifact_id": str(source.artifact_id),
-                    "sha256": source.sha256,
-                    "source": item.get("source") or "android_network_activity",
-                    "provenance": item.get("provenance") or {},
-                }, {
-                    "artifact_id": str(context.pcap.artifact_id),
-                    "sha256": context.pcap.sha256,
-                    "source": "immutable_guest_pcap",
-                }],
-            })
+            normalized.append(
+                {
+                    "timestamp": item.get("observed_at") or context.analysis_started_at.isoformat(),
+                    "destination_domain": key[0],
+                    "destination_ip": key[1],
+                    "destination_port": key[2],
+                    "confidence_score": 0.55,
+                    "confidence_tier": "weak",
+                    "finding_kind": "beacon",
+                    "plain_language": (
+                        f"Android runtime telemetry observed a connection to {destination}; "
+                        "this alone does not confirm C2 behavior."
+                    ),
+                    "capped_by_caveat": "c2_network_only",
+                    "evidence_refs": [
+                        {
+                            "artifact_id": str(source.artifact_id),
+                            "sha256": source.sha256,
+                            "source": item.get("source") or "android_network_activity",
+                            "provenance": item.get("provenance") or {},
+                        },
+                        {
+                            "artifact_id": str(context.pcap.artifact_id),
+                            "sha256": context.pcap.sha256,
+                            "source": "immutable_guest_pcap",
+                        },
+                    ],
+                }
+            )
         return normalized
 
     @staticmethod
@@ -308,9 +311,7 @@ class SubprocessC2Runtime:
             "sample_sha256": context.sample_sha256,
             "family": family,
             "capabilities": raw.get("capa_capabilities") or raw.get("capabilities") or [],
-            "c2_indicators": raw.get("iocs")
-            if "iocs" in raw
-            else raw.get("c2_indicators") or [],
+            "c2_indicators": raw.get("iocs") if "iocs" in raw else raw.get("c2_indicators") or [],
         }
         target = workspace / "static-prior.json"
         target.write_text(json.dumps(normalized, sort_keys=True))
@@ -364,12 +365,28 @@ class SubprocessC2Runtime:
         # Pass honesty gates and identity to the upstream runtime, but never
         # allow bundle-declared filesystem paths to escape UMAT's downloaded inputs.
         allowed = {
-            "schema_version", "session_id", "status", "errors", "sample_sha256",
-            "submitted_at_utc", "detonation_start_utc", "detonation_end_utc",
-            "guest_vm_identity", "network_mode", "static_risk_score",
-            "static_hypotheses", "cape_task_id", "capemon_enabled", "profile",
-            "resolved_options", "capabilities", "correlation", "telemetry",
-            "tool_versions", "artifact_paths", "integrity",
+            "schema_version",
+            "session_id",
+            "status",
+            "errors",
+            "sample_sha256",
+            "submitted_at_utc",
+            "detonation_start_utc",
+            "detonation_end_utc",
+            "guest_vm_identity",
+            "network_mode",
+            "static_risk_score",
+            "static_hypotheses",
+            "cape_task_id",
+            "capemon_enabled",
+            "profile",
+            "resolved_options",
+            "capabilities",
+            "correlation",
+            "telemetry",
+            "tool_versions",
+            "artifact_paths",
+            "integrity",
         }
         sanitized = {key: value for key, value in native.items() if key in allowed}
         correlation = sanitized.get("correlation")

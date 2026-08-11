@@ -44,6 +44,7 @@ from umat.db.models import (
     WindowsRunConfiguration,
     WindowsVMProfile,
 )
+from umat.egress.readiness import require_controlled_egress
 from umat.intake import is_structurally_valid_apk
 from umat.reporting import filter_report_for_roles
 from umat.storage.local import LocalArtifactStore, UploadTooLargeError
@@ -134,6 +135,7 @@ async def create_case(
     db: AsyncSession = Depends(get_db),
 ) -> CreateCaseResponse:
     settings = get_settings()
+    await require_controlled_egress(settings, network_mode)
     artifact_store = store()
     try:
         quarantined = await artifact_store.quarantine_upload(file, settings.max_upload_bytes)
@@ -260,7 +262,9 @@ async def create_case(
                 "platform": platform.value,
                 "network_mode": network_mode,
                 "c2_analysis_enabled": c2_analysis_enabled,
-                "android_interactive": android_interactive if platform == Platform.ANDROID else False,
+                "android_interactive": android_interactive
+                if platform == Platform.ANDROID
+                else False,
             },
         )
         if duplicates:
@@ -422,6 +426,7 @@ async def create_run(
     principal: Principal = Depends(current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> RunActionResponse:
+    await require_controlled_egress(get_settings(), body.network_mode)
     case = await accessible_case(db, principal, case_id)
     submission = await db.get(Submission, body.submission_id)
     if not submission or submission.case_id != case.id:
@@ -482,7 +487,9 @@ async def create_run(
             "case_id": str(case.id),
             "network_mode": body.network_mode,
             "c2_analysis_enabled": body.c2_analysis_enabled,
-            "android_interactive": body.android_interactive if platform == Platform.ANDROID else False,
+            "android_interactive": body.android_interactive
+            if platform == Platform.ANDROID
+            else False,
         },
     )
     await db.commit()

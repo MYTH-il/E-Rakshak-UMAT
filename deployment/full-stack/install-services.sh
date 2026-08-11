@@ -156,10 +156,20 @@ done
 
 if [[ "$EXECUTE" -eq 1 ]]; then
   sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard.nft" /etc/umat/umat-guest-guard.nft
+  sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-egress.modules-load.conf" /etc/modules-load.d/umat-egress.conf
+  sudo -n install -d -m 0755 /usr/libexec/umat
+  sudo -n install -m 0755 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard-compat.sh" /usr/libexec/umat/umat-guest-guard-compat
   sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard.service" "$UNIT_DIR/umat-guest-guard.service"
+  egress_unit="$(mktemp)"
+  sed -e "s|PROJECT_ROOT_PLACEHOLDER|$PROJECT_ROOT|g" \
+      -e "s|SERVICE_GROUP_PLACEHOLDER|$(id -gn "$SERVICE_USER")|g" \
+    "$PROJECT_ROOT/deployment/full-stack/umat-egress-broker.service" >"$egress_unit"
+  sudo -n install -m 0644 "$egress_unit" "$UNIT_DIR/umat-egress-broker.service"
+  rm -f -- "$egress_unit"
   sudo -n install -d -m 0750 -o "$SERVICE_USER" -g "$(id -gn "$SERVICE_USER")" \
     /var/lib/umat /var/lib/umat/quarantine /var/lib/umat/artifacts
   sudo -n install -d -m 0700 -o root -g root /var/lib/umat-cape-profiles
+  sudo -n install -d -m 0750 -o root -g "$(id -gn "$SERVICE_USER")" /var/lib/umat-egress
   sudo -n install -d -m 0700 -o "$SERVICE_USER" -g "$(id -gn "$SERVICE_USER")" \
     /var/lib/umat/executors/windows /var/lib/umat/windows-work \
     /var/lib/umat/executors/c2 /var/lib/umat/c2-work \
@@ -167,7 +177,20 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   executor_group="$(id -gn "$SERVICE_USER")"
   c2_env="$(mktemp)"
   android_env="$(mktemp)"
-  trap 'rm -f -- "$c2_env" "$android_env"' EXIT
+  egress_env="$(mktemp)"
+  trap 'rm -f -- "$c2_env" "$android_env" "$egress_env"' EXIT
+  egress_token=""
+  if sudo -n test -r /etc/umat/egress-broker.env; then
+    egress_token="$(sudo -n awk -F= '$1 == "UMAT_EGRESS_BROKER_TOKEN" {print substr($0, index($0, "=") + 1)}' /etc/umat/egress-broker.env)"
+  fi
+  [[ -n "$egress_token" ]] || egress_token="$(openssl rand -hex 32)"
+  printf '%s\n' \
+    "UMAT_EGRESS_BROKER_TOKEN=$egress_token" \
+    'UMAT_EGRESS_UPLINK=wg-umat-egress' \
+    'UMAT_EGRESS_DNS_RESOLVER=10.77.0.53' \
+    'UMAT_EGRESS_CAPTURE_ROOT=/var/lib/umat-egress' \
+    'UMAT_EGRESS_MAX_BYTES=104857600' >"$egress_env"
+  sudo -n install -o root -g root -m 0600 "$egress_env" /etc/umat/egress-broker.env
   printf '%s\n' \
     'UMAT_EXECUTOR_URL=http://127.0.0.1:8080' \
     'UMAT_C2_STATE_PATH=/var/lib/umat/executors/c2/state.json' \
@@ -188,11 +211,24 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     'UMAT_ANDROID_STATE_PATH=/var/lib/umat/executors/android/state.json' \
     'UMAT_ANDROID_WORK_ROOT=/var/lib/umat/android-work' \
     'UMAT_ANDROID_EXECUTOR_NAME=android-executor' >"$android_env"
+  printf '%s\n' \
+    'UMAT_EGRESS_BROKER_URL=http://127.0.0.1:8092' \
+    "UMAT_EGRESS_BROKER_TOKEN=$egress_token" >>"$android_env"
   sudo -n install -o root -g "$executor_group" -m 0640 "$c2_env" /etc/umat/c2-executor.env
   sudo -n install -o root -g "$executor_group" -m 0640 "$android_env" /etc/umat/android-executor.env
+  if sudo -n test -r /etc/umat/windows-executor.env; then
+    windows_env="$(mktemp)"
+    sudo -n cat /etc/umat/windows-executor.env >"$windows_env"
+    sed -i '/^UMAT_EGRESS_BROKER_/d' "$windows_env"
+    printf '%s\n' \
+      'UMAT_EGRESS_BROKER_URL=http://127.0.0.1:8092' \
+      "UMAT_EGRESS_BROKER_TOKEN=$egress_token" >>"$windows_env"
+    sudo -n install -o root -g "$executor_group" -m 0640 "$windows_env" /etc/umat/windows-executor.env
+    rm -f -- "$windows_env"
+  fi
   mkdir -p "$PROJECT_ROOT/var"
   sudo -n systemctl daemon-reload
-  sudo -n systemctl enable --now umat-guest-guard umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway
+  sudo -n systemctl enable --now umat-guest-guard umat-egress-broker umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway
 else
   echo "dry-run complete; no services changed"
 fi

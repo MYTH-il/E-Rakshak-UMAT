@@ -185,9 +185,7 @@ class C2Executor:
         return artifacts
 
     @contextmanager
-    def _heartbeat(
-        self, claim: dict[str, Any]
-    ) -> Iterator[tuple[threading.Event, list[str]]]:
+    def _heartbeat(self, claim: dict[str, Any]) -> Iterator[tuple[threading.Event, list[str]]]:
         stop = threading.Event()
         stop_requested = threading.Event()
         stop_reasons: list[str] = []

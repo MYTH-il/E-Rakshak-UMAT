@@ -308,11 +308,11 @@ async function renderSubmit() {
   } catch (_) { /* profile selection can remain default */ }
   append(androidProfileWrap, androidProfileLabel, androidProfiles);
   const networkWrap = node("div", "field full"); const networkLabel = node("label", "", "Analysis network"); networkLabel.htmlFor = "intake-network-mode"; const networkMode = node("select"); networkMode.name = "network_mode"; networkMode.id = "intake-network-mode";
-  [["Isolated / simulated (recommended)", "isolated_simulated"], ["Real-world network egress (not containment-qualified)", "real_world_egress"]].forEach(([label, value]) => { const option = node("option", "", label); option.value = value; networkMode.append(option); }); append(networkWrap, networkLabel, networkMode);
+  [["Isolated / simulated (recommended)", "isolated_simulated"], ["Controlled real-world egress (requires ready gateway)", "real_world_egress"]].forEach(([label, value]) => { const option = node("option", "", label); option.value = value; networkMode.append(option); }); append(networkWrap, networkLabel, networkMode);
   const c2Wrap = node("label", "field full checkbox-field"); const c2Enabled = node("input"); c2Enabled.type = "checkbox"; c2Enabled.name = "c2_analysis_enabled"; append(c2Wrap, c2Enabled, node("span", "", "Run C2 analyzer on captured traffic (guest remains governed by the selected network mode)"));
   const interactiveWrap = node("label", "field full checkbox-field"); const androidInteractive = node("input"); androidInteractive.type = "checkbox"; androidInteractive.name = "android_interactive"; androidInteractive.checked = true; append(interactiveWrap, androidInteractive, node("span", "", "Hold Android guests for an interactive analyst session (ignored for non-APKs; automatically finalized after 15 minutes)"));
   append(grid, title.wrap, reference.wrap, file.wrap, profileWrap, androidProfileWrap, networkWrap, c2Wrap, interactiveWrap);
-  const note = node("div", "notice", "Isolated/simulated networking is the malware-safe baseline. C2 analysis is optional and can inspect captured connection attempts without enabling Internet access. Real-world egress remains unqualified.");
+  const note = node("div", "notice", "Isolated/simulated networking is the malware-safe baseline. Controlled egress is accepted only while the sacrificial WireGuard gateway, policy route, expiring firewall leases, and mandatory capture are healthy.");
   const submit = button("Create case and analyze", "btn btn-primary"); submit.type = "submit";
   append(form, grid, note, append(node("div", "form-actions"), submit));
   form.addEventListener("submit", async (event) => {
@@ -419,7 +419,7 @@ function rerunCard(caseData, run) {
   const networkLabel = node("label", "", "Analysis network"); networkLabel.htmlFor = "rerun-network-mode";
   const network = node("select"); network.name = "network_mode"; network.id = "rerun-network-mode";
   [["Isolated / simulated (recommended)", "isolated_simulated"],
-   ["Real-world egress (not containment-qualified)", "real_world_egress"]]
+   ["Controlled real-world egress (requires ready gateway)", "real_world_egress"]]
     .forEach(([label, value]) => { const option = node("option", "", label); option.value = value; network.append(option); });
   network.value = run?.network_mode || "isolated_simulated";
   append(networkWrap, networkLabel, network);
@@ -491,7 +491,7 @@ function caseOperationsCard(caseData, run) {
   const sample = field("Additional sample", "file", "additional_sample", true);
   const network = selectField("Analysis network", "additional_network", [
     ["Isolated / simulated (recommended)", "isolated_simulated"],
-    ["Real-world egress (not containment-qualified)", "real_world_egress"],
+    ["Controlled real-world egress (requires ready gateway)", "real_world_egress"],
   ], run?.network_mode || "isolated_simulated");
   const c2Wrap = node("label", "field checkbox-field");
   const c2 = node("input"); c2.type = "checkbox"; c2.checked = Boolean(run?.c2_analysis_enabled);

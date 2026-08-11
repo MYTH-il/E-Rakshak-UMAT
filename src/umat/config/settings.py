@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 8 * 60 * 60
     lease_ttl_seconds: int = 60
     secure_cookies: bool = False
-    allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1", "testserver"])
+    allowed_hosts: list[str] = Field(
+        default_factory=lambda: ["localhost", "127.0.0.1", "testserver"]
+    )
     session_secret: str = "replace-this-development-secret"  # noqa: S105
     executor_enrollment_secret: str = "replace-this-enrollment-secret"  # noqa: S105
     audit_signing_key_path: Path | None = None
@@ -43,6 +45,7 @@ class Settings(BaseSettings):
     stage_timeout_seconds: dict[str, int] = Field(default_factory=dict)
     login_window_seconds: int = 300
     login_max_attempts: int = 5
+    egress_broker_url: str = "http://127.0.0.1:8092"
 
     @field_validator(
         "max_upload_bytes",
@@ -64,7 +67,11 @@ class Settings(BaseSettings):
     def validate_security(self) -> Settings:
         quarantine = self.quarantine_root.expanduser().resolve()
         artifacts = self.artifact_root.expanduser().resolve()
-        if quarantine == artifacts or quarantine in artifacts.parents or artifacts in quarantine.parents:
+        if (
+            quarantine == artifacts
+            or quarantine in artifacts.parents
+            or artifacts in quarantine.parents
+        ):
             raise ValueError("quarantine and artifact roots must not overlap")
         if self.environment == "production":
             if not self.secure_cookies:
@@ -72,7 +79,9 @@ class Settings(BaseSettings):
             if self.session_secret.startswith("replace-this"):
                 raise ValueError("a non-default session secret is required in production")
             if self.executor_enrollment_secret.startswith("replace-this"):
-                raise ValueError("a non-default executor enrollment secret is required in production")
+                raise ValueError(
+                    "a non-default executor enrollment secret is required in production"
+                )
             for root in (quarantine, artifacts):
                 if "www" in root.parts or "public" in root.parts:
                     raise ValueError("evidence storage cannot be inside a web root")

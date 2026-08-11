@@ -99,16 +99,40 @@ def _export_response(export: ReportExport) -> ReportExportResponse:
     )
 
 
-@router.post("/{case_id}/exports/json", response_model=ReportExportResponse, status_code=status.HTTP_201_CREATED)
-async def export_json(case_id: UUID, principal: Principal = Depends(current_principal), db: AsyncSession = Depends(get_db)) -> ReportExportResponse:
+@router.post(
+    "/{case_id}/exports/json",
+    response_model=ReportExportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def export_json(
+    case_id: UUID,
+    principal: Principal = Depends(current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ReportExportResponse:
     return await create_export(case_id, ExportFormat.JSON, principal, db)
 
 
-@router.post("/{case_id}/exports/pdf", response_model=ReportExportResponse, status_code=status.HTTP_201_CREATED)
-async def export_pdf(case_id: UUID, principal: Principal = Depends(current_principal), db: AsyncSession = Depends(get_db)) -> ReportExportResponse:
+@router.post(
+    "/{case_id}/exports/pdf",
+    response_model=ReportExportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def export_pdf(
+    case_id: UUID,
+    principal: Principal = Depends(current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ReportExportResponse:
     return await create_export(case_id, ExportFormat.PDF, principal, db)
 
 
-@router.post("/{case_id}/exports/csv", response_model=ReportExportResponse, status_code=status.HTTP_201_CREATED)
-async def export_csv(case_id: UUID, principal: Principal = Depends(current_principal), db: AsyncSession = Depends(get_db)) -> ReportExportResponse:
+@router.post(
+    "/{case_id}/exports/csv",
+    response_model=ReportExportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def export_csv(
+    case_id: UUID,
+    principal: Principal = Depends(current_principal),
+    db: AsyncSession = Depends(get_db),
+) -> ReportExportResponse:
     return await create_export(case_id, ExportFormat.CSV, principal, db)

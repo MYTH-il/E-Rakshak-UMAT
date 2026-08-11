@@ -114,7 +114,8 @@ class CapeProfileManager:
         if state_path.is_file():
             state = json.loads(state_path.read_text())
             return MachineResult(
-                operation_id=uuid.UUID(str(state["operation_id"])), machine_label=str(state["label"])
+                operation_id=uuid.UUID(str(state["operation_id"])),
+                machine_label=str(state["label"]),
             )
         label = f"umat-{profile.name}-{profile.profile_id.replace('-', '')[:8]}"
         if not LABEL_PATTERN.fullmatch(label):
@@ -129,17 +130,21 @@ class CapeProfileManager:
         ip = self._allocate_ip()
         mac = self._mac(label)
         disk = self.configuration.image_root / f"{label}.qcow2"
-        snapshot_disk = self.configuration.image_root / f"{label}-{self.configuration.snapshot}.qcow2"
-        snapshot_memory = self.configuration.image_root / f"{label}-{self.configuration.snapshot}.mem"
+        snapshot_disk = (
+            self.configuration.image_root / f"{label}-{self.configuration.snapshot}.qcow2"
+        )
+        snapshot_memory = (
+            self.configuration.image_root / f"{label}-{self.configuration.snapshot}.mem"
+        )
         created_domain = False
         self.configuration.image_root.mkdir(parents=True, exist_ok=True, mode=0o750)
-        os.chown(
-            self.configuration.image_root, self._uid("libvirt-qemu"), self._gid("kvm")
-        )
+        os.chown(self.configuration.image_root, self._uid("libvirt-qemu"), self._gid("kvm"))
         self.configuration.image_root.chmod(0o750)
         reservation_added = False
         try:
-            self._run(["qemu-img", "convert", "-O", "qcow2", str(self.configuration.base_disk), str(disk)])
+            self._run(
+                ["qemu-img", "convert", "-O", "qcow2", str(self.configuration.base_disk), str(disk)]
+            )
             self._run(["qemu-img", "resize", str(disk), f"{profile.disk_gb}G"])
             os.chown(disk, self._uid("libvirt-qemu"), self._gid("kvm"))
             disk.chmod(0o640)
@@ -154,10 +159,16 @@ class CapeProfileManager:
             created_domain = True
             self._run(
                 [
-                    "virsh", "-c", "qemu:///system", "net-update", self.configuration.network,
-                    "add-last", "ip-dhcp-host",
+                    "virsh",
+                    "-c",
+                    "qemu:///system",
+                    "net-update",
+                    self.configuration.network,
+                    "add-last",
+                    "ip-dhcp-host",
                     f"<host mac='{mac}' name='{label}' ip='{ip}'/>",
-                    "--live", "--config",
+                    "--live",
+                    "--config",
                 ]
             )
             reservation_added = True
@@ -165,9 +176,17 @@ class CapeProfileManager:
             self._customize_guest(ip, profile)
             self._run(
                 [
-                    "virsh", "-c", "qemu:///system", "snapshot-create-as", label,
-                    self.configuration.snapshot, "--description", "UMAT CAPE profile baseline",
-                    "--live", "--atomic", f"--memspec={snapshot_memory},snapshot=external",
+                    "virsh",
+                    "-c",
+                    "qemu:///system",
+                    "snapshot-create-as",
+                    label,
+                    self.configuration.snapshot,
+                    "--description",
+                    "UMAT CAPE profile baseline",
+                    "--live",
+                    "--atomic",
+                    f"--memspec={snapshot_memory},snapshot=external",
                     f"--diskspec=sda,file={snapshot_disk},snapshot=external",
                 ]
             )
@@ -190,13 +209,23 @@ class CapeProfileManager:
         except Exception:
             if created_domain:
                 self._run(["virsh", "-c", "qemu:///system", "destroy", label], check=False)
-                self._run(["virsh", "-c", "qemu:///system", "undefine", label, "--snapshots-metadata"], check=False)
+                self._run(
+                    ["virsh", "-c", "qemu:///system", "undefine", label, "--snapshots-metadata"],
+                    check=False,
+                )
             if reservation_added:
                 self._run(
                     [
-                        "virsh", "-c", "qemu:///system", "net-update",
-                        self.configuration.network, "delete", "ip-dhcp-host",
-                        f"<host mac='{mac}' name='{label}' ip='{ip}'/>", "--live", "--config",
+                        "virsh",
+                        "-c",
+                        "qemu:///system",
+                        "net-update",
+                        self.configuration.network,
+                        "delete",
+                        "ip-dhcp-host",
+                        f"<host mac='{mac}' name='{label}' ip='{ip}'/>",
+                        "--live",
+                        "--config",
                     ],
                     check=False,
                 )
@@ -210,7 +239,8 @@ class CapeProfileManager:
         with self._locked():
             states = list(self.configuration.state_root.glob("*.json"))
             state_path = next(
-                (item for item in states if json.loads(item.read_text()).get("label") == label), None
+                (item for item in states if json.loads(item.read_text()).get("label") == label),
+                None,
             )
             if state_path is None:
                 raise ProfileManagementError("managed machine does not exist")
@@ -229,16 +259,26 @@ class CapeProfileManager:
             )
             self._run(
                 [
-                    "virsh", "-c", "qemu:///system", "net-update", self.configuration.network,
-                    "delete", "ip-dhcp-host",
+                    "virsh",
+                    "-c",
+                    "qemu:///system",
+                    "net-update",
+                    self.configuration.network,
+                    "delete",
+                    "ip-dhcp-host",
                     f"<host mac='{state['mac']}' name='{label}' ip='{state['ip']}'/>",
-                    "--live", "--config",
+                    "--live",
+                    "--config",
                 ],
                 check=False,
             )
             for key in ("disk", "snapshot_disk", "snapshot_memory"):
                 path = Path(str(state[key]))
-                if path.parent != self.configuration.image_root or not path.name.startswith(f"{label}-") and path.name != f"{label}.qcow2":
+                if (
+                    path.parent != self.configuration.image_root
+                    or not path.name.startswith(f"{label}-")
+                    and path.name != f"{label}.qcow2"
+                ):
                     raise ProfileManagementError("refusing to remove an unexpected profile path")
                 path.unlink(missing_ok=True)
             state_path.unlink()
@@ -246,7 +286,16 @@ class CapeProfileManager:
 
     def _domain_xml(self, profile: ProfileRequest, label: str, mac: str, disk: Path) -> str:
         root = ET.fromstring(  # noqa: S314 - input is trusted local libvirt output
-            self._capture(["virsh", "-c", "qemu:///system", "dumpxml", "--inactive", self.configuration.base_domain])
+            self._capture(
+                [
+                    "virsh",
+                    "-c",
+                    "qemu:///system",
+                    "dumpxml",
+                    "--inactive",
+                    self.configuration.base_domain,
+                ]
+            )
         )
         root.find("name").text = label  # type: ignore[union-attr]
         root.find("uuid").text = str(uuid.uuid4())  # type: ignore[union-attr]
@@ -358,7 +407,9 @@ if ($profile.administrator) {{
         path = self.configuration.cape_root / "conf/kvm.conf"
         parser = configparser.ConfigParser()
         parser.read(path)
-        machines = [item.strip() for item in parser.get("kvm", "machines").split(",") if item.strip()]
+        machines = [
+            item.strip() for item in parser.get("kvm", "machines").split(",") if item.strip()
+        ]
         if label not in machines:
             machines.append(label)
         parser.set("kvm", "machines", ",".join(machines))
@@ -385,7 +436,11 @@ if ($profile.administrator) {{
         path = self.configuration.cape_root / "conf/kvm.conf"
         parser = configparser.ConfigParser()
         parser.read(path)
-        machines = [item.strip() for item in parser.get("kvm", "machines").split(",") if item.strip() != label]
+        machines = [
+            item.strip()
+            for item in parser.get("kvm", "machines").split(",")
+            if item.strip() != label
+        ]
         parser.set("kvm", "machines", ",".join(machines))
         parser.remove_section(label)
         self._atomic_config(path, parser)
@@ -415,9 +470,22 @@ else:
 """
         return self._capture(
             [
-                "sudo", "-n", "-u", "cape", "/etc/poetry/bin/poetry", "run", "python",
-                "-c", script, action, label, ip, architecture, self.configuration.snapshot,
-                self.configuration.bridge, self.configuration.host_ip,
+                "sudo",
+                "-n",
+                "-u",
+                "cape",
+                "/etc/poetry/bin/poetry",
+                "run",
+                "python",
+                "-c",
+                script,
+                action,
+                label,
+                ip,
+                architecture,
+                self.configuration.snapshot,
+                self.configuration.bridge,
+                self.configuration.host_ip,
             ],
             cwd=self.configuration.cape_root,
         )

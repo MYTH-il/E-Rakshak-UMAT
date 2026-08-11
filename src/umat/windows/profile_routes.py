@@ -197,7 +197,11 @@ async def create_profile(
     return WindowsProfileActionResponse(profile=response(profile), operation_id=operation.id)
 
 
-@router.delete("/{profile_id}", response_model=WindowsProfileActionResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.delete(
+    "/{profile_id}",
+    response_model=WindowsProfileActionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def delete_profile(
     profile_id: UUID,
     principal: Principal = Depends(require_roles("administrator")),

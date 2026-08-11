@@ -21,6 +21,8 @@ token="$(<"$TOKEN_FILE")"
 [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] || { echo "invalid enrollment token" >&2; exit 2; }
 gateway_token="$(sudo -n awk -F= '$1 == "UMAT_CAPE_GATEWAY_TOKEN" {print substr($0, index($0, "=") + 1)}' "$FULL_ENV")"
 [[ -n "$gateway_token" ]] || { echo "CAPE gateway token is missing" >&2; exit 1; }
+egress_token="$(sudo -n awk -F= '$1 == "UMAT_EGRESS_BROKER_TOKEN" {print substr($0, index($0, "=") + 1)}' /etc/umat/egress-broker.env)"
+[[ -n "$egress_token" ]] || { echo "egress broker token is missing" >&2; exit 1; }
 
 permanent="$(mktemp)"
 enrollment="$(mktemp)"
@@ -35,6 +37,9 @@ printf '%s\n' \
   'UMAT_WINDOWS_WORK_ROOT=/var/lib/umat/windows-work' \
   'UMAT_WINDOWS_STATE_PATH=/var/lib/umat/executors/windows/state.json' \
   'UMAT_WINDOWS_EXECUTOR_NAME=windows-executor' >"$permanent"
+printf '%s\n' \
+  'UMAT_EGRESS_BROKER_URL=http://127.0.0.1:8092' \
+  "UMAT_EGRESS_BROKER_TOKEN=$egress_token" >>"$permanent"
 sudo -n install -o root -g "$(id -gn "$SERVICE_USER")" -m 0640 "$permanent" "$EXECUTOR_ENV"
 cp "$permanent" "$enrollment"
 printf 'UMAT_WINDOWS_ENROLLMENT_TOKEN=%s\n' "$token" >>"$enrollment"

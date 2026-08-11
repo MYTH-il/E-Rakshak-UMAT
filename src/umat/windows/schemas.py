@@ -62,9 +62,10 @@ class WindowsProfileActionResponse(BaseModel):
 class UpdateWindowsProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     display_name: str | None = Field(default=None, min_length=1, max_length=128)
-    analysis_profile: Literal[
-        "standard", "deep_static", "tls_intercept", "full_memory", "full_investigation"
-    ] | None = None
+    analysis_profile: (
+        Literal["standard", "deep_static", "tls_intercept", "full_memory", "full_investigation"]
+        | None
+    ) = None
     is_default: bool | None = None
 
     @model_validator(mode="after")

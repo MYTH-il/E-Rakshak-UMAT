@@ -49,10 +49,28 @@ _EVIDENCE_MEMBERS = {
 _MAX_REPORT_BYTES = 16 * 1024 * 1024
 _MAX_INLINE_EVIDENCE_BYTES = 4 * 1024 * 1024
 _COMMANDS = {
-    "screen", "tap", "swipe", "key", "text", "start_activity", "deeplink",
-    "screenshot", "logcat", "frida", "api_monitor", "frida_logs",
-    "activity_test", "tls_test", "proxy", "root_ca", "dependencies",
-    "app_data", "list_files", "read_file", "extend", "finalize",
+    "screen",
+    "tap",
+    "swipe",
+    "key",
+    "text",
+    "start_activity",
+    "deeplink",
+    "screenshot",
+    "logcat",
+    "frida",
+    "api_monitor",
+    "frida_logs",
+    "activity_test",
+    "tls_test",
+    "proxy",
+    "root_ca",
+    "dependencies",
+    "app_data",
+    "list_files",
+    "read_file",
+    "extend",
+    "finalize",
 }
 
 
@@ -61,9 +79,7 @@ class AndroidCommandRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-async def _android_run(
-    db: AsyncSession, principal: Principal, run_id: UUID
-) -> AnalysisRun:
+async def _android_run(db: AsyncSession, principal: Principal, run_id: UUID) -> AnalysisRun:
     run = await db.get(AnalysisRun, run_id)
     if not run or run.platform != Platform.ANDROID:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Android analysis run not found")
@@ -151,7 +167,11 @@ async def android_workflow(
         .all()
     )
     capabilities = list(
-        (await db.scalars(select(AndroidCapability).where(AndroidCapability.analysis_run_id == run.id)))
+        (
+            await db.scalars(
+                select(AndroidCapability).where(AndroidCapability.analysis_run_id == run.id)
+            )
+        )
         .unique()
         .all()
     )
@@ -297,7 +317,9 @@ async def android_workflow(
             }
             for item in c2_findings
         ],
-        "artifacts": [_artifact_row(item) for item in artifacts if tier_allowed(principal, item.access_tier)],
+        "artifacts": [
+            _artifact_row(item) for item in artifacts if tier_allowed(principal, item.access_tier)
+        ],
         "inline_evidence": {
             name: f"/api/v1/analysis-runs/{run.id}/android-evidence/{name}"
             for name, (member, _) in _EVIDENCE_MEMBERS.items()
@@ -305,16 +327,24 @@ async def android_workflow(
         },
         "interactive_session": (
             {
-                "id": str(session.id), "state": session.state,
-                "scan_hash": session.scan_hash, "package_name": session.package_name,
-                "main_activity": session.main_activity, "guest_ip": session.guest_ip,
-                "started_at": session.started_at, "last_seen_at": session.last_seen_at,
-                "expires_at": session.expires_at, "ended_at": session.ended_at,
+                "id": str(session.id),
+                "state": session.state,
+                "scan_hash": session.scan_hash,
+                "package_name": session.package_name,
+                "main_activity": session.main_activity,
+                "guest_ip": session.guest_ip,
+                "started_at": session.started_at,
+                "last_seen_at": session.last_seen_at,
+                "expires_at": session.expires_at,
+                "ended_at": session.ended_at,
                 "status_details": session.status_details,
                 "commands": [
                     {
-                        "id": str(item.id), "type": item.command_type, "state": item.state,
-                        "result": item.result, "created_at": item.created_at,
+                        "id": str(item.id),
+                        "type": item.command_type,
+                        "state": item.state,
+                        "result": item.result,
+                        "created_at": item.created_at,
                         "completed_at": item.completed_at,
                     }
                     for item in commands
@@ -333,12 +363,16 @@ def _validate_command(command_type: str, payload: dict[str, Any]) -> dict[str, A
     if command_type == "tap":
         clean = {"x": int(payload.get("x", -1)), "y": int(payload.get("y", -1))}
         if not 0 <= clean["x"] <= 4096 or not 0 <= clean["y"] <= 4096:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "tap coordinates are invalid")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "tap coordinates are invalid"
+            )
     elif command_type == "swipe":
         for name in ("x1", "y1", "x2", "y2"):
             clean[name] = int(payload.get(name, -1))
             if not 0 <= clean[name] <= 4096:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "swipe coordinates are invalid")
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT, "swipe coordinates are invalid"
+                )
         clean["duration_ms"] = min(max(int(payload.get("duration_ms", 300)), 50), 3000)
     elif command_type == "key":
         clean = {"keycode": int(payload.get("keycode", 0))}
@@ -360,30 +394,44 @@ def _validate_command(command_type: str, payload: dict[str, Any]) -> dict[str, A
         action = str(payload.get("action", ""))
         allowed = {"set", "unset"} if command_type == "proxy" else {"install", "remove"}
         if action not in allowed:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "operation action is invalid")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "operation action is invalid"
+            )
         clean = {"action": action}
     elif command_type == "frida":
         action = str(payload.get("action", "spawn"))
         if action not in {"spawn", "session", "ps", "get"}:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Frida action is invalid")
         default_allowlist = {
-            "api_monitor", "ssl_pinning_bypass", "root_bypass",
-            "debugger_check_bypass", "dump_clipboard",
+            "api_monitor",
+            "ssl_pinning_bypass",
+            "root_bypass",
+            "debugger_check_bypass",
+            "dump_clipboard",
         }
         auxiliary_allowlist = {
-            "enum_class", "enum_methods", "search_class", "trace_class",
-            "string_catch", "string_compare", "get_dependencies",
+            "enum_class",
+            "enum_methods",
+            "search_class",
+            "trace_class",
+            "string_catch",
+            "string_compare",
+            "get_dependencies",
         }
         default_hooks = {
-            value.strip() for value in str(payload.get("default_hooks", "")).split(",")
+            value.strip()
+            for value in str(payload.get("default_hooks", "")).split(",")
             if value.strip()
         }
         auxiliary_hooks = {
-            value.strip() for value in str(payload.get("auxiliary_hooks", "")).split(",")
+            value.strip()
+            for value in str(payload.get("auxiliary_hooks", "")).split(",")
             if value.strip()
         }
         if not default_hooks <= default_allowlist or not auxiliary_hooks <= auxiliary_allowlist:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Frida hook selection is invalid")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "Frida hook selection is invalid"
+            )
         clean = {
             "action": action,
             "pid": str(payload.get("pid", ""))[:16],
@@ -430,30 +478,42 @@ async def create_android_command(
         maximum = session.started_at + timedelta(minutes=30)
         session.expires_at = min(maximum, max(session.expires_at, utcnow()) + timedelta(minutes=5))
         await append_audit(
-            db, actor_type="user", actor_id=str(principal.user.id),
-            action="android_session.extended", target_type="android_dynamic_session",
-            target_id=str(session.id), payload={"expires_at": session.expires_at.isoformat()},
+            db,
+            actor_type="user",
+            actor_id=str(principal.user.id),
+            action="android_session.extended",
+            target_type="android_dynamic_session",
+            target_id=str(session.id),
+            payload={"expires_at": session.expires_at.isoformat()},
         )
         await db.commit()
         return {"command_id": None, "state": "completed", "expires_at": session.expires_at}
     active = await db.scalar(
-        select(AndroidSessionCommand).where(
+        select(AndroidSessionCommand)
+        .where(
             AndroidSessionCommand.session_id == session.id,
             AndroidSessionCommand.state.in_(["queued", "running"]),
-        ).limit(1)
+        )
+        .limit(1)
     )
     if active and body.command_type not in {"finalize"}:
         raise HTTPException(status.HTTP_409_CONFLICT, "another Android operation is still active")
     command = AndroidSessionCommand(
-        session_id=session.id, requested_by_user_id=principal.user.id,
-        command_type=body.command_type, payload=payload,
+        session_id=session.id,
+        requested_by_user_id=principal.user.id,
+        command_type=body.command_type,
+        payload=payload,
     )
     db.add(command)
     await db.flush()
     await append_audit(
-        db, actor_type="user", actor_id=str(principal.user.id),
-        action="android_session.command_requested", target_type="android_session_command",
-        target_id=str(command.id), payload={"run_id": str(run.id), "command_type": body.command_type},
+        db,
+        actor_type="user",
+        actor_id=str(principal.user.id),
+        action="android_session.command_requested",
+        target_type="android_session_command",
+        target_id=str(command.id),
+        payload={"run_id": str(run.id), "command_type": body.command_type},
     )
     await db.commit()
     return {"command_id": str(command.id), "state": command.state}
@@ -474,9 +534,12 @@ async def get_android_command(
     if not session or not command or command.session_id != session.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Android operation not found")
     return {
-        "command_id": str(command.id), "type": command.command_type,
-        "state": command.state, "result": command.result,
-        "created_at": command.created_at, "completed_at": command.completed_at,
+        "command_id": str(command.id),
+        "type": command.command_type,
+        "state": command.state,
+        "result": command.result,
+        "created_at": command.created_at,
+        "completed_at": command.completed_at,
     }
 
 

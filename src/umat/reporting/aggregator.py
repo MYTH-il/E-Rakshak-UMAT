@@ -811,7 +811,8 @@ class CaseAggregator:
             by_source[source] = by_source.get(source, 0) + 1
             category = str(item.get("category") or "uncategorised")
             by_category[category] = by_category.get(category, 0) + 1
-            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            details_value = item.get("details")
+            details: dict[str, Any] = details_value if isinstance(details_value, dict) else {}
             raw = item.get("severity", details.get("severity"))
             label = CaseAggregator._severity_label(raw)
             by_severity[label] = by_severity.get(label, 0) + 1

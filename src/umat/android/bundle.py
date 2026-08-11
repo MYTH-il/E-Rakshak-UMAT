@@ -149,7 +149,11 @@ def safe_extract_android_bundle(archive: Path, destination: Path, max_bytes: int
             raise AndroidBundleError("Android bundle exceeds uncompressed size limit")
         for item in members:
             relative = Path(item.filename)
-            if relative.is_absolute() or ".." in relative.parts or stat.S_ISLNK(item.external_attr >> 16):
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or stat.S_ISLNK(item.external_attr >> 16)
+            ):
                 raise AndroidBundleError("unsafe Android bundle member")
             if item.is_dir():
                 continue
@@ -168,7 +172,9 @@ def verify_android_bundle(root: Path, public_key: Ed25519PublicKey) -> dict[str,
     signature = manifest["signature"]
     unsigned = {key: value for key, value in manifest.items() if key != "signature"}
     try:
-        public_key.verify(base64.b64decode(signature["value"], validate=True), canonical_json(unsigned))
+        public_key.verify(
+            base64.b64decode(signature["value"], validate=True), canonical_json(unsigned)
+        )
     except (ValueError, InvalidSignature) as exc:
         raise AndroidBundleError("Android bundle signature verification failed") from exc
     observed = {

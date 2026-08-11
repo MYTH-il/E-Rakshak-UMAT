@@ -46,22 +46,30 @@ class RedroidManager:
         data = workspace / "redroid-data"
         data.mkdir(parents=True, exist_ok=True, mode=0o700)
         network_arguments: list[str] = []
+        dns_arguments: list[str] = []
         publish_arguments = ["-p", f"{self.adb_address}:5555"]
-        if self.network_mode == "isolated_simulated":
-            network_name = "umat-android-isolated"
+        if self.network_mode in {"isolated_simulated", "real_world_egress"}:
+            isolated = self.network_mode == "isolated_simulated"
+            network_name = "umat-android-isolated" if isolated else "umat-android-egress"
+            subnet = "172.30.0.0/24" if isolated else "172.31.0.0/24"
+            bridge = "br-umat-android" if isolated else "br-umat-egress"
             if self._docker("network", "inspect", network_name, check=False).returncode != 0:
+                arguments = ["network", "create"]
+                if isolated:
+                    arguments.append("--internal")
                 self._docker(
-                    "network",
-                    "create",
-                    "--internal",
+                    *arguments,
                     "--subnet",
-                    "172.30.0.0/24",
+                    subnet,
                     "--opt",
-                    "com.docker.network.bridge.name=br-umat-android",
+                    f"com.docker.network.bridge.name={bridge}",
                     network_name,
                 )
             network_arguments = ["--network", network_name]
-            publish_arguments = []
+            if isolated:
+                publish_arguments = []
+            else:
+                dns_arguments = ["--dns", "10.77.0.53"]
         self._docker(
             "run",
             "-d",
@@ -73,6 +81,7 @@ class RedroidManager:
             "never",
             "--privileged",
             *network_arguments,
+            *dns_arguments,
             "--memory",
             f"{self.memory_mb}m",
             "--cpus",
@@ -226,24 +235,33 @@ class RedroidManager:
         grant_failures: dict[str, str] = {}
         for permission in sorted(set(permissions) & grantable):
             result = self._adb(
-                "-s", self.adb_address, "shell", "pm", "grant",
-                package_name, permission, check=False,
+                "-s",
+                self.adb_address,
+                "shell",
+                "pm",
+                "grant",
+                package_name,
+                permission,
+                check=False,
             )
             if result.returncode == 0:
                 granted.append(permission)
             else:
-                grant_failures[permission] = (
-                    result.stderr or result.stdout
-                ).decode(errors="replace")[:500]
+                grant_failures[permission] = (result.stderr or result.stdout).decode(
+                    errors="replace"
+                )[:500]
 
         fixtures: dict[str, Any] = {}
         if "android.permission.READ_SMS" in permissions:
             fixtures["sms"] = self._seed_content(
                 "content://sms/inbox",
                 [
-                    "--bind", "address:s:+15550102020",
-                    "--bind", "body:s:UMAT_SYNTHETIC_OTP_482913",
-                    "--bind", "read:i:0",
+                    "--bind",
+                    "address:s:+15550102020",
+                    "--bind",
+                    "body:s:UMAT_SYNTHETIC_OTP_482913",
+                    "--bind",
+                    "read:i:0",
                 ],
             )
         if "android.permission.READ_CONTACTS" in permissions:
@@ -253,9 +271,20 @@ class RedroidManager:
             )
             fixtures["contact"] = raw
             query = self._adb(
-                "-s", self.adb_address, "shell", "su", "0", "content", "query", "--uri",
-                "content://com.android.contacts/raw_contacts", "--projection", "_id",
-                "--sort", "_id DESC", check=False,
+                "-s",
+                self.adb_address,
+                "shell",
+                "su",
+                "0",
+                "content",
+                "query",
+                "--uri",
+                "content://com.android.contacts/raw_contacts",
+                "--projection",
+                "_id",
+                "--sort",
+                "_id DESC",
+                check=False,
             )
             raw_id = ""
             output = query.stdout.decode(errors="replace")
@@ -265,16 +294,22 @@ class RedroidManager:
                 fixtures["contact_name"] = self._seed_content(
                     "content://com.android.contacts/data",
                     [
-                        "--bind", f"raw_contact_id:i:{raw_id}", "--bind",
-                        "mimetype:s:vnd.android.cursor.item/name", "--bind",
+                        "--bind",
+                        f"raw_contact_id:i:{raw_id}",
+                        "--bind",
+                        "mimetype:s:vnd.android.cursor.item/name",
+                        "--bind",
                         "data1:s:UMAT Synthetic Contact",
                     ],
                 )
                 fixtures["contact_phone"] = self._seed_content(
                     "content://com.android.contacts/data",
                     [
-                        "--bind", f"raw_contact_id:i:{raw_id}", "--bind",
-                        "mimetype:s:vnd.android.cursor.item/phone_v2", "--bind",
+                        "--bind",
+                        f"raw_contact_id:i:{raw_id}",
+                        "--bind",
+                        "mimetype:s:vnd.android.cursor.item/phone_v2",
+                        "--bind",
                         "data1:s:+15550102021",
                     ],
                 )
@@ -292,29 +327,62 @@ class RedroidManager:
         if main_activity:
             component = (
                 f"{package_name}/{package_name}{main_activity}"
-                if main_activity.startswith(".") else f"{package_name}/{main_activity}"
+                if main_activity.startswith(".")
+                else f"{package_name}/{main_activity}"
             )
-            actions.append(self._shell_action(
-                "launch_main", "am", "start", "-W", "-n", component
-            ))
+            actions.append(self._shell_action("launch_main", "am", "start", "-W", "-n", component))
         for name, command in (
-            ("boot_completed", ("am", "broadcast", "-a", "android.intent.action.BOOT_COMPLETED", "-p", package_name)),
-            ("user_present", ("am", "broadcast", "-a", "android.intent.action.USER_PRESENT", "-p", package_name)),
-            ("connectivity_change", ("am", "broadcast", "-a", "android.net.conn.CONNECTIVITY_CHANGE", "-p", package_name)),
+            (
+                "boot_completed",
+                (
+                    "am",
+                    "broadcast",
+                    "-a",
+                    "android.intent.action.BOOT_COMPLETED",
+                    "-p",
+                    package_name,
+                ),
+            ),
+            (
+                "user_present",
+                ("am", "broadcast", "-a", "android.intent.action.USER_PRESENT", "-p", package_name),
+            ),
+            (
+                "connectivity_change",
+                (
+                    "am",
+                    "broadcast",
+                    "-a",
+                    "android.net.conn.CONNECTIVITY_CHANGE",
+                    "-p",
+                    package_name,
+                ),
+            ),
         ):
             # Protected system broadcasts are rejected for adb's shell UID on
             # Android 11. ReDroid is disposable and rooted specifically for
             # analysis, so deliver these stimuli as root and retain the result.
             actions.append(self._shell_action(name, "su", "0", *command))
-        pid = self._adb(
-            "-s", self.adb_address, "shell", "pidof", package_name, check=False
-        ).stdout.decode(errors="replace").strip()
+        pid = (
+            self._adb("-s", self.adb_address, "shell", "pidof", package_name, check=False)
+            .stdout.decode(errors="replace")
+            .strip()
+        )
         return {"actions": actions, "package_process_ids": pid.split() if pid else []}
 
     def _seed_content(self, uri: str, arguments: list[str]) -> dict[str, Any]:
         result = self._adb(
-            "-s", self.adb_address, "shell", "su", "0", "content", "insert", "--uri", uri,
-            *arguments, check=False,
+            "-s",
+            self.adb_address,
+            "shell",
+            "su",
+            "0",
+            "content",
+            "insert",
+            "--uri",
+            uri,
+            *arguments,
+            check=False,
         )
         return {
             "success": result.returncode == 0,
@@ -323,7 +391,11 @@ class RedroidManager:
 
     def _shell_action(self, name: str, *arguments: str) -> dict[str, Any]:
         result = self._adb(
-            "-s", self.adb_address, "shell", *arguments, check=False,
+            "-s",
+            self.adb_address,
+            "shell",
+            *arguments,
+            check=False,
         )
         return {
             "name": name,
@@ -350,8 +422,16 @@ class RedroidManager:
 
     def input_swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int) -> None:
         self._adb(
-            "-s", self.adb_address, "shell", "input", "swipe",
-            str(x1), str(y1), str(x2), str(y2), str(duration_ms),
+            "-s",
+            self.adb_address,
+            "shell",
+            "input",
+            "swipe",
+            str(x1),
+            str(y1),
+            str(x2),
+            str(y2),
+            str(duration_ms),
         )
 
     def input_key(self, keycode: int) -> None:
@@ -366,10 +446,10 @@ class RedroidManager:
         return output.stdout.decode(errors="replace")[-262144:]
 
     def package_process_ids(self, package_name: str) -> list[str]:
-        output = self._adb(
-            "-s", self.adb_address, "shell", "pidof", package_name, check=False
-        )
-        return [value for value in output.stdout.decode(errors="replace").split() if value.isdigit()]
+        output = self._adb("-s", self.adb_address, "shell", "pidof", package_name, check=False)
+        return [
+            value for value in output.stdout.decode(errors="replace").split() if value.isdigit()
+        ]
 
     def list_app_files(self, package_name: str, path: str) -> list[dict[str, Any]]:
         root = f"/data/data/{package_name}"
@@ -379,8 +459,19 @@ class RedroidManager:
         result: list[dict[str, Any]] = []
         for kind, file_type in (("directory", "d"), ("file", "f")):
             output = self._adb(
-                "-s", self.adb_address, "shell", "su", "0", "find", requested,
-                "-maxdepth", "1", "-mindepth", "1", "-type", file_type,
+                "-s",
+                self.adb_address,
+                "shell",
+                "su",
+                "0",
+                "find",
+                requested,
+                "-maxdepth",
+                "1",
+                "-mindepth",
+                "1",
+                "-type",
+                file_type,
                 check=False,
             ).stdout.decode(errors="replace")
             result.extend(
@@ -395,14 +486,19 @@ class RedroidManager:
         if not path.startswith(root + "/"):
             raise ValueError("file access is restricted to the analyzed application")
         probe = self._adb(
-            "-s", self.adb_address, "shell", "su", "0", "test", "-f", path,
+            "-s",
+            self.adb_address,
+            "shell",
+            "su",
+            "0",
+            "test",
+            "-f",
+            path,
             check=False,
         )
         if probe.returncode != 0:
             raise ValueError("requested application path is not a regular file")
-        output = self._adb(
-            "-s", self.adb_address, "exec-out", "su", "0", "cat", path, check=False
-        )
+        output = self._adb("-s", self.adb_address, "exec-out", "su", "0", "cat", path, check=False)
         if output.returncode != 0:
             raise RuntimeError(output.stderr.decode(errors="replace")[:2000] or "file read failed")
         if len(output.stdout) > maximum:
@@ -412,11 +508,22 @@ class RedroidManager:
     def collect_app_data(self, destination: Path, package_name: str) -> Path:
         destination.mkdir(parents=True, exist_ok=True)
         output = self._adb(
-            "-s", self.adb_address, "exec-out", "su", "0", "tar", "-c",
-            "-C", "/data/data", package_name, check=False,
+            "-s",
+            self.adb_address,
+            "exec-out",
+            "su",
+            "0",
+            "tar",
+            "-c",
+            "-C",
+            "/data/data",
+            package_name,
+            check=False,
         )
         if output.returncode != 0:
-            raise RuntimeError(output.stderr.decode(errors="replace")[:2000] or "app data archive failed")
+            raise RuntimeError(
+                output.stderr.decode(errors="replace")[:2000] or "app data archive failed"
+            )
         archive = destination / "application-data.tar"
         archive.write_bytes(output.stdout)
         return archive

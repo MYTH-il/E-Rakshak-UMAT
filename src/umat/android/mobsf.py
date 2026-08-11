@@ -31,7 +31,8 @@ class MobSFClient:
     def upload(self, apk: Path) -> dict[str, Any]:
         with apk.open("rb") as source:
             response = self.client.post(
-                "/api/v1/upload", files={"file": ("sample.apk", source, "application/vnd.android.package-archive")}
+                "/api/v1/upload",
+                files={"file": ("sample.apk", source, "application/vnd.android.package-archive")},
             )
         response.raise_for_status()
         value = response.json()
@@ -62,7 +63,9 @@ class MobSFClient:
         return self._post("/api/v1/dynamic/start_analysis", {"hash": scan_hash})
 
     def start_activity(self, scan_hash: str, activity: str) -> dict[str, Any]:
-        return self._post("/api/v1/android/start_activity", {"hash": scan_hash, "activity": activity})
+        return self._post(
+            "/api/v1/android/start_activity", {"hash": scan_hash, "activity": activity}
+        )
 
     def instrument(self, scan_hash: str) -> dict[str, Any]:
         result = self._post(

@@ -94,7 +94,9 @@ class ReportExporter:
         return export
 
     def _store(self, content: bytes, digest: str) -> StoredObject:
-        descriptor, raw_path = tempfile.mkstemp(prefix="report-", suffix=".part", dir=self.artifact_store.quarantine_root)
+        descriptor, raw_path = tempfile.mkstemp(
+            prefix="report-", suffix=".part", dir=self.artifact_store.quarantine_root
+        )
         path = Path(raw_path)
         try:
             with os.fdopen(descriptor, "wb") as destination:
@@ -166,7 +168,11 @@ class ReportExporter:
 
         document.setTitle("UMAT Officer Report")
         line("UMAT ANALYSIS REPORT", size=18, gap=26)
-        line(f"Verdict: {str(report.get('verdict', 'inconclusive')).replace('_', ' ').upper()}", size=13, gap=22)
+        line(
+            f"Verdict: {str(report.get('verdict', 'inconclusive')).replace('_', ' ').upper()}",
+            size=13,
+            gap=22,
+        )
         line(report.get("headline", ""), size=11, gap=20)
         line(f"Platform: {report.get('platform', 'unknown')}")
         line(f"Sample SHA-256: {report.get('sample_sha256', '')}")
@@ -183,7 +189,9 @@ class ReportExporter:
         if not destinations:
             line("No reportable network destination was observed.")
         for item in destinations:
-            line(f"- {item.get('value', '')}:{item.get('port') or '-'} ({item.get('protocol') or 'unknown'})")
+            line(
+                f"- {item.get('value', '')}:{item.get('port') or '-'} ({item.get('protocol') or 'unknown'})"
+            )
         y -= 7
         line("ANALYSIS LIMITATIONS", size=12, gap=19)
         caveats = report.get("caveats", [])
@@ -191,6 +199,9 @@ class ReportExporter:
             line("No material analysis limitation was recorded.")
         for caveat in caveats:
             line(f"- {str(caveat).replace('_', ' ')}")
-        line("This report does not label a sample safe solely because no behavior was observed.", gap=18)
+        line(
+            "This report does not label a sample safe solely because no behavior was observed.",
+            gap=18,
+        )
         document.save()
         return output.getvalue()

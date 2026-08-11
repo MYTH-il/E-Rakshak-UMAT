@@ -50,16 +50,12 @@ class C2AnalysisContext(BaseModel):
             },
             "guest_ip": self.guest_ip,
             "access_events": {
-                "artifact_id": str(self.access_events.artifact_id)
-                if self.access_events
-                else None,
+                "artifact_id": str(self.access_events.artifact_id) if self.access_events else None,
                 "source": "etl_derived" if self.access_events else "unavailable",
                 "correlation_eligible": self.correlation_eligible,
             },
             "static_prior": {
-                "artifact_id": str(self.static_prior.artifact_id)
-                if self.static_prior
-                else None
+                "artifact_id": str(self.static_prior.artifact_id) if self.static_prior else None
             },
             "network_activity": {
                 "artifact_id": str(self.network_activity.artifact_id)

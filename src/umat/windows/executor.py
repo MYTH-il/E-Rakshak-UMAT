@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from umat.contracts import ContractError
+from umat.egress.client import EgressClient
 from umat.executors.protocol import ExecutorStopRequested, raise_for_stop, signature_message
 from umat.windows.bundle import (
     NativeWindowsValidator,
@@ -42,11 +43,13 @@ class WindowsExecutor:
         handoff_root: Path,
         schema_root: Path,
         work_root: Path,
+        egress: EgressClient | None = None,
     ) -> None:
         self.client = httpx.Client(base_url=umat_url.rstrip("/"), timeout=60)
         self.state_path, self.cape = state_path, cape
         self.handoff_root, self.work_root = handoff_root.resolve(), work_root.resolve()
         self.native_validator = NativeWindowsValidator(schema_root)
+        self.egress = egress
         self.state: dict[str, Any] = (
             json.loads(state_path.read_text()) if state_path.is_file() else {}
         )
@@ -174,12 +177,18 @@ class WindowsExecutor:
             return False
         claim = response.json()
         common = {"lease_id": claim["lease_id"], "attempt_id": claim["attempt_id"]}
+        egress_active = False
         try:
             recovered = claim.get("recovered_native_task")
             with tempfile.TemporaryDirectory(
                 prefix=f"umat-windows-{claim['analysis_run_id']}-", dir=self.work_root
             ) as temporary:
                 workspace = Path(temporary)
+                if claim["execution_configuration"].get("network_mode") == "real_world_egress":
+                    if not self.egress:
+                        raise RuntimeError("controlled egress broker is not configured")
+                    self.egress.acquire(claim["analysis_run_id"], "windows", "10.66.0.101")
+                    egress_active = True
                 if recovered:
                     task_id = int(recovered["native_task_id"])
                 else:
@@ -223,6 +232,11 @@ class WindowsExecutor:
                 )
                 self._upload(claim, bundle.archive_path, "windows_bundle", "application/zip")
                 self._upload_native_inputs(claim, native_root, cape_evidence, workspace)
+                if egress_active and self.egress:
+                    capture = self.egress.revoke(claim["analysis_run_id"])
+                    egress_active = False
+                    if capture and capture.is_file() and capture.stat().st_size:
+                        self._upload(claim, capture, "egress_pcap", "application/vnd.tcpdump.pcap")
             complete = common | {
                 "outcome": "completed",
                 "detail": "WinST/DT bundle validated and registered",
@@ -233,6 +247,8 @@ class WindowsExecutor:
                 claim["lease_token"],
             ).raise_for_status()
         except ExecutorStopRequested as stop:
+            if egress_active and self.egress:
+                self.egress.revoke(claim["analysis_run_id"])
             if stop.reason == "cancelled":
                 acknowledgement = common | {"detail": "CAPE task stopped"}
                 self.mutate(
@@ -241,6 +257,8 @@ class WindowsExecutor:
                     claim["lease_token"],
                 ).raise_for_status()
         except ContractError as exc:
+            if egress_active and self.egress:
+                self.egress.revoke(claim["analysis_run_id"])
             failure = common | {
                 "error_code": "windows_native_evidence_invalid",
                 "detail": str(exc)[:2000],
@@ -252,6 +270,8 @@ class WindowsExecutor:
                 claim["lease_token"],
             ).raise_for_status()
         except Exception as exc:
+            if egress_active and self.egress:
+                self.egress.revoke(claim["analysis_run_id"])
             failure = common | {
                 "error_code": "windows_executor_failure",
                 "detail": str(exc)[:2000],
@@ -294,6 +314,11 @@ class WindowsExecutor:
                 claim["lease_token"],
             )
             heartbeat_response.raise_for_status()
+            if (
+                self.egress
+                and claim["execution_configuration"].get("network_mode") == "real_world_egress"
+            ):
+                self.egress.heartbeat(claim["analysis_run_id"])
             try:
                 raise_for_stop(heartbeat_response.json())
             except ExecutorStopRequested:
@@ -330,6 +355,11 @@ class WindowsExecutor:
                 claim["lease_token"],
             )
             response.raise_for_status()
+            if (
+                self.egress
+                and claim["execution_configuration"].get("network_mode") == "real_world_egress"
+            ):
+                self.egress.heartbeat(claim["analysis_run_id"])
             raise_for_stop(response.json())
             time.sleep(poll_seconds)
         raise RuntimeError("WinST/DT handoff was not published before the readiness deadline")
@@ -402,6 +432,8 @@ def run(
     enroll_only: bool = typer.Option(False, help="Enroll and publish capabilities, then exit"),
     once: bool = typer.Option(False),
     poll_seconds: float = typer.Option(5.0, min=0.5),
+    egress_broker_url: str = typer.Option("http://127.0.0.1:8092", envvar="UMAT_EGRESS_BROKER_URL"),
+    egress_broker_token: str | None = typer.Option(None, envvar="UMAT_EGRESS_BROKER_TOKEN"),
 ) -> None:
     work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     executor = WindowsExecutor(
@@ -411,6 +443,7 @@ def run(
         handoff_root,
         schema_root,
         work_root,
+        EgressClient(egress_broker_url, egress_broker_token) if egress_broker_token else None,
     )
     if not executor.state:
         if not enrollment_token:

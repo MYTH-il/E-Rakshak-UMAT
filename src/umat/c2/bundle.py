@@ -109,9 +109,7 @@ class ResultBundleBuilder:
                 "ended_at": context.analysis_ended_at.isoformat(),
             },
             "guest_ip": context.guest_ip,
-            "correlation_mode": "host_network"
-            if context.correlation_eligible
-            else "network_only",
+            "correlation_mode": "host_network" if context.correlation_eligible else "network_only",
             "network_events": events,
             "artifacts": artifacts,
             "caveats": sorted(set(context.caveats)),
@@ -155,7 +153,9 @@ class ResultBundleBuilder:
         previous = root
         normalized: list[dict[str, Any]] = []
         for native in native_events:
-            destination = native.get("destination_domain") or native.get("destination_ip") or "unknown"
+            destination = (
+                native.get("destination_domain") or native.get("destination_ip") or "unknown"
+            )
             data_type = native.get("data_type_accessed")
             if context.platform == "android":
                 data_type = None
@@ -178,7 +178,9 @@ class ResultBundleBuilder:
                 "session_id": native.get("session_id"),
                 "cape_task_id": native.get("cape_task_id"),
                 "platform": context.platform,
-                "timestamp": str(native.get("timestamp") or context.analysis_started_at.isoformat()),
+                "timestamp": str(
+                    native.get("timestamp") or context.analysis_started_at.isoformat()
+                ),
                 "data_type_accessed": data_type,
                 "access_api_call": native.get("access_api_call")
                 if context.platform == "windows"
@@ -290,7 +292,9 @@ def verify_result_bundle(root: Path, public_key: Ed25519PublicKey) -> dict[str, 
     signature = manifest["signature"]
     unsigned = {key: value for key, value in manifest.items() if key != "signature"}
     try:
-        public_key.verify(base64.b64decode(signature["value"], validate=True), canonical_json(unsigned))
+        public_key.verify(
+            base64.b64decode(signature["value"], validate=True), canonical_json(unsigned)
+        )
     except (ValueError, InvalidSignature) as exc:
         raise C2BundleError("result signature verification failed") from exc
     if (root / "integrity/signature").read_text().strip() != signature["value"]:
@@ -317,7 +321,10 @@ def verify_result_bundle(root: Path, public_key: Ed25519PublicKey) -> dict[str, 
         raise C2BundleError("result artifact descriptor set mismatch")
     for relative, descriptor in descriptors.items():
         path = root / relative
-        if descriptor["sha256"] != sha256_file(path) or descriptor["size_bytes"] != path.stat().st_size:
+        if (
+            descriptor["sha256"] != sha256_file(path)
+            or descriptor["size_bytes"] != path.stat().st_size
+        ):
             raise C2BundleError(f"result artifact descriptor mismatch: {relative}")
     previous = manifest["evidence_chain"]["root"]
     for event in manifest["network_events"]:

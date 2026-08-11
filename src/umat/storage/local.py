@@ -87,7 +87,9 @@ class LocalArtifactStore:
             shutil.copyfile(source, temporary)
             os.chmod(temporary, 0o440)
             os.replace(temporary, destination)
-        return StoredObject(expected_sha256, expected_size, self.object_key(expected_sha256), destination)
+        return StoredObject(
+            expected_sha256, expected_size, self.object_key(expected_sha256), destination
+        )
 
     def resolve(self, object_key: str) -> Path:
         path = (self.artifact_root / object_key).resolve()

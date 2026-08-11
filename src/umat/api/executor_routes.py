@@ -641,7 +641,11 @@ async def claim_stage(
     allowed_input_kinds: set[str] | None = None
     if stage.stage_type == StageType.C2_ANALYSIS:
         allowed_input_kinds = {
-            "pcap", "platform_manifest", "access_events", "static_prior", "network_activity"
+            "pcap",
+            "platform_manifest",
+            "access_events",
+            "static_prior",
+            "network_activity",
         }
     elif stage.stage_type == StageType.PLATFORM_ADAPTATION:
         allowed_input_kinds = {"windows_bundle", "android_bundle"}
@@ -1029,9 +1033,16 @@ async def android_session_ready(
 ) -> dict[str, Any]:
     timestamp, nonce, key, signature, lease_token = headers
     stage, attempt, _lease, record, replay = await verify_stage_mutation(
-        db=db, executor=executor, request=request, stage_id=stage_id,
-        body=body.model_dump(mode="json"), timestamp=timestamp, nonce=nonce,
-        idempotency_key=key, signature=signature, lease_token=lease_token,
+        db=db,
+        executor=executor,
+        request=request,
+        stage_id=stage_id,
+        body=body.model_dump(mode="json"),
+        timestamp=timestamp,
+        nonce=nonce,
+        idempotency_key=key,
+        signature=signature,
+        lease_token=lease_token,
     )
     if replay and record.response_json:
         return record.response_json
@@ -1046,9 +1057,14 @@ async def android_session_ready(
     )
     if session is None:
         session = AndroidDynamicSession(
-            analysis_run_id=run.id, stage_id=stage.id, attempt_id=attempt.id,
-            executor_id=executor.id, state="ready", scan_hash=body.scan_hash,
-            package_name=body.package_name, main_activity=body.main_activity,
+            analysis_run_id=run.id,
+            stage_id=stage.id,
+            attempt_id=attempt.id,
+            executor_id=executor.id,
+            state="ready",
+            scan_hash=body.scan_hash,
+            package_name=body.package_name,
+            main_activity=body.main_activity,
             guest_ip=body.guest_ip,
             expires_at=now + timedelta(seconds=body.duration_seconds),
             status_details={"message": "Interactive Android guest is ready"},
@@ -1070,8 +1086,12 @@ async def android_session_ready(
     response = {"session_id": str(session.id), "expires_at": session.expires_at.isoformat()}
     record.response_json = response
     await append_audit(
-        db, actor_type="executor", actor_id=str(executor.id), action="android_session.ready",
-        target_type="android_dynamic_session", target_id=str(session.id),
+        db,
+        actor_type="executor",
+        actor_id=str(executor.id),
+        action="android_session.ready",
+        target_type="android_dynamic_session",
+        target_id=str(session.id),
         payload={"analysis_run_id": str(run.id), "expires_at": session.expires_at.isoformat()},
     )
     await db.commit()
@@ -1089,9 +1109,16 @@ async def android_session_poll(
 ) -> dict[str, Any]:
     timestamp, nonce, key, signature, lease_token = headers
     stage, _attempt, _lease, record, replay = await verify_stage_mutation(
-        db=db, executor=executor, request=request, stage_id=stage_id,
-        body=body.model_dump(mode="json"), timestamp=timestamp, nonce=nonce,
-        idempotency_key=key, signature=signature, lease_token=lease_token,
+        db=db,
+        executor=executor,
+        request=request,
+        stage_id=stage_id,
+        body=body.model_dump(mode="json"),
+        timestamp=timestamp,
+        nonce=nonce,
+        idempotency_key=key,
+        signature=signature,
+        lease_token=lease_token,
     )
     if replay and record.response_json:
         return record.response_json
@@ -1124,8 +1151,13 @@ async def android_session_poll(
             if command.command_type == "finalize":
                 session.state = "finalizing"
             response = {
-                "session_id": str(session.id), "finalize": command.command_type == "finalize",
-                "command": {"id": str(command.id), "type": command.command_type, "payload": command.payload},
+                "session_id": str(session.id),
+                "finalize": command.command_type == "finalize",
+                "command": {
+                    "id": str(command.id),
+                    "type": command.command_type,
+                    "payload": command.payload,
+                },
             }
         else:
             response = {"session_id": str(session.id), "finalize": False, "command": None}
@@ -1145,9 +1177,16 @@ async def android_session_complete_command(
 ) -> dict[str, Any]:
     timestamp, nonce, key, signature, lease_token = headers
     stage, _attempt, _lease, record, replay = await verify_stage_mutation(
-        db=db, executor=executor, request=request, stage_id=stage_id,
-        body=body.model_dump(mode="json"), timestamp=timestamp, nonce=nonce,
-        idempotency_key=key, signature=signature, lease_token=lease_token,
+        db=db,
+        executor=executor,
+        request=request,
+        stage_id=stage_id,
+        body=body.model_dump(mode="json"),
+        timestamp=timestamp,
+        nonce=nonce,
+        idempotency_key=key,
+        signature=signature,
+        lease_token=lease_token,
     )
     if replay and record.response_json:
         return record.response_json
@@ -1357,9 +1396,7 @@ async def complete_stage(
         raise HTTPException(status.HTTP_409_CONFLICT, "run missing")
     if stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "android":
         session = await db.scalar(
-            select(AndroidDynamicSession).where(
-                AndroidDynamicSession.analysis_run_id == run.id
-            )
+            select(AndroidDynamicSession).where(AndroidDynamicSession.analysis_run_id == run.id)
         )
         if session:
             session.state = "ended"

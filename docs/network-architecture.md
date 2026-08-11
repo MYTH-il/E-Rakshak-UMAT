@@ -104,6 +104,38 @@ or completed destination traffic in connection-enabled mode. Enabling real
 egress in the UI records intent; it does not by itself certify that a deployment
 has the production egress tier.
 
+## Enforced controlled-egress profile
+
+UMAT now implements the host-side enforcement contract, but deliberately reports `not_ready`
+until the external sacrificial gateway is provisioned. The gateway must expose a dedicated
+WireGuard interface named `wg-umat-egress`; the workstation's ordinary default interface is never
+accepted. WireGuard must install a default route in policy-routing table `51820`, and the remote
+gateway must provide the recording DNS resolver at `10.77.0.53`.
+
+The root-only egress broker at `127.0.0.1:8092` checks the interface, policy route, IPv4
+forwarding, nftables lease sets and `tcpdump`. A real-egress submission receives HTTP 503 unless
+every check passes. On execution it adds only the exact guest IP to a kernel-expiring set for 90
+seconds; executor heartbeats refresh the entry. A worker crash, broker failure or missed heartbeat
+therefore removes egress without depending on application cleanup.
+
+The initial enforced policy permits only TCP 80/443 and DNS to the recording resolver, denies all
+private, carrier-grade NAT, loopback, link-local, metadata, benchmark and multicast destinations,
+denies guest IPv6, rejects guest-to-host access, rate-limits new flows, and NATs only through
+`wg-umat-egress`. Windows uses `virbr-winstdt` and fixed guest `10.66.0.101`; Android uses the
+dedicated `br-umat-egress` bridge and `172.31.0.0/24`. Each lease starts a gateway PCAP before its
+firewall entry is added and revokes the entry before capture finalization.
+
+After provisioning the remote VPN/gateway, verify readiness without running malware:
+
+```bash
+curl -fsS http://127.0.0.1:8092/health/ready
+sudo nft list sets ip umat_guest_guard
+ip rule show | grep 'lookup 51820'
+ip route show table 51820 default
+```
+
+Do not weaken the broker to use `eth0`, `wlan0`, Docker's default bridge or the host's main route.
+
 Platform adaptation is independent of both network mode and C2 policy. CAPE/MobSF findings are
 always normalized into the UMAT report. When C2 is disabled, aggregation consumes platform
 adaptation directly and records that C2 was skipped. When offline C2 is enabled in isolated mode,

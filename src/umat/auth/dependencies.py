@@ -50,4 +50,5 @@ def require_roles(*required: str):  # type: ignore[no-untyped-def]
         if not principal.roles.intersection(required):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "insufficient role")
         return principal
+
     return dependency

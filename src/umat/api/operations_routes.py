@@ -51,6 +51,7 @@ from umat.db.models import (
     Submission,
     WindowsRunConfiguration,
 )
+from umat.egress.readiness import require_controlled_egress
 from umat.intake import is_structurally_valid_apk
 from umat.storage.local import UploadTooLargeError
 
@@ -115,6 +116,7 @@ async def add_submission(
 ) -> CreateCaseResponse:
     case = await accessible_case(db, principal, case_id)
     settings = get_settings()
+    await require_controlled_egress(settings, network_mode)
     artifact_store = store()
     try:
         quarantined = await artifact_store.quarantine_upload(file, settings.max_upload_bytes)
@@ -165,7 +167,9 @@ async def add_submission(
             )
         ).all()
         if not principal.is_staff:
-            duplicate_rows = [row for row in duplicate_rows if row.Case.owner_user_id == principal.user.id]
+            duplicate_rows = [
+                row for row in duplicate_rows if row.Case.owner_user_id == principal.user.id
+            ]
         duplicates = [
             DuplicateCase(
                 case_id=row.Case.id,
@@ -316,10 +320,7 @@ async def recent_runs(
         .where(*filters)
     )
     total = int(
-        await db.scalar(
-            select(func.count()).select_from(base.order_by(None).subquery())
-        )
-        or 0
+        await db.scalar(select(func.count()).select_from(base.order_by(None).subquery())) or 0
     )
     rows = (
         await db.execute(

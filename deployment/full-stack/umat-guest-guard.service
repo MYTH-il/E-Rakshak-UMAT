@@ -5,8 +5,17 @@ Before=umat-android-executor.service umat-windows-executor.service
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/sbin/modprobe nft_ct
+ExecStartPre=/usr/sbin/modprobe nft_nat
+ExecStartPre=/usr/sbin/modprobe nft_masq
+ExecStartPre=/usr/sbin/modprobe nft_limit
+ExecStartPre=/usr/sbin/modprobe xt_mark
+ExecStartPre=/usr/sbin/modprobe xt_comment
 ExecStart=/usr/sbin/nft -f /etc/umat/umat-guest-guard.nft
-ExecStop=/usr/sbin/nft delete table ip umat_guest_guard
+ExecStartPost=/usr/libexec/umat/umat-guest-guard-compat start
+ExecStop=/usr/libexec/umat/umat-guest-guard-compat stop
+ExecStop=-/usr/sbin/nft delete table ip umat_guest_guard
+ExecStop=-/usr/sbin/nft delete table ip6 umat_guest_guard6
 RemainAfterExit=yes
 
 [Install]

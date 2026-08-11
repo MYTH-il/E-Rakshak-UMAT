@@ -22,7 +22,11 @@ async def _adapt(run_id: UUID) -> str:
     settings = get_settings()
     if settings.winstdt_schema_root is None:
         raise typer.BadParameter("UMAT_WINSTDT_SCHEMA_ROOT is required")
-    adapter = WindowsAdapter(LocalArtifactStore(settings.quarantine_root, settings.artifact_root), settings.winstdt_schema_root, settings.windows_max_bundle_bytes)
+    adapter = WindowsAdapter(
+        LocalArtifactStore(settings.quarantine_root, settings.artifact_root),
+        settings.winstdt_schema_root,
+        settings.windows_max_bundle_bytes,
+    )
     async with session_factory() as db:
         return str((await adapter.adapt_run(db, run_id)).id)
 

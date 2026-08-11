@@ -642,9 +642,7 @@ def status() -> None:
     paths = manifest["paths"]
     results = new_status_report()
 
-    def check(
-        name: str, passed: bool, detail: Any, *, required: bool = True
-    ) -> None:
+    def check(name: str, passed: bool, detail: Any, *, required: bool = True) -> None:
         record_status_check(results, name, passed, detail, required=required)
 
     locations = {

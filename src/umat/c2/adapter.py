@@ -233,8 +233,7 @@ class C2Adapter:
                         source_event_id=event_id,
                         data_type_accessed=event.get("data_type_accessed"),
                         access_api_call=event.get("access_api_call"),
-                        destination=event.get("destination_domain")
-                        or event.get("destination_ip"),
+                        destination=event.get("destination_domain") or event.get("destination_ip"),
                         confidence=str(event["confidence_tier"]),
                         evidence_hash=str(event["evidence_hash"]),
                         details=event,
@@ -285,15 +284,15 @@ class C2Adapter:
                     source_event_id=item.get("source_event_id") or item.get("event_id"),
                     item_type=item.get("item_type") or item.get("data_type"),
                     destination=item.get("destination"),
-                    statement=str(item.get("statement") or item.get("description") or "C2 provenance"),
+                    statement=str(
+                        item.get("statement") or item.get("description") or "C2 provenance"
+                    ),
                     details=item,
                 )
             )
 
     @staticmethod
-    def _persist_timeline(
-        db: AsyncSession, adaptation_id: UUID, run_id: UUID, path: Path
-    ) -> None:
+    def _persist_timeline(db: AsyncSession, adaptation_id: UUID, run_id: UUID, path: Path) -> None:
         for item in _json_array(path):
             when = item.get("occurred_at") or item.get("timestamp")
             if not when:

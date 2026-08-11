@@ -40,14 +40,30 @@ async def login(
         )
     )
     if (recent_failures or 0) >= settings.login_max_attempts:
-        await append_audit(db, actor_type="anonymous", actor_id=None, action="auth.throttled", target_type="user", target_id=username, payload={"ip": ip})
+        await append_audit(
+            db,
+            actor_type="anonymous",
+            actor_id=None,
+            action="auth.throttled",
+            target_type="user",
+            target_id=username,
+            payload={"ip": ip},
+        )
         await db.commit()
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "login temporarily throttled")
     user = await db.scalar(select(User).where(User.username == username))
     valid = bool(user and user.enabled and verify_password(user.password_hash, body.password))
     db.add(LoginAttempt(username=username, ip_address=ip, succeeded=valid, attempted_at=now))
     if not valid or user is None:
-        await append_audit(db, actor_type="anonymous", actor_id=None, action="auth.failed", target_type="user", target_id=username, payload={"ip": ip})
+        await append_audit(
+            db,
+            actor_type="anonymous",
+            actor_id=None,
+            action="auth.failed",
+            target_type="user",
+            target_id=username,
+            payload={"ip": ip},
+        )
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid username or password")
     session_token = random_token()
@@ -62,7 +78,15 @@ async def login(
         user_agent=(request.headers.get("user-agent") or "")[:512],
     )
     db.add(session)
-    await append_audit(db, actor_type="user", actor_id=str(user.id), action="auth.succeeded", target_type="session", target_id=str(session.id), payload={"ip": ip})
+    await append_audit(
+        db,
+        actor_type="user",
+        actor_id=str(user.id),
+        action="auth.succeeded",
+        target_type="session",
+        target_id=str(session.id),
+        payload={"ip": ip},
+    )
     await db.commit()
     response.set_cookie(
         "umat_session",
@@ -82,7 +106,13 @@ async def login(
         max_age=settings.session_ttl_seconds,
         path="/",
     )
-    return SessionResponse(user_id=user.id, username=user.username, roles=sorted(role.name for role in user.roles), expires_at=expires, csrf_token=csrf_token)
+    return SessionResponse(
+        user_id=user.id,
+        username=user.username,
+        roles=sorted(role.name for role in user.roles),
+        expires_at=expires,
+        csrf_token=csrf_token,
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -92,7 +122,14 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     principal.session.revoked_at = datetime.now(timezone.utc)
-    await append_audit(db, actor_type="user", actor_id=str(principal.user.id), action="auth.logout", target_type="session", target_id=str(principal.session.id))
+    await append_audit(
+        db,
+        actor_type="user",
+        actor_id=str(principal.user.id),
+        action="auth.logout",
+        target_type="session",
+        target_id=str(principal.session.id),
+    )
     await db.commit()
     response.delete_cookie("umat_session", path="/")
     response.delete_cookie("umat_csrf", path="/")
@@ -100,4 +137,9 @@ async def logout(
 
 @router.get("/session", response_model=SessionResponse)
 async def get_session(principal: Principal = Depends(current_principal)) -> SessionResponse:
-    return SessionResponse(user_id=principal.user.id, username=principal.user.username, roles=sorted(principal.roles), expires_at=principal.session.expires_at)
+    return SessionResponse(
+        user_id=principal.user.id,
+        username=principal.user.username,
+        roles=sorted(principal.roles),
+        expires_at=principal.session.expires_at,
+    )

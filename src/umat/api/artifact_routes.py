@@ -39,20 +39,53 @@ async def download_artifact(
     try:
         await accessible_case(db, principal, run.case_id)
     except HTTPException:
-        await append_audit(db, actor_type="user", actor_id=str(principal.user.id), action="artifact.download_denied", target_type="artifact", target_id=str(artifact.id), payload={"reason": "case_access"})
+        await append_audit(
+            db,
+            actor_type="user",
+            actor_id=str(principal.user.id),
+            action="artifact.download_denied",
+            target_type="artifact",
+            target_id=str(artifact.id),
+            payload={"reason": "case_access"},
+        )
         await db.commit()
         raise
     if not tier_allowed(principal, artifact.access_tier):
-        await append_audit(db, actor_type="user", actor_id=str(principal.user.id), action="artifact.download_denied", target_type="artifact", target_id=str(artifact.id), payload={"reason": "access_tier"})
+        await append_audit(
+            db,
+            actor_type="user",
+            actor_id=str(principal.user.id),
+            action="artifact.download_denied",
+            target_type="artifact",
+            target_id=str(artifact.id),
+            payload={"reason": "access_tier"},
+        )
         await db.commit()
         raise HTTPException(status.HTTP_404_NOT_FOUND, "artifact not found")
     try:
         path = store().verify(artifact.object_key, artifact.sha256)
     except DigestMismatchError as exc:
-        await append_audit(db, actor_type="system", actor_id=None, action="artifact.integrity_failed", target_type="artifact", target_id=str(artifact.id))
+        await append_audit(
+            db,
+            actor_type="system",
+            actor_id=None,
+            action="artifact.integrity_failed",
+            target_type="artifact",
+            target_id=str(artifact.id),
+        )
         await db.commit()
-        raise HTTPException(status.HTTP_409_CONFLICT, "artifact integrity verification failed") from exc
-    await append_audit(db, actor_type="user", actor_id=str(principal.user.id), action="artifact.downloaded", target_type="artifact", target_id=str(artifact.id), payload={"sha256": artifact.sha256})
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "artifact integrity verification failed"
+        ) from exc
+    await append_audit(
+        db,
+        actor_type="user",
+        actor_id=str(principal.user.id),
+        action="artifact.downloaded",
+        target_type="artifact",
+        target_id=str(artifact.id),
+        payload={"sha256": artifact.sha256},
+    )
     await db.commit()
     extensions = {
         "application/json": "json",
@@ -61,8 +94,11 @@ async def download_artifact(
     }
     extension = extensions.get(artifact.media_type)
     analyst_suffixes = {
-        "android_sample": "apk", "java_source": "zip", "smali_source": "zip",
-        "application_data": "tar", "android_scan_logs": "json",
+        "android_sample": "apk",
+        "java_source": "zip",
+        "smali_source": "zip",
+        "application_data": "tar",
+        "android_scan_logs": "json",
     }
     suffix = analyst_suffixes.get(artifact.kind)
     filename = (

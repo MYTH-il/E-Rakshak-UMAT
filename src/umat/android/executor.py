@@ -24,6 +24,7 @@ from umat.android.avd import AvdManager
 from umat.android.bundle import ANDROID_COMMIT, MOBSF_VERSION, AndroidBundleBuilder, sha256_file
 from umat.android.mobsf import MobSFClient
 from umat.android.redroid import RedroidManager
+from umat.egress.client import EgressClient
 from umat.executors.protocol import ExecutorStopRequested, raise_for_stop, signature_message
 from umat.intake.routing import is_structurally_valid_apk
 
@@ -53,6 +54,7 @@ class AndroidExecutor:
         stimulation_seconds: int,
         stimulation_actions: int,
         mobsf_container: str = "android-mobsf-1",
+        egress: EgressClient | None = None,
     ) -> None:
         self.client = httpx.Client(base_url=umat_url.rstrip("/"), timeout=120)
         self.state_path = state_path
@@ -67,6 +69,8 @@ class AndroidExecutor:
             stimulation_actions,
         )
         self.mobsf_container = mobsf_container
+        self.egress = egress
+        self._egress_active_run: str | None = None
         self.state: dict[str, Any] = (
             json.loads(state_path.read_text()) if state_path.is_file() else {}
         )
@@ -254,6 +258,8 @@ class AndroidExecutor:
             while not stopped.wait(15):
                 try:
                     self._heartbeat(claim, common)
+                    if self._egress_active_run and self.egress:
+                        self.egress.heartbeat(self._egress_active_run)
                     outage_started = None
                 except ExecutorStopRequested as stop:
                     stop_reasons.append(stop.reason)
@@ -345,6 +351,7 @@ class AndroidExecutor:
             "complete": False,
         }
         evidence: dict[str, Path] = {}
+        egress_capture: Path | None = None
         evidence["original_apk"] = workspace / "sample.apk"
         try:
             scan_logs_path = workspace / "mobsf-scan-logs.json"
@@ -359,13 +366,19 @@ class AndroidExecutor:
         analysis_error: Exception | None = None
         try:
             running = avd.start(avd_name, workspace)
+            if profile.get("network_mode") == "real_world_egress":
+                if not self.egress or not running.guest_ip:
+                    raise RuntimeError("controlled egress broker is not configured")
+                self.egress.acquire(claim["analysis_run_id"], "android", running.guest_ip)
+                self._egress_active_run = claim["analysis_run_id"]
             check_stop()
             self.mobsf.start_dynamic(scan_hash)
             dynamic_started = True
             activity = self._main_activity(static)
             package_name = str(static.get("package_name") or static.get("package") or "")
             activation: dict[str, Any] = {
-                "schema_version": "1.0", "package_name": package_name,
+                "schema_version": "1.0",
+                "package_name": package_name,
                 "main_activity": activity,
             }
             if package_name and isinstance(avd, RedroidManager):
@@ -435,6 +448,9 @@ class AndroidExecutor:
                 except Exception:
                     caveats.append("android_dynamic_stop_failed")
         finally:
+            if self._egress_active_run and self.egress:
+                egress_capture = self.egress.revoke(self._egress_active_run)
+                self._egress_active_run = None
             avd.stop()
         pcap = workspace / "android-capture.pcap"
         if not pcap.is_file() or pcap.stat().st_size == 0:
@@ -443,6 +459,8 @@ class AndroidExecutor:
                 f"Android analysis did not produce a non-empty PCAP{detail}"
             ) from analysis_error
         evidence["pcap"] = pcap
+        if egress_capture and egress_capture.is_file() and egress_capture.stat().st_size:
+            evidence["egress_pcap"] = egress_capture
         network_activity = workspace / "network-activity.json"
         checkpoint_document: dict[str, Any] | None = None
         checkpoint_path = evidence.get("network_checkpoints")
@@ -454,7 +472,10 @@ class AndroidExecutor:
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 caveats.append("android_network_checkpoint_invalid")
         self._network_summary(
-            pcap, running.guest_ip if running else None, network_activity, dynamic,
+            pcap,
+            running.guest_ip if running else None,
+            network_activity,
+            dynamic,
             checkpoint_document,
         )
         evidence["network_activity"] = network_activity
@@ -501,7 +522,11 @@ class AndroidExecutor:
         self._json(prior_path, prior)
         self._upload(claim, prior_path, "static_prior", "application/json")
         for kind, artifact_path, media_type in (
-            ("android_sample", evidence.get("original_apk"), "application/vnd.android.package-archive"),
+            (
+                "android_sample",
+                evidence.get("original_apk"),
+                "application/vnd.android.package-archive",
+            ),
             ("java_source", evidence.get("java_source"), "application/zip"),
             ("smali_source", evidence.get("smali_source"), "application/zip"),
             ("application_data", evidence.get("application_data"), "application/x-tar"),
@@ -510,7 +535,12 @@ class AndroidExecutor:
             ("analyst_session", evidence.get("analyst_session"), "application/json"),
             ("analyst_screenshots", evidence.get("analyst_screenshots"), "application/zip"),
             ("network_activity", evidence.get("network_activity"), "application/json"),
-            ("android_network_checkpoints", evidence.get("network_checkpoints"), "application/json"),
+            ("egress_pcap", evidence.get("egress_pcap"), "application/vnd.tcpdump.pcap"),
+            (
+                "android_network_checkpoints",
+                evidence.get("network_checkpoints"),
+                "application/json",
+            ),
         ):
             if artifact_path and artifact_path.is_file():
                 self._upload(claim, artifact_path, kind, media_type)
@@ -519,7 +549,10 @@ class AndroidExecutor:
         if not quality["runtime_behavior_observed"]:
             return "partial", "Dynamic execution completed without attributable runtime behavior"
         if not quality["instrumentation_evidence_observed"]:
-            return "partial", "Dynamic behavior observed, but runtime instrumentation produced no evidence"
+            return (
+                "partial",
+                "Dynamic behavior observed, but runtime instrumentation produced no evidence",
+            )
         return "completed", "MobSF static/dynamic analysis bundle validated with runtime evidence"
 
     @staticmethod
@@ -530,7 +563,8 @@ class AndroidExecutor:
         if isinstance(permissions, list):
             return [
                 str(item.get("permission") or item.get("name"))
-                if isinstance(item, dict) else str(item)
+                if isinstance(item, dict)
+                else str(item)
                 for item in permissions
             ]
         return []
@@ -542,13 +576,26 @@ class AndroidExecutor:
         activation: dict[str, Any],
     ) -> dict[str, Any]:
         baseline_domains = {
-            "connectivitycheck.gstatic.com", "play.googleapis.com", "www.google.com",
+            "connectivitycheck.gstatic.com",
+            "play.googleapis.com",
+            "www.google.com",
         }
         domains = dynamic.get("domains") if isinstance(dynamic, dict) else {}
-        observed_domains = sorted(str(value).lower() for value in domains) if isinstance(domains, dict) else []
-        attributable_domains = [value for value in observed_domains if value not in baseline_domains]
+        observed_domains = (
+            sorted(str(value).lower() for value in domains) if isinstance(domains, dict) else []
+        )
+        attributable_domains = [
+            value for value in observed_domains if value not in baseline_domains
+        ]
         populated_sections: list[str] = []
-        for name in ("clipboard", "emails", "sqlite", "runtime_dependencies", "xml", "base64_strings"):
+        for name in (
+            "clipboard",
+            "emails",
+            "sqlite",
+            "runtime_dependencies",
+            "xml",
+            "base64_strings",
+        ):
             value = dynamic.get(name) if isinstance(dynamic, dict) else None
             if value:
                 populated_sections.append(name)
@@ -557,7 +604,9 @@ class AndroidExecutor:
         if api_path and api_path.is_file():
             try:
                 api_document = json.loads(api_path.read_text())
-                api_events = len(api_document.get("data") or []) if isinstance(api_document, dict) else 0
+                api_events = (
+                    len(api_document.get("data") or []) if isinstance(api_document, dict) else 0
+                )
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 pass
         stimulation = activation.get("stimulation") or {}
@@ -583,7 +632,8 @@ class AndroidExecutor:
             destination = workspace / f"mobsf-{directory}"
             result = subprocess.run(  # noqa: S603
                 [
-                    "/usr/bin/docker", "cp",
+                    "/usr/bin/docker",
+                    "cp",
                     f"{self.mobsf_container}:/home/mobsf/.MobSF/uploads/{scan_hash}/{directory}",
                     str(destination),
                 ],
@@ -629,17 +679,26 @@ class AndroidExecutor:
                 report = self.mobsf.dynamic_report(scan_hash)
                 domains = report.get("domains") if isinstance(report, dict) else {}
                 urls = report.get("urls") if isinstance(report, dict) else []
-                network_checkpoints.append({
-                    "captured_at": captured_at, "reason": reason, "status": "ok",
-                    "domains": domains if isinstance(domains, dict) else {},
-                    "urls": urls if isinstance(urls, list) else [],
-                })
+                network_checkpoints.append(
+                    {
+                        "captured_at": captured_at,
+                        "reason": reason,
+                        "status": "ok",
+                        "domains": domains if isinstance(domains, dict) else {},
+                        "urls": urls if isinstance(urls, list) else [],
+                    }
+                )
             except Exception as exc:
-                network_checkpoints.append({
-                    "captured_at": captured_at, "reason": reason,
-                    "status": "unavailable", "error": str(exc)[:1000],
-                    "domains": {}, "urls": [],
-                })
+                network_checkpoints.append(
+                    {
+                        "captured_at": captured_at,
+                        "reason": reason,
+                        "status": "unavailable",
+                        "error": str(exc)[:1000],
+                        "domains": {},
+                        "urls": [],
+                    }
+                )
             last_checkpoint = time.monotonic()
 
         captures = workspace / "analyst-screenshots"
@@ -670,8 +729,12 @@ class AndroidExecutor:
                 success = True
                 try:
                     result = self._execute_interactive_command(
-                        avd, scan_hash, body.get("package_name"), static,
-                        command["type"], command["payload"]
+                        avd,
+                        scan_hash,
+                        body.get("package_name"),
+                        static,
+                        command["type"],
+                        command["payload"],
                     )
                     completed += 1
                 except Exception as exc:
@@ -682,21 +745,25 @@ class AndroidExecutor:
                     capture = captures / f"{completed:04d}-{command['type']}.png"
                     capture.write_bytes(base64.b64decode(encoded_image, validate=True))
                     recorded["screenshot"] = capture.name
-                records.append({
-                    "sequence": completed, "command_type": command["type"],
-                    "payload": command["payload"], "success": success, "result": recorded,
-                    "recorded_at": datetime.now(timezone.utc).isoformat(),
-                })
+                records.append(
+                    {
+                        "sequence": completed,
+                        "command_type": command["type"],
+                        "payload": command["payload"],
+                        "success": success,
+                        "result": recorded,
+                        "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
                 complete_path = (
-                    f"/api/internal/v1/stages/{claim['stage_id']}"
-                    "/android-session/complete-command"
+                    f"/api/internal/v1/stages/{claim['stage_id']}/android-session/complete-command"
                 )
                 complete_body = common | {
-                    "command_id": command["id"], "success": success, "result": result
+                    "command_id": command["id"],
+                    "success": success,
+                    "result": result,
                 }
-                completed_response = self.mutate(
-                    complete_path, complete_body, claim["lease_token"]
-                )
+                completed_response = self.mutate(complete_path, complete_body, claim["lease_token"])
                 completed_response.raise_for_status()
                 if command_type in {"tls_test", "proxy", "root_ca"}:
                     checkpoint(f"after_{command_type}")
@@ -707,12 +774,17 @@ class AndroidExecutor:
         journal = workspace / "analyst-session.json"
         self._json(journal, {"schema_version": "1.0", "commands": records})
         checkpoint_path = workspace / "android-network-checkpoints.json"
-        self._json(checkpoint_path, {
-            "schema_version": "1.0", "scan_hash": scan_hash,
-            "checkpoints": network_checkpoints,
-        })
+        self._json(
+            checkpoint_path,
+            {
+                "schema_version": "1.0",
+                "scan_hash": scan_hash,
+                "checkpoints": network_checkpoints,
+            },
+        )
         session_evidence = {
-            "analyst_session": journal, "network_checkpoints": checkpoint_path,
+            "analyst_session": journal,
+            "network_checkpoints": checkpoint_path,
         }
         if any(captures.iterdir()):
             session_evidence["analyst_screenshots"] = Path(
@@ -734,14 +806,35 @@ class AndroidExecutor:
     ) -> None:
         display_filter = (
             f"ip.src == {guest_ip} && !(mdns) && !(tcp.srcport == 5555)"
-            if guest_ip else "ip && !(mdns)"
+            if guest_ip
+            else "ip && !(mdns)"
         )
         command = [
-            "/usr/bin/tshark", "-r", str(pcap), "-Y", display_filter, "-T", "fields",
-            "-E", "separator=/t", "-E", "occurrence=f",
-            "-e", "frame.time_epoch", "-e", "ip.dst", "-e", "ipv6.dst",
-            "-e", "tcp.dstport", "-e", "udp.dstport", "-e", "dns.qry.name",
-            "-e", "_ws.col.Protocol",
+            "/usr/bin/tshark",
+            "-r",
+            str(pcap),
+            "-Y",
+            display_filter,
+            "-T",
+            "fields",
+            "-E",
+            "separator=/t",
+            "-E",
+            "occurrence=f",
+            "-e",
+            "frame.time_epoch",
+            "-e",
+            "ip.dst",
+            "-e",
+            "ipv6.dst",
+            "-e",
+            "tcp.dstport",
+            "-e",
+            "udp.dstport",
+            "-e",
+            "dns.qry.name",
+            "-e",
+            "_ws.col.Protocol",
         ]
         result = subprocess.run(command, capture_output=True, timeout=120, check=False)  # noqa: S603
         observations: list[dict[str, Any]] = []
@@ -750,21 +843,32 @@ class AndroidExecutor:
             timestamp, ipv4, ipv6, tcp_port, udp_port, domain, protocol = fields
             if not (ipv4 or ipv6 or domain):
                 continue
-            observations.append({
-                "observed_at": datetime.fromtimestamp(float(timestamp), timezone.utc).isoformat()
-                if timestamp else None,
-                "destination_ip": ipv4 or ipv6 or None,
-                "destination_port": int(tcp_port or udp_port) if (tcp_port or udp_port).isdigit() else None,
-                "destination_domain": domain.rstrip(".").lower() or None,
-                "protocol": protocol.lower() or None,
-                "source": "guest_pcap",
-            })
+            observations.append(
+                {
+                    "observed_at": datetime.fromtimestamp(
+                        float(timestamp), timezone.utc
+                    ).isoformat()
+                    if timestamp
+                    else None,
+                    "destination_ip": ipv4 or ipv6 or None,
+                    "destination_port": int(tcp_port or udp_port)
+                    if (tcp_port or udp_port).isdigit()
+                    else None,
+                    "destination_domain": domain.rstrip(".").lower() or None,
+                    "protocol": protocol.lower() or None,
+                    "source": "guest_pcap",
+                }
+            )
         # MobSF's HTTPS proxy is carried over the ADB tunnel. The bridge PCAP
         # therefore sees TCP/5555 rather than the application's destinations;
         # retain MobSF's independently captured proxy destinations as observed
         # telemetry and label their provenance explicitly.
         seen: set[tuple[str | None, str | None, int | None]] = {
-            (item.get("destination_domain"), item.get("destination_ip"), item.get("destination_port"))
+            (
+                item.get("destination_domain"),
+                item.get("destination_ip"),
+                item.get("destination_port"),
+            )
             for item in observations
         }
         captured_at = datetime.now(timezone.utc).isoformat()
@@ -774,10 +878,13 @@ class AndroidExecutor:
             checkpoints = checkpoint_document.get("checkpoints") or []
             for item in checkpoints if isinstance(checkpoints, list) else []:
                 if isinstance(item, dict) and item.get("status") == "ok":
-                    proxy_sources.append((
-                        item, str(item.get("captured_at") or captured_at),
-                        str(item.get("reason") or "periodic"),
-                    ))
+                    proxy_sources.append(
+                        (
+                            item,
+                            str(item.get("captured_at") or captured_at),
+                            str(item.get("reason") or "periodic"),
+                        )
+                    )
         if isinstance(dynamic, dict):
             proxy_sources.append((dynamic, captured_at, "final_dynamic_report"))
         for proxy_report, observed_at, checkpoint_reason in proxy_sources:
@@ -793,52 +900,69 @@ class AndroidExecutor:
                     if domain_key in seen:
                         continue
                     seen.add(domain_key)
-                    observations.append({
+                    observations.append(
+                        {
+                            "observed_at": observed_at,
+                            "destination_ip": address,
+                            "destination_port": None,
+                            "destination_domain": domain_key[0],
+                            "protocol": "https_proxy",
+                            "source": "mobsf_proxy_checkpoint",
+                            "provenance": {
+                                "transport": "adb_reverse_https_proxy",
+                                "checkpoint_reason": checkpoint_reason,
+                                "pcap_sha256": pcap_digest,
+                            },
+                        }
+                    )
+            urls = proxy_report.get("urls") or []
+            for raw in urls if isinstance(urls, list) else []:
+                value = (
+                    raw
+                    if isinstance(raw, str)
+                    else raw.get("url")
+                    if isinstance(raw, dict)
+                    else None
+                )
+                if not value:
+                    continue
+                parsed = urlparse(str(value))
+                if not parsed.hostname:
+                    continue
+                port = parsed.port or (
+                    443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+                )
+                url_key = (parsed.hostname.lower(), None, port)
+                if url_key in seen:
+                    continue
+                seen.add(url_key)
+                observations.append(
+                    {
                         "observed_at": observed_at,
-                        "destination_ip": address,
-                        "destination_port": None,
-                        "destination_domain": domain_key[0],
-                        "protocol": "https_proxy",
+                        "destination_ip": None,
+                        "destination_port": port,
+                        "destination_domain": url_key[0],
+                        "protocol": parsed.scheme.lower() or "proxy",
                         "source": "mobsf_proxy_checkpoint",
                         "provenance": {
                             "transport": "adb_reverse_https_proxy",
                             "checkpoint_reason": checkpoint_reason,
                             "pcap_sha256": pcap_digest,
                         },
-                    })
-            urls = proxy_report.get("urls") or []
-            for raw in urls if isinstance(urls, list) else []:
-                value = raw if isinstance(raw, str) else raw.get("url") if isinstance(raw, dict) else None
-                if not value:
-                    continue
-                parsed = urlparse(str(value))
-                if not parsed.hostname:
-                    continue
-                port = parsed.port or (443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None)
-                url_key = (parsed.hostname.lower(), None, port)
-                if url_key in seen:
-                    continue
-                seen.add(url_key)
-                observations.append({
-                    "observed_at": observed_at,
-                    "destination_ip": None,
-                    "destination_port": port,
-                    "destination_domain": url_key[0],
-                    "protocol": parsed.scheme.lower() or "proxy",
-                    "source": "mobsf_proxy_checkpoint",
-                    "provenance": {
-                        "transport": "adb_reverse_https_proxy",
-                        "checkpoint_reason": checkpoint_reason,
-                        "pcap_sha256": pcap_digest,
-                    },
-                })
-        self._json(destination, {
-            "schema_version": "1.0", "guest_ip": guest_ip,
-            "capture_size_bytes": pcap.stat().st_size, "observations": observations,
-            "parser_status": "ok" if result.returncode == 0 else "partial",
-            "parser_error": result.stderr.decode(errors="replace")[:2000] or None,
-            "proxy_checkpoint_count": len(proxy_sources),
-        })
+                    }
+                )
+        self._json(
+            destination,
+            {
+                "schema_version": "1.0",
+                "guest_ip": guest_ip,
+                "capture_size_bytes": pcap.stat().st_size,
+                "observations": observations,
+                "parser_status": "ok" if result.returncode == 0 else "partial",
+                "parser_error": result.stderr.decode(errors="replace")[:2000] or None,
+                "proxy_checkpoint_count": len(proxy_sources),
+            },
+        )
 
     def _execute_interactive_command(
         self,
@@ -855,8 +979,11 @@ class AndroidExecutor:
             avd.input_tap(int(payload["x"]), int(payload["y"]))
         elif command_type == "swipe":
             avd.input_swipe(
-                int(payload["x1"]), int(payload["y1"]), int(payload["x2"]),
-                int(payload["y2"]), int(payload["duration_ms"]),
+                int(payload["x1"]),
+                int(payload["y1"]),
+                int(payload["x2"]),
+                int(payload["y2"]),
+                int(payload["duration_ms"]),
             )
         elif command_type == "key":
             avd.input_key(int(payload["keycode"]))
@@ -877,11 +1004,23 @@ class AndroidExecutor:
             # reproducible.  A warm launcher task can otherwise hide onCreate
             # behavior such as the sample's network initialization.
             avd._adb(  # noqa: SLF001 - executor owns the isolated manager
-                "-s", avd.adb_address, "shell", "am", "force-stop", package_name,
+                "-s",
+                avd.adb_address,
+                "shell",
+                "am",
+                "force-stop",
+                package_name,
                 check=False,
             )
             activity_process = avd._adb(  # noqa: SLF001 - executor owns the isolated manager
-                "-s", avd.adb_address, "shell", "am", "start", "-W", "-n", component,
+                "-s",
+                avd.adb_address,
+                "shell",
+                "am",
+                "start",
+                "-W",
+                "-n",
+                component,
                 check=False,
             )
             output = (activity_process.stdout + activity_process.stderr).decode(errors="replace")
@@ -891,8 +1030,16 @@ class AndroidExecutor:
         elif command_type == "deeplink":
             value = str(payload["url"])
             result = avd._adb(  # noqa: SLF001 - executor owns the isolated manager
-                "-s", avd.adb_address, "shell", "am", "start", "-a",
-                "android.intent.action.VIEW", "-d", value, check=False,
+                "-s",
+                avd.adb_address,
+                "shell",
+                "am",
+                "start",
+                "-a",
+                "android.intent.action.VIEW",
+                "-d",
+                value,
+                check=False,
             )
             return {"output": (result.stdout + result.stderr).decode(errors="replace")[:8192]}
         elif command_type == "logcat":
@@ -915,9 +1062,11 @@ class AndroidExecutor:
                 raise RuntimeError(str(frida_result.get("message") or "Frida operation failed"))
             return frida_result | {
                 "selected_default_hooks": data.get("default_hooks", "").split(",")
-                if data.get("default_hooks") else [],
+                if data.get("default_hooks")
+                else [],
                 "selected_auxiliary_hooks": data.get("auxiliary_hooks", "").split(",")
-                if data.get("auxiliary_hooks") else [],
+                if data.get("auxiliary_hooks")
+                else [],
                 "attached_pid": data.get("pid") or None,
             }
         elif command_type == "activity_test":
@@ -926,7 +1075,8 @@ class AndroidExecutor:
                 exported = static_report.get("exported_activities")
                 if counts.get("exported_activities") == 0 or exported in {None, "[]"}:
                     return {
-                        "status": "ok", "activities_tested": 0,
+                        "status": "ok",
+                        "activities_tested": 0,
                         "message": "No exported activities were identified in the APK.",
                     }
             activity_result = self.mobsf.android_operation("activity", scan_hash, payload)
@@ -1065,11 +1215,11 @@ def run(
     enroll_only: bool = typer.Option(False, help="Enroll and publish capabilities, then exit"),
     stimulation_seconds: int = typer.Option(30, min=1, max=600),
     stimulation_actions: int = typer.Option(20, min=1, max=500),
-    mobsf_container: str = typer.Option(
-        "android-mobsf-1", envvar="UMAT_ANDROID_MOBSF_CONTAINER"
-    ),
+    mobsf_container: str = typer.Option("android-mobsf-1", envvar="UMAT_ANDROID_MOBSF_CONTAINER"),
     once: bool = typer.Option(False),
     poll_seconds: float = typer.Option(5.0, min=0.5),
+    egress_broker_url: str = typer.Option("http://127.0.0.1:8092", envvar="UMAT_EGRESS_BROKER_URL"),
+    egress_broker_token: str | None = typer.Option(None, envvar="UMAT_EGRESS_BROKER_TOKEN"),
 ) -> None:
     work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     executor_process = AndroidExecutor(
@@ -1087,6 +1237,9 @@ def run(
         stimulation_seconds=stimulation_seconds,
         stimulation_actions=stimulation_actions,
         mobsf_container=mobsf_container,
+        egress=EgressClient(egress_broker_url, egress_broker_token)
+        if egress_broker_token
+        else None,
     )
     if not executor_process.state:
         if not enrollment_token:

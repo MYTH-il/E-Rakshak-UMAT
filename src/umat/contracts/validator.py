@@ -59,7 +59,9 @@ def _validate_c2_identity(document: dict[str, Any]) -> None:
         if event["platform"] != platform:
             raise ContractError(f"C2 event {index} platform does not equal result platform")
         if platform == "android" and event.get("data_type_accessed") is not None:
-            raise ContractError("Android network-only C2 events cannot assert an accessed data item")
+            raise ContractError(
+                "Android network-only C2 events cannot assert an accessed data item"
+            )
 
 
 def validate_pinned_native_schema(
