@@ -9,7 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from umat.android.adapter import AndroidAdapter
 from umat.c2.adapter import C2Adapter
 from umat.config import get_settings
-from umat.db.models import AnalysisRun, AnalysisStage, Platform, StageState, StageType
+from umat.db.models import (
+    AnalysisRun,
+    AnalysisStage,
+    Platform,
+    RunResult,
+    RunStatus,
+    StageState,
+    StageType,
+)
 from umat.db.session import session_factory
 from umat.storage import LocalArtifactStore
 from umat.windows.adapter import WindowsAdapter
@@ -34,6 +42,25 @@ async def process_once(db: AsyncSession) -> bool:
         .limit(1)
     )
     if not stage:
+        orphaned_run = await db.scalar(
+            select(AnalysisRun)
+            .join(AnalysisStage, AnalysisStage.analysis_run_id == AnalysisRun.id)
+            .where(
+                AnalysisStage.stage_type.in_(
+                    [StageType.PLATFORM_ADAPTATION, StageType.C2_ADAPTATION]
+                ),
+                AnalysisStage.state == StageState.FAILED,
+                AnalysisRun.status != RunStatus.TERMINAL,
+            )
+            .order_by(AnalysisStage.updated_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if orphaned_run:
+            orphaned_run.status = RunStatus.TERMINAL
+            orphaned_run.result = RunResult.INCONCLUSIVE
+            await db.commit()
+            return True
         await db.commit()
         return False
     run = await db.get(AnalysisRun, stage.analysis_run_id)
@@ -63,6 +90,10 @@ async def process_once(db: AsyncSession) -> bool:
             failed.state = StageState.FAILED
             failed.failure_code = "adaptation_failed"
             failed.failure_detail = str(exc)[:2000]
+        failed_run = await db.get(AnalysisRun, stage.analysis_run_id, with_for_update=True)
+        if failed_run:
+            failed_run.status = RunStatus.TERMINAL
+            failed_run.result = RunResult.INCONCLUSIVE
         await db.commit()
         return True
     return True

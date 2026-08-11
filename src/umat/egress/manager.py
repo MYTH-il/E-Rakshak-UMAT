@@ -183,6 +183,7 @@ class EgressManager:
             check=False,
         )
         self._stop_capture(lease.capture)
+        self._finalize_capture(lease.capture_path)
         return lease.capture_path
 
     def close(self) -> None:
@@ -199,6 +200,14 @@ class EgressManager:
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
+
+    @staticmethod
+    def _finalize_capture(path: Path) -> None:
+        # tcpdump drops privileges and changes the savefile to its own account.
+        # Return completed evidence to the broker service group so executors can
+        # ingest it without making the capture world-readable.
+        os.chown(path, os.geteuid(), os.getegid())
+        path.chmod(0o640)
 
     @staticmethod
     def _interface_up(name: str) -> bool:

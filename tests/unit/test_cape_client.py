@@ -53,6 +53,16 @@ def test_cape_status_accepts_native_string_response() -> None:
     assert client.status(42) == {"status": "reported"}
 
 
+def test_cape_analysis_timeout_is_never_shorter_than_fifteen_minutes() -> None:
+    assert CapeClient("http://cape.invalid").analysis_timeout_seconds == 900
+    assert CapeClient(
+        "http://cape.invalid", analysis_timeout_seconds=180
+    ).analysis_timeout_seconds == 900
+    assert CapeClient(
+        "http://cape.invalid", analysis_timeout_seconds=1200
+    ).analysis_timeout_seconds == 1200
+
+
 def test_submit_never_uses_original_filename(tmp_path: Path) -> None:
     sample = tmp_path / "attacker-name.exe"
     sample.write_bytes(b"harmless fixture")
@@ -61,7 +71,7 @@ def test_submit_never_uses_original_filename(tmp_path: Path) -> None:
         assert b"attacker-name.exe" not in request.content
         assert b'name="file"; filename="sample.bin"' in request.content
         assert b'name="timeout"' in request.content
-        assert b"180" in request.content
+        assert b"900" in request.content
         assert b'name="enforce_timeout"' in request.content
         return httpx.Response(200, json={"data": {"task_ids": [7]}})
 

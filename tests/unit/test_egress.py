@@ -65,6 +65,7 @@ def test_lease_heartbeat_refreshes_fail_closed(
 
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Capture())
     monkeypatch.setattr("os.killpg", lambda *args: None)
+    monkeypatch.setattr(manager, "_finalize_capture", lambda *args: None)
     commands: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
         manager,

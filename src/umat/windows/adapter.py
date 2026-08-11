@@ -155,6 +155,7 @@ class WindowsAdapter:
         # profile itself. Compare against that same effective snapshot.
         expected_profile["network_mode"] = run.network_mode
         expected_profile["c2_analysis_enabled"] = run.c2_analysis_enabled
+        expected_profile["android_interactive"] = run.android_interactive
         if manifest["selected_profile"] != expected_profile:
             raise WindowsAdaptationError("Windows VM profile snapshot mismatch")
 

@@ -149,6 +149,7 @@ class CapeClient:
     """Pinned CAPE HTTP client plus the deployment's CAPE machine-management gateway."""
 
     ACTIVE_STATES = {"pending", "running", "distributed"}
+    MINIMUM_ANALYSIS_TIMEOUT_SECONDS = 15 * 60
 
     def __init__(
         self,
@@ -156,7 +157,7 @@ class CapeClient:
         api_token: str | None = None,
         management_url: str | None = None,
         management_token: str | None = None,
-        analysis_timeout_seconds: int = 180,
+        analysis_timeout_seconds: int = MINIMUM_ANALYSIS_TIMEOUT_SECONDS,
     ) -> None:
         headers = {"Authorization": f"Token {api_token}"} if api_token else {}
         self.client = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=60)
@@ -168,7 +169,9 @@ class CapeClient:
             headers=management_headers,
             timeout=900,
         )
-        self.analysis_timeout_seconds = analysis_timeout_seconds
+        self.analysis_timeout_seconds = max(
+            self.MINIMUM_ANALYSIS_TIMEOUT_SECONDS, analysis_timeout_seconds
+        )
 
     def create_machine(self, profile: dict[str, Any]) -> tuple[str, str]:
         response = self.management.post("/api/v1/machines", json=profile)
@@ -194,7 +197,9 @@ class CapeClient:
                 f"analysis_profile={profile.get('analysis_profile', 'standard')},"
                 f"network_mode={'simulated_inetsim' if network_mode == 'isolated_simulated' else 'real_world_egress'}"
             ),
-            "route": "none" if network_mode == "isolated_simulated" else "internet",
+            # The fail-closed egress broker owns real-world routing and its
+            # per-run lease. CAPE must not attempt a second route backend.
+            "route": "none",
             "timeout": str(self.analysis_timeout_seconds),
             "enforce_timeout": "true",
         }
