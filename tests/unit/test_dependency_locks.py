@@ -72,6 +72,9 @@ def test_runtime_locks_have_complete_immutable_identities() -> None:
     assert "@sha256:" in android["tool_versions"]["redroid_image"]
     assert android["validation"]["runtime"] == android["runtime_policy"]["default"]
     assert android["validation"]["status"] == "qualified"
+    assert c2["schema_reference"]["commit"] == c2["commit"]
+    assert c2["schema_reference"]["repository"] == c2["repository"]
+    assert SHA256.fullmatch(c2["schema_reference"]["sha256"])
     assert COMMIT.fullmatch(winstdt["cape"]["commit"])
 
 

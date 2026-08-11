@@ -88,7 +88,10 @@ def test_c2_runtime_drains_verbose_child_output(tmp_path: Path) -> None:
     runtime_data.chmod(0o555)
     (pipeline / "orchestrator.py").write_text(
         """import json
+import sys
 from pathlib import Path
+assert '--case-id' in sys.argv
+assert sys.argv[sys.argv.index('--case-id') + 1]
 print('x' * 200000)
 Path('data/runtime.sqlite').write_bytes(b'runtime-state')
 output = Path('output')

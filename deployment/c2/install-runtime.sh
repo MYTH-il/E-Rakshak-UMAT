@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly COMMIT="bc5bb681495a02fa0ff2411087e5a00ece5b1ca3"
-readonly TREE_SHA256="a64e7a6c7675f4bf516a75b7006bd560bec46ec8b7896645f9ee4aa610321976"
-readonly EFFECTIVE_VERSION="bc5bb681-umat.1"
+readonly COMMIT="f3e89cc54d368259eb8dc2bf895260b90dbb504a"
+readonly TREE_SHA256="909c770a2f99ea6666d24b233f1cd42d7cfcef3271a55df7a35b6af44fefb59f"
+readonly EFFECTIVE_VERSION="f3e89cc-umat.1"
 readonly DEPENDENCY_LOCK_SHA256="18d8e1acfd170b8f8c321aa3737b465ea4f19d28bcefd9534f5b6becb6e1ea6d"
 readonly EMPTY_PATCH_SERIES_SHA256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -72,11 +72,8 @@ sudo python3 -m venv "$stage/.venv"
 sudo "$stage/.venv/bin/pip" install --disable-pip-version-check --require-hashes \
   -r "$DEPENDENCY_LOCK"
 result="$(mktemp)"
-(cd "$stage/source" && sudo "$stage/.venv/bin/pytest" -q \
-  --deselect tests/test_schema_contract.py::test_sample_present \
-  --deselect tests/test_schema_contract.py::test_rows_have_attribution_populated \
-  --deselect tests/test_schema_contract.py::test_attribution_reaches_csv_export) | tee "$result"
-grep -Eq '314 passed, 11 skipped, 3 deselected' "$result" || {
+(cd "$stage/source" && sudo "$stage/.venv/bin/pytest" -q) | tee "$result"
+grep -Eq '331 passed, 15 skipped' "$result" || {
   echo "unexpected C2 upstream test result" >&2
   exit 1
 }
@@ -100,10 +97,10 @@ Path("$manifest").write_text(json.dumps({
     "effective_tree_sha256": "$TREE_SHA256",
     "dependency_lock_sha256": "$DEPENDENCY_LOCK_SHA256",
     "validated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    "upstream_tests_collected": 328,
-    "upstream_tests_passed": 314,
-    "upstream_tests_skipped": 11,
-    "upstream_tests_deselected_missing_corpus": 3,
+    "upstream_tests_collected": 346,
+    "upstream_tests_passed": 331,
+    "upstream_tests_skipped": 15,
+    "upstream_tests_deselected_missing_corpus": 0,
 }, indent=2) + "\n")
 PY
 sudo install -m 0644 "$manifest" "$stage/runtime-manifest.json"

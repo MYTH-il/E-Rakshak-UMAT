@@ -34,8 +34,11 @@
     },
     "c2": {
       "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
-      "commit": "bc5bb681495a02fa0ff2411087e5a00ece5b1ca3",
-      "effective_version": "bc5bb681-umat.1",
+      "commit": "f3e89cc54d368259eb8dc2bf895260b90dbb504a",
+      "effective_version": "f3e89cc-umat.1",
+      "upstream_tree_sha256": "909c770a2f99ea6666d24b233f1cd42d7cfcef3271a55df7a35b6af44fefb59f",
+      "effective_tree_sha256": "909c770a2f99ea6666d24b233f1cd42d7cfcef3271a55df7a35b6af44fefb59f",
+      "dependency_lock_sha256": "18d8e1acfd170b8f8c321aa3737b465ea4f19d28bcefd9534f5b6becb6e1ea6d",
       "patch_series_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "license_status": "authorization_required_no_upstream_license_file"
     },

@@ -253,7 +253,7 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         ("UMAT_CAPE_MANAGEMENT_URL", "http://127.0.0.1:8091"),
         ("UMAT_QUARANTINE_ROOT", "/var/lib/umat/quarantine"),
         ("UMAT_ARTIFACT_ROOT", "/var/lib/umat/artifacts"),
-        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/bc5bb681-umat.1"),
+        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/f3e89cc-umat.1"),
         ("UMAT_WINSTDT_SCHEMA_ROOT", "/opt/umat/upstreams/winstdt/schemas"),
     ]
     additions = [f"{key}={value}" for key, value in values if key not in present]
@@ -835,6 +835,12 @@ def status() -> None:
     check(
         "c2_effective_runtime",
         runtime_manifest.get("upstream_commit") == manifest["components"]["c2"]["commit"]
+        and runtime_manifest.get("upstream_tree_sha256")
+        == manifest["components"]["c2"]["upstream_tree_sha256"]
+        and runtime_manifest.get("effective_tree_sha256")
+        == manifest["components"]["c2"]["effective_tree_sha256"]
+        and runtime_manifest.get("dependency_lock_sha256")
+        == manifest["components"]["c2"]["dependency_lock_sha256"]
         and runtime_manifest.get("patch_series_sha256")
         == manifest["components"]["c2"]["patch_series_sha256"],
         runtime_manifest or "runtime manifest unavailable",

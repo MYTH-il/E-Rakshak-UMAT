@@ -71,6 +71,10 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
     assert runtimes["redroid"]["image"] in schemas_source
     assert runtimes["aosp_avd"]["emulator_version"] in schemas_source
     assert components["c2"]["commit"] == c2["commit"]
+    assert components["c2"]["effective_version"] == c2["effective_version"]
+    assert components["c2"]["upstream_tree_sha256"] == c2["upstream_tree_sha256"]
+    assert components["c2"]["effective_tree_sha256"] == c2["effective_tree_sha256"]
+    assert components["c2"]["dependency_lock_sha256"] == c2["dependency_lock_sha256"]
     assert components["c2"]["patch_series_sha256"] == c2["patch_series_sha256"]
     assert components["umat_postgres"]["image"] == (
         f"{postgres['image']}@{postgres['image_digest']}"
@@ -201,6 +205,21 @@ def test_all_upstream_sources_have_explicit_checkout_paths() -> None:
     assert manifest["paths"]["winstdt_checkout"] == "/opt/umat/upstreams/winstdt"
     assert manifest["paths"]["android_checkout"] == "/opt/umat/upstreams/android-erakshak"
     assert manifest["paths"]["c2_checkout"] == "/opt/umat/upstreams/c2-exfil"
+
+
+def test_c2_installers_enforce_every_locked_runtime_identity_field() -> None:
+    c2 = json.loads((ROOT / "dependency-locks/c2-exfil.json").read_text())
+    runtime_installer = (ROOT / "deployment/c2/install-runtime.sh").read_text()
+    service_installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
+    for value in (
+        c2["commit"],
+        c2["effective_version"],
+        c2["effective_tree_sha256"],
+        c2["dependency_lock_sha256"],
+        c2["patch_series_sha256"],
+    ):
+        assert value in runtime_installer
+    assert c2["effective_version"] in service_installer
 
 
 def test_android_runtime_installer_enforces_locked_emulator_and_license() -> None:

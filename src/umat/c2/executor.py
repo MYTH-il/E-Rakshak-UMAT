@@ -92,6 +92,8 @@ class C2Executor:
             "name": name,
         }
         self._save()
+
+    def publish_capabilities(self) -> None:
         capabilities = self.client.post(
             "/api/internal/v1/executors/capabilities",
             headers=self.auth_headers(),
@@ -333,7 +335,7 @@ def run(
     ),
     work_root: Path = typer.Option(Path("var/c2-work"), envvar="UMAT_C2_WORK_ROOT"),
     runtime_root: Path | None = typer.Option(None, envvar="UMAT_C2_RUNTIME_ROOT"),
-    runtime_commit: str = typer.Option("bc5bb681495a02fa0ff2411087e5a00ece5b1ca3"),
+    runtime_commit: str = typer.Option("f3e89cc54d368259eb8dc2bf895260b90dbb504a"),
     runtime_patch_sha256: str = typer.Option(
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     ),
@@ -363,6 +365,7 @@ def run(
         if not enrollment_token:
             raise typer.BadParameter("enrollment-token is required on first run")
         executor.enroll(enrollment_token, name)
+    executor.publish_capabilities()
     if enroll_only:
         return
     while True:

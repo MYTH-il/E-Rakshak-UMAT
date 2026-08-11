@@ -18,7 +18,7 @@ The authoritative design remains the
 |---|---|---|
 | Phase 0 contracts and locks | Implemented | Versioned JSON schemas, vocabularies, executor OpenAPI, dependency locks, and fixtures are committed. C2 schema v1.3 and upstream Android/Windows schemas are used as references without redefining their ownership. |
 | Phase 1 control plane | Implemented | Authentication/RBAC, intake, custody, deduplication, PostgreSQL models/migrations, immutable local artifacts, leases, signed executor mutations, audit chain, and fake executor. |
-| Phase 2 shared C2 service | Implemented with runtime gates | Isolated executor, input/result validation, adapters, recovery, and Windows/Android inputs exist. The executable runtime is pinned to upstream schema-v1.3 commit `bc5bb681` as effective runtime `bc5bb681-umat.1`. |
+| Phase 2 shared C2 service | Implemented with runtime gates | Isolated executor, input/result validation, adapters, recovery, and Windows/Android inputs exist. The executable runtime is pinned to upstream schema-v1.3 commit `f3e89cc` as effective runtime `f3e89cc-umat.1`, including normalized Windows handoff paths, simulated resolved-destination evidence, and cleaned threat-intelligence feed ingestion. |
 | Phase 3 Windows/CAPE | Operational end to end | Submission-format normalization, CAPE execution and recovery, full JSON evidence import, WinST/DT handoff validation, adapters, aggregation, and reporting have completed real LNK-in-ZIP malware runs. CAPE itself is operational; the current UMAT UI does not expose every supported workflow and profile parameter. |
 | Phase 4 API and UI | Operations console implemented | Case/run APIs, L1/L2/L3 views, aggregation, exports, case editing and in-case intake, server-filtered run history, immutable retries, diagnostic progress, worker inventory, and profile administration are available through the role-aware console. |
 | Phase 5 Android/MobSF | Implemented and runtime-validated | The default pinned Android 11/API-30 x86_64 ReDroid profile supports unattended analysis and a brokered interactive analyst session with live screen/input, activities, Frida, TLS/proxy controls, logs, scoped file access, evidence capture, adaptation, aggregation, and reporting. The AOSP AVD is retained as a fallback; ARM profiles are out of scope. |
@@ -46,15 +46,15 @@ engineering interfaces rather than requirements for routine operation.
 
 ## Verification evidence
 
-As of 2026-08-10:
+As of 2026-08-11:
 
 - Ruff passes for `src` and `tests`.
 - Strict mypy passes for the application source tree.
-- The default offline suite passes: **105 passed, 9 skipped**. The skipped tests require explicitly
+- The default offline suite passes: **111 passed, 9 skipped**. The skipped tests require explicitly
   configured disposable PostgreSQL integration/migration databases.
-- CI starts disposable, digest-pinned PostgreSQL 18.4 databases and passes the complete Python
-  suite with **114 passed, 0 skipped**, including migration downgrade/re-upgrade tests. It also
-  runs four Playwright workflow groups covering authentication, intake, duplicate confirmation,
+- The CI-equivalent database-backed suite passes with **119 passed, 0 skipped** against disposable
+  PostgreSQL 18.4 databases, including migration downgrade/re-upgrade tests. CI also runs four
+  Playwright workflow groups covering authentication, intake, duplicate confirmation,
   reruns, retries, cancellation, case editing, in-case submission, run diagnosis, worker inventory,
   report selection, exports, role restrictions, and automated accessibility.
 - JavaScript ESLint, Ruff, and strict mypy checks pass using committed dependency locks.

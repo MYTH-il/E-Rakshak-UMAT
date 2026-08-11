@@ -145,6 +145,8 @@ class SubprocessC2Runtime:
                 sys.executable,
                 str(self.source_root / "pipeline/orchestrator.py"),
                 str(context.pcap.local_path),
+                "--case-id",
+                str(context.analysis_run_id),
             ]
         if context.platform == "windows" and context.access_events:
             command.append(str(context.access_events.local_path))

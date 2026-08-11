@@ -142,6 +142,12 @@ def test_c2_v13_identity_mismatch_fails() -> None:
 
 def test_native_contract_catalog_is_pinned() -> None:
     catalog = json.loads((ROOT / "contracts/native-contract-sources.json").read_text())
-    assert catalog["contracts"]["c2_events"]["native_schema_version"] == "1.3"
+    c2_lock = json.loads((ROOT / "dependency-locks/c2-exfil.json").read_text())
+    c2_contract = catalog["contracts"]["c2_events"]
+    assert c2_contract["native_schema_version"] == "1.3"
+    assert c2_contract["repository"] == c2_lock["schema_reference"]["repository"]
+    assert c2_contract["commit"] == c2_lock["schema_reference"]["commit"]
+    assert c2_contract["path"] == c2_lock["schema_reference"]["path"]
+    assert c2_contract["sha256"] == c2_lock["schema_reference"]["sha256"]
     for contract in catalog["contracts"].values():
         assert len(contract["commit"]) == 40
