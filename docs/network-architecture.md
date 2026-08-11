@@ -21,6 +21,16 @@ through a host-side relay bound to the Docker gateway; Android cannot initiate c
 host or external networks. MobSF's proxy is exposed to the guest through ADB
 reverse, not a routable control-plane interface.
 
+Each isolated ReDroid run also starts a disposable, digest-pinned mitmproxy sidecar on
+`umat-android-isolated`. The executor installs a run-scoped CA in the disposable guest and sets the
+sidecar as its explicit HTTP(S) proxy after MobSF starts dynamic analysis. The sidecar has no host
+port, no control-plane network, no Docker socket, no Linux capabilities and a read-only root
+filesystem. Because the Docker network is internal, it records attempted HTTP requests and HTTPS
+CONNECT destinations but cannot grant Internet access. Its native flow archive, HAR, JSONL event
+log and status document are signed into the Android bundle and uploaded as individual artifacts.
+The independent in-guest PCAP remains authoritative for direct and proxy-bypassing traffic;
+certificate-pinned failures remain visible as failed proxy events or direct connection attempts.
+
 The `umat-guest-guard` nftables table provides a second containment boundary:
 it denies forwarded traffic from both malware bridges and denies guest-originated
 host traffic except the explicitly required Windows DHCP/DNS/result-server

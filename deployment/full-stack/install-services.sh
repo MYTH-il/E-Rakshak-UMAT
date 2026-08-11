@@ -212,6 +212,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     'UMAT_ANDROID_WORK_ROOT=/var/lib/umat/android-work' \
     'UMAT_ANDROID_EXECUTOR_NAME=android-executor' >"$android_env"
   printf '%s\n' \
+    'UMAT_ANDROID_MITMPROXY_IMAGE=mitmproxy/mitmproxy@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f' \
     'UMAT_EGRESS_BROKER_URL=http://127.0.0.1:8092' \
     "UMAT_EGRESS_BROKER_TOKEN=$egress_token" >>"$android_env"
   sudo -n install -o root -g "$executor_group" -m 0640 "$c2_env" /etc/umat/c2-executor.env

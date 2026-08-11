@@ -258,6 +258,7 @@ def test_guest_firewall_is_installed_and_fail_closed() -> None:
     assert "ip saddr 10.66.0.101 tcp sport 8000 accept" in rules
     assert 'iifname "br-umat-android" drop' in rules
     assert 'iifname { "virbr-winstdt", "br-umat-android" } drop' in rules
+    assert 'ip daddr 172.30.0.3 tcp dport 8080 accept' in rules
     assert "set windows_egress_v4" in rules
     assert "set android_egress_v4" in rules
     assert 'oifname "wg-umat-egress" tcp dport { 80, 443 }' in rules

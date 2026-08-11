@@ -175,3 +175,35 @@ def test_network_summary_merges_proxy_checkpoint_when_final_report_is_empty(
     assert document["observations"][0]["destination_domain"] == "api.example.test"
     assert document["observations"][0]["source"] == "mobsf_proxy_checkpoint"
     assert document["observations"][0]["provenance"]["checkpoint_reason"] == "before_tls_test"
+
+
+def test_network_summary_merges_isolated_mitmproxy_events(tmp_path: Any, monkeypatch: Any) -> None:
+    pcap = tmp_path / "capture.pcap"
+    pcap.write_bytes(b"immutable-pcap")
+    sidecar = tmp_path / "mitmproxy"
+    sidecar.mkdir()
+    (sidecar / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "event": "request",
+                "observed_at": "2026-08-11T11:00:00Z",
+                "scheme": "https",
+                "host": "c2.example.test",
+                "port": 443,
+            }
+        )
+        + "\n"
+    )
+    destination = tmp_path / "network.json"
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, b"", b""),
+    )
+    AndroidExecutor._network_summary(  # noqa: SLF001
+        object.__new__(AndroidExecutor), pcap, "172.30.0.2", destination
+    )
+    observation = json.loads(destination.read_text())["observations"][0]
+    assert observation["destination_domain"] == "c2.example.test"
+    assert observation["source"] == "mitmproxy_sidecar"
+    assert observation["provenance"]["upstream"] == "none"

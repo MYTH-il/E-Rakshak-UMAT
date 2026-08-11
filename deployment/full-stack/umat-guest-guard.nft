@@ -39,6 +39,11 @@ table ip umat_guest_guard {
     chain forward {
         type filter hook forward priority -5; policy accept;
 
+        # The isolated Android guest may reach only its per-run evidence proxy.
+        # The sidecar has no upstream interface or published host port.
+        iifname "br-umat-android" oifname "br-umat-android" ip saddr 172.30.0.0/24 ip daddr 172.30.0.3 tcp dport 8080 accept
+        iifname "br-umat-android" oifname "br-umat-android" ip saddr 172.30.0.3 ip daddr 172.30.0.0/24 tcp sport 8080 ct state established accept
+
         # Replies may return only from the dedicated WireGuard uplink.
         iifname "wg-umat-egress" oifname "virbr-winstdt" ip daddr @windows_egress_v4 ct state established,related meta mark set 0x554d accept
         iifname "wg-umat-egress" oifname "br-umat-egress" ip daddr @android_egress_v4 ct state established,related meta mark set 0x554d accept

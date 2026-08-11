@@ -9,6 +9,10 @@ from typing import Any
 
 from umat.android.avd import RunningAVD
 
+MITMPROXY_IMAGE = (
+    "mitmproxy/mitmproxy@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f"
+)
+
 
 class RedroidManager:
     """Run one disposable, amd64-pinned Android 11 ReDroid worker."""
@@ -23,6 +27,7 @@ class RedroidManager:
         adb_address: str = "172.17.0.1:5555",
         boot_timeout_seconds: int = 180,
         network_mode: str = "isolated_simulated",
+        mitmproxy_image: str = MITMPROXY_IMAGE,
     ) -> None:
         if "@sha256:" not in image:
             raise ValueError("ReDroid image must be pinned by digest")
@@ -33,6 +38,7 @@ class RedroidManager:
         self.adb_address = adb_address
         self.boot_timeout_seconds = boot_timeout_seconds
         self.network_mode = network_mode
+        self.mitmproxy_image = mitmproxy_image
         self.running: RunningAVD | None = None
         self.environment = os.environ.copy()
         self.container_name: str | None = None
@@ -40,6 +46,9 @@ class RedroidManager:
         self.capture_log_stream: Any | None = None
         self.relay_process: subprocess.Popen[bytes] | None = None
         self.relay_log_stream: Any | None = None
+        self.proxy_container_name: str | None = None
+        self.proxy_address: str | None = None
+        self.proxy_evidence_dir: Path | None = None
 
     def start(self, name: str, workspace: Path) -> RunningAVD:
         container_name = f"{name}-redroid"
@@ -79,6 +88,10 @@ class RedroidManager:
             "linux/amd64",
             "--pull",
             "never",
+            "--entrypoint",
+            "/usr/local/bin/mitmdump",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
             "--privileged",
             *network_arguments,
             *dns_arguments,
@@ -187,6 +200,116 @@ class RedroidManager:
         )
         self.running = RunningAVD(container_name, self.adb_address, pcap, guest_ip)
         return self.running
+
+    def enable_analysis_proxy(self, workspace: Path) -> dict[str, Any]:
+        """Start an isolated evidence proxy and configure the disposable guest."""
+        if self.network_mode != "isolated_simulated" or not self.container_name:
+            return {"status": "not_applicable"}
+        evidence = workspace / "mitmproxy"
+        evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # The pinned image runs as an unprivileged account. Docker bind mounts
+        # retain host ownership, so grant only this disposable evidence folder.
+        evidence.chmod(0o777)
+        name = f"{self.container_name}-mitm"
+        addon = Path(__file__).parents[3] / "deployment/android/mitmproxy_capture.py"
+        self._docker(
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--platform",
+            "linux/amd64",
+            "--pull",
+            "never",
+            "--network",
+            "umat-android-isolated",
+            "--ip",
+            "172.30.0.3",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges:true",
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=32m",  # noqa: S108 - container-private tmpfs
+            "-v",
+            f"{evidence}:/evidence",
+            "-v",
+            f"{addon}:/capture.py:ro",
+            self.mitmproxy_image,
+            "--listen-host",
+            "0.0.0.0",  # noqa: S104 - reachable only on the internal run network
+            "--listen-port",
+            "8080",
+            "--set",
+            "confdir=/evidence/certs",
+            "--set",
+            "hardump=/evidence/traffic.har",
+            "--set",
+            "termlog_verbosity=info",
+            "-w",
+            "/evidence/flows.mitm",
+            "-s",
+            "/capture.py",
+        )
+        self.proxy_container_name = name
+        self.proxy_evidence_dir = evidence
+        self.proxy_address = self._docker(
+            "inspect",
+            "--format",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            name,
+        ).stdout.decode().strip()
+        if self.proxy_address != "172.30.0.3":
+            raise RuntimeError("mitmproxy sidecar did not receive its restricted address")
+        certificate = evidence / "certs" / "mitmproxy-ca-cert.cer"
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not certificate.is_file():
+            if self._docker("inspect", "-f", "{{.State.Running}}", name, check=False).stdout.strip() != b"true":
+                raise RuntimeError("mitmproxy sidecar stopped during startup")
+            time.sleep(0.25)
+        if not certificate.is_file():
+            raise RuntimeError("mitmproxy sidecar did not generate its run-scoped CA")
+        digest = subprocess.run(  # noqa: S603
+            ["/usr/bin/openssl", "x509", "-inform", "PEM", "-subject_hash_old", "-in", str(certificate)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()[0]
+        remote = "/data/local/tmp/umat-mitm-ca.cer"
+        self._adb("-s", self.adb_address, "push", str(certificate), remote)
+        self._adb(
+            "-s", self.adb_address, "shell", "su", "0", "sh", "-c",
+            f"cp {remote} /system/etc/security/cacerts/{digest}.0 && chmod 644 /system/etc/security/cacerts/{digest}.0",
+        )
+        self.ensure_analysis_proxy()
+        return {
+            "status": "active",
+            "address": self.proxy_address,
+            "port": 8080,
+            "ca_subject_hash": digest,
+            "network": "umat-android-isolated",
+            "upstream": "none",
+        }
+
+    def ensure_analysis_proxy(self) -> None:
+        if self.proxy_address:
+            self._adb(
+                "-s", self.adb_address, "shell", "settings", "put", "global", "http_proxy",
+                f"{self.proxy_address}:8080",
+            )
+
+    def proxy_evidence(self) -> dict[str, Path]:
+        root = self.proxy_evidence_dir
+        if not root:
+            return {}
+        candidates = {
+            "mitmproxy_flows": root / "flows.mitm",
+            "mitmproxy_har": root / "traffic.har",
+            "mitmproxy_events": root / "events.jsonl",
+            "mitmproxy_ca": root / "certs" / "mitmproxy-ca-cert.cer",
+        }
+        return {kind: path for kind, path in candidates.items() if path.is_file()}
 
     def stimulate(self, duration_seconds: int, max_actions: int) -> dict[str, Any]:
         actions = [
@@ -529,6 +652,20 @@ class RedroidManager:
         return archive
 
     def stop(self) -> None:
+        if self.proxy_address:
+            self._adb(
+                "-s", self.adb_address, "shell", "settings", "put", "global", "http_proxy", ":0",
+                check=False,
+            )
+        if self.proxy_container_name:
+            self._docker("stop", "--time", "10", self.proxy_container_name, check=False)
+            self._docker("rm", "-f", self.proxy_container_name, check=False)
+        if self.proxy_evidence_dir:
+            for path in self.proxy_evidence_dir.rglob("*"):
+                try:
+                    path.chmod(0o600 if path.is_file() else 0o700)
+                except OSError:
+                    pass
         if self.relay_process:
             self.relay_process.terminate()
             try:
@@ -568,6 +705,8 @@ class RedroidManager:
         self.capture_log_stream = None
         self.relay_process = None
         self.relay_log_stream = None
+        self.proxy_container_name = None
+        self.proxy_address = None
 
     def _adb(self, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(  # noqa: S603

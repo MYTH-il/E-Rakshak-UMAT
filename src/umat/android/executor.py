@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from umat.android.avd import AvdManager
 from umat.android.bundle import ANDROID_COMMIT, MOBSF_VERSION, AndroidBundleBuilder, sha256_file
 from umat.android.mobsf import MobSFClient
-from umat.android.redroid import RedroidManager
+from umat.android.redroid import MITMPROXY_IMAGE, RedroidManager
 from umat.egress.client import EgressClient
 from umat.executors.protocol import ExecutorStopRequested, raise_for_stop, signature_message
 from umat.intake.routing import is_structurally_valid_apk
@@ -55,6 +55,7 @@ class AndroidExecutor:
         stimulation_actions: int,
         mobsf_container: str = "android-mobsf-1",
         egress: EgressClient | None = None,
+        mitmproxy_image: str = MITMPROXY_IMAGE,
     ) -> None:
         self.client = httpx.Client(base_url=umat_url.rstrip("/"), timeout=120)
         self.state_path = state_path
@@ -70,6 +71,7 @@ class AndroidExecutor:
         )
         self.mobsf_container = mobsf_container
         self.egress = egress
+        self.mitmproxy_image = mitmproxy_image
         self._egress_active_run: str | None = None
         self.state: dict[str, Any] = (
             json.loads(state_path.read_text()) if state_path.is_file() else {}
@@ -330,6 +332,7 @@ class AndroidExecutor:
                 memory_mb=memory_mb,
                 vcpus=int(profile.get("vcpus") or 4),
                 network_mode=str(profile.get("network_mode") or "isolated_simulated"),
+                mitmproxy_image=self.mitmproxy_image,
             )
         else:
             if profile.get("network_mode") == "isolated_simulated":
@@ -374,6 +377,20 @@ class AndroidExecutor:
             check_stop()
             self.mobsf.start_dynamic(scan_hash)
             dynamic_started = True
+            if isinstance(avd, RedroidManager):
+                try:
+                    proxy_state = avd.enable_analysis_proxy(workspace)
+                    proxy_state_path = workspace / "mitmproxy-state.json"
+                    self._json(proxy_state_path, proxy_state)
+                    evidence["mitmproxy_state"] = proxy_state_path
+                except Exception as exc:
+                    caveats.append("android_mitmproxy_unavailable")
+                    proxy_state_path = workspace / "mitmproxy-state.json"
+                    self._json(
+                        proxy_state_path,
+                        {"status": "failed", "error": str(exc)[:2000]},
+                    )
+                    evidence["mitmproxy_state"] = proxy_state_path
             activity = self._main_activity(static)
             package_name = str(static.get("package_name") or static.get("package") or "")
             activation: dict[str, Any] = {
@@ -452,6 +469,8 @@ class AndroidExecutor:
                 egress_capture = self.egress.revoke(self._egress_active_run)
                 self._egress_active_run = None
             avd.stop()
+            if isinstance(avd, RedroidManager):
+                evidence.update(avd.proxy_evidence())
         pcap = workspace / "android-capture.pcap"
         if not pcap.is_file() or pcap.stat().st_size == 0:
             detail = f": {analysis_error}" if analysis_error else ""
@@ -535,6 +554,18 @@ class AndroidExecutor:
             ("analyst_session", evidence.get("analyst_session"), "application/json"),
             ("analyst_screenshots", evidence.get("analyst_screenshots"), "application/zip"),
             ("network_activity", evidence.get("network_activity"), "application/json"),
+            (
+                "mitmproxy_flows",
+                evidence.get("mitmproxy_flows"),
+                "application/vnd.mitmproxy.flow",
+            ),
+            ("mitmproxy_har", evidence.get("mitmproxy_har"), "application/json"),
+            (
+                "mitmproxy_events",
+                evidence.get("mitmproxy_events"),
+                "application/x-ndjson",
+            ),
+            ("mitmproxy_state", evidence.get("mitmproxy_state"), "application/json"),
             ("egress_pcap", evidence.get("egress_pcap"), "application/vnd.tcpdump.pcap"),
             (
                 "android_network_checkpoints",
@@ -701,9 +732,23 @@ class AndroidExecutor:
                 )
             last_checkpoint = time.monotonic()
 
+        def restore_evidence_proxy() -> None:
+            try:
+                avd.ensure_analysis_proxy()
+            except Exception:
+                records.append(
+                    {
+                        "sequence": completed,
+                        "command_type": "proxy_restore",
+                        "success": False,
+                        "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+
         captures = workspace / "analyst-screenshots"
         captures.mkdir(mode=0o700)
         checkpoint("interactive_session_ready")
+        restore_evidence_proxy()
         while True:
             check_stop()
             if time.monotonic() - last_checkpoint >= 15:
@@ -767,6 +812,7 @@ class AndroidExecutor:
                 completed_response.raise_for_status()
                 if command_type in {"tls_test", "proxy", "root_ca"}:
                     checkpoint(f"after_{command_type}")
+                    restore_evidence_proxy()
             if value.get("finalize"):
                 checkpoint("before_finalization")
                 break
@@ -871,6 +917,39 @@ class AndroidExecutor:
             )
             for item in observations
         }
+        sidecar_events = pcap.parent / "mitmproxy" / "events.jsonl"
+        if sidecar_events.is_file():
+            for raw in sidecar_events.read_text(errors="replace").splitlines()[:10000]:
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict) or event.get("event") not in {"request", "error"}:
+                    continue
+                host = str(event.get("host") or "").rstrip(".").lower()
+                port = event.get("port")
+                port = int(port) if isinstance(port, int | str) and str(port).isdigit() else None
+                if not host:
+                    continue
+                key = (host, None, port)
+                if key in seen:
+                    continue
+                seen.add(key)
+                observations.append(
+                    {
+                        "observed_at": event.get("observed_at"),
+                        "destination_ip": None,
+                        "destination_port": port,
+                        "destination_domain": host,
+                        "protocol": str(event.get("scheme") or "https_proxy"),
+                        "source": "mitmproxy_sidecar",
+                        "provenance": {
+                            "transport": "isolated_explicit_proxy",
+                            "event": event.get("event"),
+                            "upstream": "none",
+                        },
+                    }
+                )
         captured_at = datetime.now(timezone.utc).isoformat()
         pcap_digest = sha256_file(pcap)
         proxy_sources: list[tuple[dict[str, Any], str, str]] = []
@@ -1220,6 +1299,7 @@ def run(
     poll_seconds: float = typer.Option(5.0, min=0.5),
     egress_broker_url: str = typer.Option("http://127.0.0.1:8092", envvar="UMAT_EGRESS_BROKER_URL"),
     egress_broker_token: str | None = typer.Option(None, envvar="UMAT_EGRESS_BROKER_TOKEN"),
+    mitmproxy_image: str = typer.Option(MITMPROXY_IMAGE, envvar="UMAT_ANDROID_MITMPROXY_IMAGE"),
 ) -> None:
     work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     executor_process = AndroidExecutor(
@@ -1240,6 +1320,7 @@ def run(
         egress=EgressClient(egress_broker_url, egress_broker_token)
         if egress_broker_token
         else None,
+        mitmproxy_image=mitmproxy_image,
     )
     if not executor_process.state:
         if not enrollment_token:
