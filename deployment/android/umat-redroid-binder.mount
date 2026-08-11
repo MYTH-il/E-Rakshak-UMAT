@@ -1,5 +1,6 @@
 [Unit]
 Description=BinderFS for UMAT ReDroid workers
+After=systemd-modules-load.service
 Before=docker.service umat-android-executor.service
 
 [Mount]

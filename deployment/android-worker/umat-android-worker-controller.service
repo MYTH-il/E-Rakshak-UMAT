@@ -1,0 +1,21 @@
+[Unit]
+Description=UMAT disposable Android worker lifecycle controller
+After=network-online.target libvirtd.service umat-api.service umat-android-api-relay.service
+Requires=libvirtd.service umat-api.service umat-android-api-relay.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=PROJECT_ROOT_PLACEHOLDER
+Environment=XDG_CACHE_HOME=/run/umat-android-worker-controller
+RuntimeDirectory=umat-android-worker-controller
+ExecStart=PROJECT_ROOT_PLACEHOLDER/deployment/android-worker/worker-controller.sh
+Restart=no
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/libvirt/images/umat-android-worker /run/libvirt
+
+[Install]
+WantedBy=multi-user.target

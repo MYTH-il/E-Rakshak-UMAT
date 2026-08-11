@@ -244,7 +244,7 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         # Secure cookies are appropriate only after a TLS reverse proxy is
         # configured; enabling them here prevents browsers from authenticating.
         ("UMAT_SECURE_COOKIES", "false"),
-        ("UMAT_ALLOWED_HOSTS", '["localhost","127.0.0.1"]'),
+        ("UMAT_ALLOWED_HOSTS", '["localhost","127.0.0.1","10.67.0.1"]'),
         ("UMAT_SESSION_SECRET", secrets.token_urlsafe(48)),
         ("UMAT_EXECUTOR_ENROLLMENT_SECRET", secrets.token_urlsafe(48)),
         ("UMAT_CAPE_GATEWAY_TOKEN", secrets.token_urlsafe(48)),

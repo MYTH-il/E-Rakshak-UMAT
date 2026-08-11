@@ -160,6 +160,12 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   sudo -n install -d -m 0755 /usr/libexec/umat
   sudo -n install -m 0755 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard-compat.sh" /usr/libexec/umat/umat-guest-guard-compat
   sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard.service" "$UNIT_DIR/umat-guest-guard.service"
+  sudo -n install -m 0644 "$PROJECT_ROOT/deployment/android-worker/umat-android-api-relay.service" "$UNIT_DIR/umat-android-api-relay.service"
+  worker_controller="$(mktemp)"
+  sed "s|PROJECT_ROOT_PLACEHOLDER|$PROJECT_ROOT|g" \
+    "$PROJECT_ROOT/deployment/android-worker/umat-android-worker-controller.service" >"$worker_controller"
+  sudo -n install -m 0644 "$worker_controller" "$UNIT_DIR/umat-android-worker-controller.service"
+  rm -f -- "$worker_controller"
   egress_unit="$(mktemp)"
   sed -e "s|PROJECT_ROOT_PLACEHOLDER|$PROJECT_ROOT|g" \
       -e "s|SERVICE_GROUP_PLACEHOLDER|$(id -gn "$SERVICE_USER")|g" \
@@ -229,7 +235,10 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   fi
   mkdir -p "$PROJECT_ROOT/var"
   sudo -n systemctl daemon-reload
-  sudo -n systemctl enable --now umat-guest-guard umat-egress-broker umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway
+  sudo -n systemctl enable --now umat-guest-guard umat-egress-broker umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway umat-android-api-relay
+  if sudo -n test -f /var/lib/libvirt/images/umat-android-worker/umat-android-worker-golden.qcow2; then
+    sudo -n systemctl enable --now umat-android-worker-controller.service
+  fi
 else
   echo "dry-run complete; no services changed"
 fi

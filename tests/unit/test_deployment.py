@@ -259,6 +259,8 @@ def test_guest_firewall_is_installed_and_fail_closed() -> None:
     assert 'iifname "br-umat-android" drop' in rules
     assert 'iifname { "virbr-winstdt", "br-umat-android" } drop' in rules
     assert 'ip daddr 172.30.0.3 tcp dport 8080 accept' in rules
+    assert 'iifname "virbr-umat-mgmt" ip saddr 10.67.0.10 ct state established,related accept' in rules
+    assert 'iifname { "virbr-umat-mgmt", "br-umat-malware" } drop' in rules
     assert "set windows_egress_v4" in rules
     assert "set android_egress_v4" in rules
     assert 'oifname "wg-umat-egress" tcp dport { 80, 443 }' in rules
@@ -266,6 +268,18 @@ def test_guest_firewall_is_installed_and_fail_closed() -> None:
     assert "table ip6 umat_guest_guard6" in rules
     assert "umat-egress-broker" in installer
     assert "Before=umat-android-executor.service umat-windows-executor.service" in unit
+
+
+def test_android_worker_is_disposable_and_separates_proxy_entrypoint() -> None:
+    reset = (ROOT / "deployment/android-worker/reset-worker.sh").read_text()
+    controller = (ROOT / "deployment/android-worker/worker-controller.sh").read_text()
+    source = (ROOT / "src/umat/android/redroid.py").read_text()
+    redroid_launch, proxy_launch = source.split("def enable_analysis_proxy", 1)
+    assert 'rm -f -- "$OVERLAY"' in reset
+    assert "network=default" not in reset
+    assert "failures > 3" in controller
+    assert "/usr/local/bin/mitmdump" not in redroid_launch
+    assert "/usr/local/bin/mitmdump" in proxy_launch
 
 
 def test_executor_enrollment_can_exit_without_claiming_work() -> None:

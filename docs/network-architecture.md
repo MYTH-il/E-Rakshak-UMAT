@@ -37,14 +37,18 @@ host traffic except the explicitly required Windows DHCP/DNS/result-server
 ports. PostgreSQL, UMAT, MobSF and the CAPE management gateway remain bound to
 loopback.
 
-ReDroid requires a privileged container and therefore shares the host kernel. The
-network controls materially reduce reachability, but they are not a security boundary
-against a guest that can exploit the container runtime or kernel. Real handling of
-unknown malware should place ReDroid and its Docker daemon on a disposable dedicated
-worker host or inside a hardware-virtualized worker VM. That worker receives only a
-run-scoped sample and returns evidence over a host-initiated, authenticated channel;
-it must have no control-plane or database route. Windows already has a hardware VM
-boundary, but the same separated-worker topology remains the production target.
+ReDroid and its Docker daemon now run inside the disposable KVM domain
+`umat-android-worker`; they no longer share the UMAT host kernel. The VM is created from a sealed
+golden QCOW2 image and uses a run overlay that is deleted after each completed or failed analysis.
+It has no shared directories, clipboard, USB passthrough, host Docker socket, SSH service or
+provisioning NIC. The browser continues to use the host UMAT API, which brokers the existing signed
+interactive command protocol to the executor inside the VM.
+
+The worker has two virtio NICs. `management0` is fixed at `10.67.0.10` and can initiate only UMAT
+API traffic to the restricted relay at `10.67.0.1:8443`. `malware0` is fixed at `10.68.0.10`, has
+no default route, and is reserved for a separate sacrificial gateway. The host firewall drops every
+other packet arriving from either worker bridge. ReDroid remains privileged inside the disposable
+VM, making the KVM boundary—not the container runtime—the containment boundary.
 
 ```text
                     management/control plane (loopback only)

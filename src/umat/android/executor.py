@@ -1300,6 +1300,9 @@ def run(
     egress_broker_url: str = typer.Option("http://127.0.0.1:8092", envvar="UMAT_EGRESS_BROKER_URL"),
     egress_broker_token: str | None = typer.Option(None, envvar="UMAT_EGRESS_BROKER_TOKEN"),
     mitmproxy_image: str = typer.Option(MITMPROXY_IMAGE, envvar="UMAT_ANDROID_MITMPROXY_IMAGE"),
+    exit_after_analysis: bool = typer.Option(
+        False, envvar="UMAT_ANDROID_EXIT_AFTER_ANALYSIS"
+    ),
 ) -> None:
     work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     executor_process = AndroidExecutor(
@@ -1330,6 +1333,8 @@ def run(
         return
     while True:
         processed = executor_process.process_stage()
+        if processed and exit_after_analysis:
+            return
         if once:
             return
         if not processed:

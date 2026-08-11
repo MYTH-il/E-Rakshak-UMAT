@@ -6,7 +6,10 @@ The committed patch fixes the pinned Docker build ordering, makes dependency
 installation fail closed, pins Poetry/base-image inputs, and consumes the
 upstream `poetry.lock`; the patch digest is recorded in the dependency lock.
 
-The default worker is the digest-pinned amd64 ReDroid Android 11/API 30 image.
+The default worker is the digest-pinned amd64 ReDroid Android 11/API 30 image, executed inside the
+disposable KVM worker provisioned under `deployment/android-worker/`. The host-side Android
+executor is disabled after cutover. Live screen/input, Frida, activity testing, TLS/proxy controls
+and evidence uploads continue through the existing signed UMAT command protocol.
 It uses BinderFS, a disposable writable `/data`, a writable container-backed
 `/system`, root operations through `su 0`, and container-local packet capture.
 The API-30 AOSP x86_64 emulator remains an optional higher-fidelity fallback.

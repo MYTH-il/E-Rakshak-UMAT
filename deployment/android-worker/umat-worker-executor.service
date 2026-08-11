@@ -1,0 +1,23 @@
+[Unit]
+Description=Disposable UMAT Android executor
+After=network-online.target umat-worker-mobsf.service
+Requires=umat-worker-mobsf.service
+
+[Service]
+Type=simple
+User=umat-worker
+Group=umat-worker
+SupplementaryGroups=docker
+WorkingDirectory=/opt/umat
+EnvironmentFile=/etc/umat/android-executor.env
+ExecStart=/opt/umat/.venv/bin/umat-android-executor run
+ExecStopPost=+/usr/bin/systemctl poweroff
+Restart=no
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/umat/android-work /var/lib/umat/executors/android
+
+[Install]
+WantedBy=multi-user.target

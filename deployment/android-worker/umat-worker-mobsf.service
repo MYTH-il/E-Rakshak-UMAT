@@ -1,0 +1,16 @@
+[Unit]
+Description=UMAT worker-local MobSF stack
+After=docker.service dev-binderfs.mount
+Requires=docker.service dev-binderfs.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/opt/umat/deployment/android
+EnvironmentFile=/etc/umat/mobsf.env
+ExecStart=/usr/bin/docker compose up -d --no-build --pull never
+ExecStop=/usr/bin/docker compose down --timeout 20
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

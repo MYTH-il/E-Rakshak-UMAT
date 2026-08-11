@@ -88,10 +88,6 @@ class RedroidManager:
             "linux/amd64",
             "--pull",
             "never",
-            "--entrypoint",
-            "/usr/local/bin/mitmdump",
-            "--user",
-            f"{os.getuid()}:{os.getgid()}",
             "--privileged",
             *network_arguments,
             *dns_arguments,
@@ -221,6 +217,10 @@ class RedroidManager:
             "linux/amd64",
             "--pull",
             "never",
+            "--entrypoint",
+            "/usr/local/bin/mitmdump",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
             "--network",
             "umat-android-isolated",
             "--ip",
@@ -278,10 +278,9 @@ class RedroidManager:
         ).stdout.splitlines()[0]
         remote = "/data/local/tmp/umat-mitm-ca.cer"
         self._adb("-s", self.adb_address, "push", str(certificate), remote)
-        self._adb(
-            "-s", self.adb_address, "shell", "su", "0", "sh", "-c",
-            f"cp {remote} /system/etc/security/cacerts/{digest}.0 && chmod 644 /system/etc/security/cacerts/{digest}.0",
-        )
+        target = f"/system/etc/security/cacerts/{digest}.0"
+        self._adb("-s", self.adb_address, "shell", "su", "0", "cp", remote, target)
+        self._adb("-s", self.adb_address, "shell", "su", "0", "chmod", "644", target)
         self.ensure_analysis_proxy()
         return {
             "status": "active",

@@ -104,8 +104,8 @@ networking; see the [network architecture and real-egress target](docs/network-a
 - Windows profile clones can enlarge but cannot shrink the approved 160 GiB baseline disk. Exact
   smaller disks require rebuilding a VMCloak template from the licensed Windows ISO.
 - The reverse proxy, TLS, production filesystem mount flags, and separated-host topology are not complete.
-- ReDroid requires a privileged container and shares the host kernel. Its current firewall and
-  internal-network containment is not a substitute for a dedicated disposable worker host/VM.
+- ReDroid remains privileged inside a disposable KVM worker, but no longer shares the control-plane
+  host kernel. The per-run QCOW2 overlay is destroyed after completion or failure.
 - Full offline dependency staging and clean-room verification are not complete.
 - The C2 and locked WinST/DT revisions do not contain explicit upstream license files. Their source
   or derived images must not be redistributed until authorization is documented. No upstream

@@ -1,0 +1,21 @@
+version: 2
+ethernets:
+  management:
+    match:
+      macaddress: "52:54:00:67:00:10"
+    set-name: management0
+    addresses: [10.67.0.10/24]
+    routes: []
+  malware:
+    match:
+      macaddress: "52:54:00:68:00:10"
+    set-name: malware0
+    addresses: [10.68.0.10/24]
+    routes: []
+    optional: true
+  provisioning:
+    match:
+      macaddress: "52:54:00:69:00:10"
+    set-name: provisioning0
+    dhcp4: true
+    optional: true

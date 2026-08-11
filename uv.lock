@@ -1089,6 +1089,7 @@ dependencies = [
     { name = "asyncpg" },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "jsonschema", extra = ["format"] },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
@@ -1104,7 +1105,6 @@ dependencies = [
 
 [package.optional-dependencies]
 test = [
-    { name = "httpx" },
     { name = "hypothesis" },
     { name = "mypy" },
     { name = "pytest" },
@@ -1122,7 +1122,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30,<1" },
     { name = "cryptography", specifier = ">=44,<47" },
     { name = "fastapi", specifier = "==0.141.1" },
-    { name = "httpx", marker = "extra == 'test'", specifier = "==0.28.1" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.120,<7" },
     { name = "jsonschema", extras = ["format"], specifier = ">=4.23,<5" },
     { name = "mypy", marker = "extra == 'test'", specifier = ">=1.14,<2" },

@@ -1,0 +1,70 @@
+#cloud-config
+users:
+  - name: umat-worker
+    groups: [docker, sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - SSH_PUBLIC_KEY_PLACEHOLDER
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+ssh_pwauth: false
+disable_root: true
+package_update: true
+package_upgrade: true
+packages:
+  - adb
+  - docker.io
+  - git
+  - openssl
+  - python3-venv
+  - qemu-guest-agent
+  - socat
+  - tcpdump
+  - tshark
+write_files:
+  - path: /etc/modules-load.d/umat-redroid.conf
+    permissions: '0644'
+    content: |
+      binder_linux
+  - path: /etc/sysctl.d/99-umat-worker.conf
+    permissions: '0644'
+    content: |
+      net.ipv4.ip_forward=0
+      net.ipv6.conf.all.disable_ipv6=1
+      net.ipv6.conf.default.disable_ipv6=1
+      kernel.kptr_restrict=2
+      kernel.dmesg_restrict=1
+      kernel.unprivileged_bpf_disabled=1
+      fs.protected_fifos=2
+      fs.protected_regular=2
+  - path: /etc/docker/daemon.json
+    permissions: '0644'
+    content: |
+      {
+        "icc": false,
+        "iptables": true,
+        "ip-forward-no-drop": false,
+        "live-restore": false,
+        "userland-proxy": false
+      }
+  - path: /etc/systemd/system/umat-worker-seal.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Seal UMAT worker after provisioning
+      After=cloud-final.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/install -m 0600 -o root -g root /dev/null /var/lib/umat-worker-sealed
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [sh, -c, 'apt-get install -y "linux-modules-extra-$(uname -r)"']
+  - [sh, -c, 'for release in /lib/modules/*; do apt-get install -y "linux-modules-extra-${release##*/}"; done']
+  - [systemctl, enable, --now, docker.service]
+  - [systemctl, enable, --now, qemu-guest-agent.service]
+  - [systemctl, enable, umat-worker-seal.service]
+  - [modprobe, binder_linux, devices=binder,hwbinder,vndbinder]
+  - [sysctl, --system]
+  - [sh, -c, 'install -d -m 0700 -o umat-worker -g umat-worker /var/lib/umat /var/lib/umat/android-work /var/lib/umat/executors']
+final_message: "UMAT Android worker base provisioned"
