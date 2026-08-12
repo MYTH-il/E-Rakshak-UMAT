@@ -126,5 +126,19 @@ published to the network. Host/guest clipboard sharing, file transfer, and indep
 controls are not part of this path. Access expires with the CAPE task or its 10-minute capability,
 whichever happens first.
 
-Phase 6 must add automated backup/restore and rollback commands. Until then, do not manually
+### Optional offline C2 enrichment data
+
+GeoLite2 City, GeoLite2 ASN, and `threatintel.sqlite` may be provisioned under
+`/srv/winstdt/c2-data`, outside the verified C2 runtime tree. Provision either all three files or
+none: `install-services.sh` rejects a partial data set because it would misrepresent enrichment
+coverage. The executor validates configured MMDB readability, the threat-intelligence schema, and
+a real SQLite write transaction before it publishes capabilities or claims work.
+
+The service grants directory write access for SQLite journal/WAL files. The two MMDB files remain
+mode `0440`; do not add `/srv/winstdt/c2-data` to `ReadOnlyPaths`, because that also prevents SQLite
+from opening its required write transaction. Install the tracked
+`umat-c2-executor-data.conf` drop-in and restart the executor after updating the databases. A failed
+preflight keeps the executor unavailable instead of exhausting analysis-stage retries.
+
+Phase 6 provides `umat-ops backup create`, `verify`, `restore`, and `rollback`. Do not manually
 remove a legacy database or Docker volume merely to make the status command green.

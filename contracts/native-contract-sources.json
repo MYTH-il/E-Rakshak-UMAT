@@ -6,7 +6,7 @@
       "commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8",
       "path": "schemas/handoff_manifest.schema.json",
       "native_schema_version": "1.0",
-      "sha256": "e4083f603f7cdcd96dbe58f279cb69e8d94e9d85908c4407e01735b83f812f20"
+      "sha256": "16cbce2d8ac4db7f2db9d986df75dc6a45d092fc4f7a608ebc0443ffb104fd1f"
     },
     "windows_access_events": {
       "repository": "https://github.com/MYTH-il/WinST-DT-module.git",

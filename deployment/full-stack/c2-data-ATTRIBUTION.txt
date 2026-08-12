@@ -1,0 +1,9 @@
+IP geolocation and ASN data are provided by MaxMind GeoLite2.
+
+Database editions:
+- GeoLite2 City
+- GeoLite2 ASN
+
+Source: https://www.maxmind.com/
+License: GeoLite2 End User License Agreement
+License text: https://www.maxmind.com/en/geolite2/eula

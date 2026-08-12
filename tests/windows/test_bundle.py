@@ -80,6 +80,18 @@ def test_windows_bundle_signature_identity_and_tamper_detection(tmp_path: Path) 
         verify_windows_bundle(extracted, private.public_key(), validator)  # type: ignore[arg-type]
 
 
+def test_live_egress_profile_overrides_native_simulated_caveat() -> None:
+    handoff = {
+        "network_mode": "simulated_inetsim",
+        "telemetry": {"telemetry_degraded": False},
+        "correlation": {"host_network_correlation_enabled": True},
+    }
+    assert WindowsBundleBuilder._caveats(handoff, {"network_mode": "real_world_egress"}) == []
+    assert WindowsBundleBuilder._caveats(handoff, {"network_mode": "isolated_simulated"}) == [
+        "network_responses_simulated"
+    ]
+
+
 def test_windows_profile_resource_bounds() -> None:
     valid = {
         "name": "win10-office",

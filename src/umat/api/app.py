@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ import structlog
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -26,6 +27,7 @@ from umat.api.operations_routes import router as operations_router
 from umat.api.report_routes import router as report_router
 from umat.config import get_settings
 from umat.db.session import session_factory
+from umat.operations.metrics import metrics
 from umat.storage.local import LocalArtifactStore
 from umat.windows.profile_routes import router as windows_profile_router
 from umat.windows.workflow_routes import router as windows_workflow_router
@@ -73,8 +75,11 @@ def create_app() -> FastAPI:
     async def request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))[:128]
         structlog.contextvars.bind_contextvars(request_id=request_id)
+        started = time.monotonic()
+        status_code = 500
         try:
             response = await call_next(request)
+            status_code = response.status_code
             response.headers["X-Request-ID"] = request_id
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Referrer-Policy"] = "no-referrer"
@@ -89,6 +94,15 @@ def create_app() -> FastAPI:
                 response.headers["Cache-Control"] = "no-store"
             return response
         finally:
+            duration = time.monotonic() - started
+            metrics.observe_request(request.method, status_code, duration)
+            structlog.get_logger("umat.http").info(
+                "http_request_completed",
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+                duration_ms=round(duration * 1000, 3),
+            )
             structlog.contextvars.clear_contextvars()
 
     @application.exception_handler(HTTPException)
@@ -112,6 +126,14 @@ def create_app() -> FastAPI:
         async with session_factory() as db:
             await db.execute(text("SELECT 1"))
         return {"status": "ready"}
+
+    @application.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics(request: Request) -> PlainTextResponse:
+        # The production unit binds the API to loopback. Refuse forwarding of this endpoint so
+        # reverse proxies do not accidentally publish operational topology and load information.
+        if request.headers.get("forwarded") or request.headers.get("x-forwarded-for"):
+            return PlainTextResponse("not found\n", status_code=404)
+        return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
     @application.get("/", include_in_schema=False)
     @application.get("/login", include_in_schema=False)

@@ -57,6 +57,7 @@ umat-scheduler = "umat.scheduler.worker:app"
 umat-deploy = "umat.deployment.cli:app"
 umat-cape-gateway = "umat.cape_gateway.app:run"
 umat-egress-broker = "umat.egress.app:run"
+umat-ops = "umat.operations.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/umat"]

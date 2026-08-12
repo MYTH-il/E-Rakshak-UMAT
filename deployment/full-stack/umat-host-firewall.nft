@@ -1,0 +1,19 @@
+#!/usr/sbin/nft -f
+table inet umat_host {
+    chain output {
+        type filter hook output priority filter; policy accept;
+        # Executors use the control-plane API, never PostgreSQL directly.
+        meta skuid "umat-executor" tcp dport 55432 reject
+    }
+    chain input {
+        type filter hook input priority filter; policy drop;
+        ct state established,related accept
+        iifname "lo" accept
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+        # Restrict these source ranges to the operator management network before activation.
+        ip saddr 10.0.0.0/8 tcp dport { 22, 443 } accept
+    }
+    # Guest forwarding is governed by the dedicated UMAT guest/egress tables.
+    chain forward { type filter hook forward priority filter; policy accept; }
+}

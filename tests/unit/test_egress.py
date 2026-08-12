@@ -63,7 +63,13 @@ def test_lease_heartbeat_refreshes_fail_closed(
         def wait(self, timeout: int) -> int:
             return 0
 
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Capture())
+    capture_commands: list[list[str]] = []
+
+    def capture_process(command: list[str], **kwargs: Any) -> Capture:
+        capture_commands.append(command)
+        return Capture()
+
+    monkeypatch.setattr(subprocess, "Popen", capture_process)
     monkeypatch.setattr("os.killpg", lambda *args: None)
     monkeypatch.setattr(manager, "_finalize_capture", lambda *args: None)
     commands: list[tuple[Any, ...]] = []
@@ -81,6 +87,15 @@ def test_lease_heartbeat_refreshes_fail_closed(
         guest_ip="10.66.0.101",
     )
     manager.acquire(request)
+    assert capture_commands[0][5:12] == [
+        "host",
+        "10.66.0.101",
+        "and",
+        "not",
+        "host",
+        "10.66.0.1",
+        "-w",
+    ]
     manager.heartbeat(request.analysis_run_id)
     manager.revoke(request.analysis_run_id)
     operations = [command[0] for command in commands]

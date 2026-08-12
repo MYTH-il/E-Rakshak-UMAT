@@ -12,7 +12,7 @@
     "schema_version": "1.0",
     "source_commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8",
     "schema_path": "schemas/handoff_manifest.schema.json",
-    "schema_sha256": "e4083f603f7cdcd96dbe58f279cb69e8d94e9d85908c4407e01735b83f812f20"
+    "schema_sha256": "16cbce2d8ac4db7f2db9d986df75dc6a45d092fc4f7a608ebc0443ffb104fd1f"
   },
   "handoff_manifest": {
     "schema_version": "1.0",

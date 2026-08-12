@@ -17,6 +17,7 @@ from umat.egress.schemas import LeaseRequest, LeaseResult, Readiness
 WINDOWS_NETWORK = ipaddress.ip_network("10.66.0.0/24")
 ANDROID_NETWORK = ipaddress.ip_network("172.31.0.0/24")
 INTERFACES = {"windows": "virbr-winstdt", "android": "br-umat-egress"}
+GATEWAYS = {"windows": "10.66.0.1", "android": "172.31.0.1"}
 SETS = {"windows": "windows_egress_v4", "android": "android_egress_v4"}
 
 
@@ -98,6 +99,10 @@ class EgressManager:
                     interface,
                     "host",
                     str(request.guest_ip),
+                    "and",
+                    "not",
+                    "host",
+                    GATEWAYS[request.platform],
                     "-w",
                     str(capture_path),
                 ],

@@ -6,8 +6,8 @@ aggregation, role-filtered reporting, evidence downloads, and audit history.
 
 This repository is an active implementation snapshot. Phases 0–5 and the Phase 5.5 control-plane
 hardening work are implemented, but the repository is **not yet a production-ready or clean-host
-release**. Phase 6 hardening and operations and several external-runtime promotion gates remain
-incomplete.
+release**. Phase 6 operational controls are implemented, while clean-host acceptance and several
+external-runtime promotion gates remain incomplete.
 
 The authoritative design remains the
 [implementation plan](umat-unified-malware-analysis-triage-implementation-plan.md).
@@ -23,7 +23,7 @@ The authoritative design remains the
 | Phase 4 API and UI | Operations console implemented | Case/run APIs, L1/L2/L3 views, aggregation, exports, case editing and in-case intake, server-filtered run history, immutable retries, diagnostic progress, worker inventory, and profile administration are available through the role-aware console. |
 | Phase 5 Android/MobSF | Implemented and runtime-validated | The default pinned Android 11/API-30 x86_64 ReDroid profile supports unattended analysis and a brokered interactive analyst session with live screen/input, activities, Frida, TLS/proxy controls, logs, scoped file access, evidence capture, adaptation, aggregation, and reporting. The AOSP AVD is retained as a fallback; ARM profiles are out of scope. |
 | Phase 5.5 hardening | Implemented | Scheduler timeouts/retries, cancellation propagation, capability matching, administrative controls, migration/security tests, fail-closed isolated guest networks, and a host guest-firewall service. |
-| Phase 6 hardening and operations | **Pending** | See the dedicated section below. |
+| Phase 6 hardening and operations | Implemented; acceptance pending | Backup/restore/rollback, offline verification, metrics/logging, deployment limits, TLS/firewall baselines, isolation tests, and runbooks are present. Fresh-host qualification remains. |
 
 ## Verified end-to-end workloads
 
@@ -46,11 +46,11 @@ engineering interfaces rather than requirements for routine operation.
 
 ## Verification evidence
 
-As of 2026-08-11:
+As of 2026-08-12:
 
 - Ruff passes for `src` and `tests`.
 - Strict mypy passes for the application source tree.
-- The default offline suite passes: **115 passed, 9 skipped**. The skipped tests require explicitly
+- The default offline suite passes: **157 passed, 9 skipped**. The skipped tests require explicitly
   configured disposable PostgreSQL integration/migration databases.
 - The CI-equivalent database-backed suite passes with **124 passed, 0 skipped** against disposable
   PostgreSQL 18.4 databases, including migration downgrade/re-upgrade tests. CI also runs four
@@ -107,10 +107,12 @@ deployment secrets.
 - A first administrator and all three executor types are enrolled on this workstation.
 - Windows profile clones can enlarge but cannot shrink the approved 160 GiB baseline disk. Exact
   smaller disks require rebuilding a VMCloak template from the licensed Windows ISO.
-- The reverse proxy, TLS, production filesystem mount flags, and separated-host topology are not complete.
+- The TLS reverse-proxy and host-firewall baselines are committed but are not enabled on this
+  workstation; certificate provisioning and management-network approval are operator gates.
 - ReDroid remains privileged inside a disposable KVM worker, but no longer shares the control-plane
   host kernel. The per-run QCOW2 overlay is destroyed after completion or failure.
-- Full offline dependency staging and clean-room verification are not complete.
+- Offline bundle verification is implemented; a fully staged clean-room bundle has not yet been
+  accepted on a fresh host.
 - The C2 and locked WinST/DT revisions do not contain explicit upstream license files. Their source
   or derived images must not be redistributed until authorization is documented. No upstream
   source is vendored here.
@@ -125,21 +127,24 @@ analysis timeout/options if those controls are approved in deployment policy. Th
 guest-profile, network, C2, Android-interactive, retry, cancellation, evidence, and diagnostic
 controls are exposed with role-aware actions.
 
-## Pending Phase 6
+## Phase 6 hardening and operations
 
-Phase 6 is “Hardening and operations” in the implementation plan. Remaining deliverables are:
+Phase 6 is “Hardening and operations” in the implementation plan. The implemented controls are:
 
-- Reproducible offline installation and dependency/image verification from staged inputs.
-- Automated PostgreSQL and artifact backup, restore, integrity verification, and rollback drills.
-- Metrics, health dashboards, alerts, and structured-log collection with correlation IDs.
-- Failure-recovery runbooks for leases, executors, CAPE, MobSF/AVDs, C2, reports, and storage.
-- Retention controls and safely audited evidence deletion.
-- Reverse proxy, TLS, secure-cookie deployment, host firewall, and final network isolation.
-- Minimum-free-memory and global dynamic-analysis concurrency enforcement at deployment level.
-- Security testing of the deployed topology, including proving executors cannot reach PostgreSQL.
-- Operator, evidence-handling, incident-response, key-custody, and upgrade/rollback documentation.
-- A future separated-host deployment guide.
-- A clean Ubuntu 24.04 end-to-end acceptance run covering intake through signed evidence and reports.
+- Read-only, hash-inventoried offline input verification using an independently transported
+  manifest digest.
+- PostgreSQL/artifact backup, verification, paired restore recovery, and confirmed rollback.
+- Prometheus-format process/HTTP metrics and correlated JSON request-completion logs.
+- Memory/task ceilings, available-memory preflight, a TLS proxy baseline, host firewall policy,
+  separate executor identity, and a test proving executors cannot reach PostgreSQL.
+- Failure recovery, evidence handling/retention, incident response, key custody, upgrades,
+  rollback drills, and future separated-host guidance in
+  [the Phase 6 operations runbook](docs/phase6-operations.md).
+
+The remaining release gate is a clean Ubuntu 24.04 end-to-end acceptance run from verified staged
+inputs covering intake through signed evidence and reports. Organizational legal-hold and deletion
+authorization remain policy controls; the software deliberately does not perform unattended
+age-based evidence deletion.
 
 ## Development quick start
 

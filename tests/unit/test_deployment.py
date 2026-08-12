@@ -232,6 +232,30 @@ def test_c2_installers_enforce_every_locked_runtime_identity_field() -> None:
     )
 
 
+def test_c2_data_service_policy_separates_mutable_sqlite_from_read_only_mmdb() -> None:
+    installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
+    policy = (ROOT / "deployment/full-stack/umat-c2-executor-data.conf").read_text()
+    assert "THREATINTEL_DB=/srv/winstdt/c2-data/threatintel.sqlite" in policy
+    assert "ReadWritePaths=/srv/winstdt/c2-data" in policy
+    assert "ReadOnlyPaths=/srv/winstdt/c2-data" not in policy
+    assert "chmod 0440" in installer
+    assert "chmod 0660" in installer
+    assert 'chmod 0770 "$c2_data_root"' in installer
+
+
+def test_executor_units_use_separate_identity_and_hide_control_plane_evidence() -> None:
+    installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
+    assert 'EXECUTOR_USER="${UMAT_EXECUTOR_USER:-umat-executor}"' in installer
+    assert "User=$EXECUTOR_USER" in installer
+    assert "InaccessiblePaths=/etc/umat/full-stack.env" in installer
+    assert "/var/lib/umat/artifacts /var/lib/umat/quarantine /var/lib/umat-backups" in installer
+    firewall = (ROOT / "deployment/full-stack/umat-host-firewall.nft").read_text()
+    assert 'meta skuid "umat-executor" tcp dport 55432 reject' in firewall
+    assert "umat-c2-executor.service.d/c2-data.conf" in installer
+    assert "C2 enrichment data is partially provisioned" in installer
+    assert "c2_data_present" in installer
+
+
 def test_android_runtime_installer_enforces_locked_emulator_and_license() -> None:
     installer = (ROOT / "deployment/android/install-runtime.sh").read_text()
     android = json.loads((ROOT / "dependency-locks/android-erakshak.json").read_text())
@@ -277,6 +301,7 @@ def test_guest_firewall_is_installed_and_fail_closed() -> None:
     assert "169.254.0.0/16" in rules
     assert "table ip6 umat_guest_guard6" in rules
     assert "umat-egress-broker" in installer
+    assert "UMAT_EGRESS_MAX_BYTES=1073741824" in installer
     assert "Before=umat-android-executor.service umat-windows-executor.service" in unit
 
 

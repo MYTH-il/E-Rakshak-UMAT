@@ -88,12 +88,21 @@ def preflight_checks(windows_iso: Path | None = None) -> list[dict[str, Any]]:
     machine = platform.machine()
     add("architecture", machine == expected["architecture"], machine)
     memory_kib = 0
+    available_memory_kib = 0
     for line in Path("/proc/meminfo").read_text().splitlines():
         if line.startswith("MemTotal:"):
             memory_kib = int(line.split()[1])
+        elif line.startswith("MemAvailable:"):
+            available_memory_kib = int(line.split()[1])
             break
     memory_gib = memory_kib / 1024 / 1024
     add("memory", memory_gib >= expected["minimum_memory_gib"], f"{memory_gib:.1f} GiB")
+    available_memory_gib = available_memory_kib / 1024 / 1024
+    add(
+        "available_memory",
+        available_memory_gib >= expected["minimum_available_memory_gib"],
+        f"{available_memory_gib:.1f} GiB",
+    )
     free_gib = shutil.disk_usage(PROJECT_ROOT).free / 1024**3
     add("free_disk", free_gib >= expected["minimum_free_disk_gib"], f"{free_gib:.1f} GiB")
     add("kvm", Path("/dev/kvm").exists(), "/dev/kvm")

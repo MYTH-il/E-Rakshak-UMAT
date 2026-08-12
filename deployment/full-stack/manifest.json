@@ -5,6 +5,7 @@
     "version": "24.04",
     "architecture": "x86_64",
     "minimum_memory_gib": 15,
+    "minimum_available_memory_gib": 4,
     "minimum_free_disk_gib": 200,
     "kvm_required": true
   },

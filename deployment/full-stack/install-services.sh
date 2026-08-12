@@ -17,8 +17,15 @@ if [[ "$PROJECT_ROOT" != /* || ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
 fi
 
 SERVICE_USER="${UMAT_SERVICE_USER:-$(id -un)}"
+EXECUTOR_USER="${UMAT_EXECUTOR_USER:-umat-executor}"
 ENV_FILE="${UMAT_ENV_FILE:-/etc/umat/full-stack.env}"
 UNIT_DIR="/etc/systemd/system"
+if [[ "$EXECUTE" -eq 1 ]] && ! id "$EXECUTOR_USER" >/dev/null 2>&1; then
+  sudo -n useradd --system --home-dir /var/lib/umat/executors --shell /usr/sbin/nologin "$EXECUTOR_USER"
+fi
+if [[ "$EXECUTE" -eq 1 ]]; then
+  sudo -n usermod -aG "$(id -gn "$SERVICE_USER")" "$EXECUTOR_USER"
+fi
 declare -A COMMANDS
 COMMANDS[umat-api]="umat-api"
 COMMANDS[umat-scheduler]="umat-scheduler run"
@@ -41,6 +48,10 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$PROJECT_ROOT/.venv/bin/${COMMANDS[$name]}
 Restart=on-failure
 RestartSec=3
+OOMPolicy=stop
+MemoryHigh=1G
+MemoryMax=2G
+TasksMax=512
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -72,6 +83,10 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$PROJECT_ROOT/.venv/bin/umat-cape-gateway
 Restart=on-failure
 RestartSec=3
+OOMPolicy=stop
+MemoryHigh=2G
+MemoryMax=4G
+TasksMax=1024
 PrivateTmp=true
 ProtectHome=read-only
 ProtectSystem=strict
@@ -82,6 +97,8 @@ WantedBy=multi-user.target
 EOF
 echo "+ install $UNIT_DIR/umat-cape-gateway.service"
 if [[ "$EXECUTE" -eq 1 ]]; then
+  sudo -n install -m 0600 "$PROJECT_ROOT/deployment/full-stack/umat-host-firewall.nft" /etc/umat/umat-host-firewall.nft
+  sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-nginx.conf" /etc/umat/umat-nginx.conf.example
   sudo -n install -m 0644 "$gateway_unit" "$UNIT_DIR/umat-cape-gateway.service"
 fi
 rm -f -- "$gateway_unit"
@@ -95,17 +112,22 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$SERVICE_USER
+User=$EXECUTOR_USER
 WorkingDirectory=$PROJECT_ROOT
 EnvironmentFile=/etc/umat/windows-executor.env
 ExecStart=$PROJECT_ROOT/.venv/bin/umat-windows-executor run
 Restart=on-failure
 RestartSec=3
+OOMPolicy=stop
+MemoryHigh=6G
+MemoryMax=8G
+TasksMax=2048
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/srv/winstdt/handoff /opt/umat/upstreams/winstdt/schemas
+InaccessiblePaths=/etc/umat/full-stack.env $PROJECT_ROOT/.env /var/lib/umat/artifacts /var/lib/umat/quarantine /var/lib/umat-backups
 ReadWritePaths=/var/lib/umat/executors/windows /var/lib/umat/windows-work
 
 [Install]
@@ -127,16 +149,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$SERVICE_USER
+User=$EXECUTOR_USER
 WorkingDirectory=$PROJECT_ROOT
 EnvironmentFile=/etc/umat/${executor_name}-executor.env
 ExecStart=$PROJECT_ROOT/.venv/bin/umat-${executor_name}-executor run
 Restart=on-failure
 RestartSec=3
+OOMPolicy=stop
+MemoryHigh=3G
+MemoryMax=4G
+TasksMax=1024
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
+InaccessiblePaths=/etc/umat/full-stack.env $PROJECT_ROOT/.env /var/lib/umat/artifacts /var/lib/umat/quarantine /var/lib/umat-backups
 ReadWritePaths=/var/lib/umat/executors/${executor_name} /var/lib/umat/${executor_name}-work
 
 [Install]
@@ -153,6 +180,40 @@ EOF
   fi
   rm -f -- "$executor_unit"
 done
+
+# C2 enrichment databases live outside the verified runtime tree. An entirely
+# absent data set preserves the runtime's documented graceful degradation. A
+# partial data set is a deployment error: silently starting in that state would
+# misrepresent coverage. SQLite needs directory write access for journal/WAL
+# files; immutable MMDB files are protected separately with read-only modes.
+c2_data_root=/srv/winstdt/c2-data
+c2_data_files=(
+  "$c2_data_root/GeoLite2-City.mmdb"
+  "$c2_data_root/GeoLite2-ASN.mmdb"
+  "$c2_data_root/threatintel.sqlite"
+)
+echo "+ validate optional C2 enrichment data"
+if [[ "$EXECUTE" -eq 1 ]]; then
+  c2_data_present=0
+  for data_file in "${c2_data_files[@]}"; do
+    sudo -n test -f "$data_file" && ((c2_data_present += 1)) || true
+  done
+  if [[ "$c2_data_present" -ne 0 && "$c2_data_present" -ne "${#c2_data_files[@]}" ]]; then
+    echo "C2 enrichment data is partially provisioned under $c2_data_root" >&2
+    exit 1
+  fi
+  if [[ "$c2_data_present" -eq "${#c2_data_files[@]}" ]]; then
+    echo "+ install $UNIT_DIR/umat-c2-executor.service.d/c2-data.conf"
+    sudo -n install -d -m 0755 "$UNIT_DIR/umat-c2-executor.service.d"
+    sudo -n install -m 0644 \
+      "$PROJECT_ROOT/deployment/full-stack/umat-c2-executor-data.conf" \
+      "$UNIT_DIR/umat-c2-executor.service.d/c2-data.conf"
+    sudo -n chgrp "$EXECUTOR_USER" "$c2_data_root" "${c2_data_files[@]}"
+    sudo -n chmod 0770 "$c2_data_root"
+    sudo -n chmod 0440 "${c2_data_files[0]}" "${c2_data_files[1]}"
+    sudo -n chmod 0660 "${c2_data_files[2]}"
+  fi
+fi
 
 if [[ "$EXECUTE" -eq 1 ]]; then
   sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard.nft" /etc/umat/umat-guest-guard.nft
@@ -176,11 +237,11 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     /var/lib/umat /var/lib/umat/quarantine /var/lib/umat/artifacts
   sudo -n install -d -m 0700 -o root -g root /var/lib/umat-cape-profiles
   sudo -n install -d -m 0750 -o root -g "$(id -gn "$SERVICE_USER")" /var/lib/umat-egress
-  sudo -n install -d -m 0700 -o "$SERVICE_USER" -g "$(id -gn "$SERVICE_USER")" \
+  sudo -n install -d -m 0700 -o "$EXECUTOR_USER" -g "$EXECUTOR_USER" \
     /var/lib/umat/executors/windows /var/lib/umat/windows-work \
     /var/lib/umat/executors/c2 /var/lib/umat/c2-work \
     /var/lib/umat/executors/android /var/lib/umat/android-work
-  executor_group="$(id -gn "$SERVICE_USER")"
+  executor_group="$EXECUTOR_USER"
   c2_env="$(mktemp)"
   android_env="$(mktemp)"
   egress_env="$(mktemp)"
@@ -195,7 +256,9 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     'UMAT_EGRESS_UPLINK=wg-umat-egress' \
     'UMAT_EGRESS_DNS_RESOLVER=10.77.0.53' \
     'UMAT_EGRESS_CAPTURE_ROOT=/var/lib/umat-egress' \
-    'UMAT_EGRESS_MAX_BYTES=104857600' >"$egress_env"
+    # Windows startup and CAPE post-processing routinely exceed 100 MiB even when malware
+    # traffic is small. Keep a finite one-GiB ceiling alongside the port and rate limits.
+    'UMAT_EGRESS_MAX_BYTES=1073741824' >"$egress_env"
   sudo -n install -o root -g root -m 0600 "$egress_env" /etc/umat/egress-broker.env
   printf '%s\n' \
     'UMAT_EXECUTOR_URL=http://127.0.0.1:8080' \

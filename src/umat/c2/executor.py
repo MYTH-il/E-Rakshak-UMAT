@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -109,6 +111,55 @@ class C2Executor:
             },
         )
         capabilities.raise_for_status()
+
+    @staticmethod
+    def preflight_external_data() -> dict[str, str]:
+        """Validate configured enrichment data before this executor claims work.
+
+        The check intentionally opens a real SQLite write transaction. Checking
+        Unix mode bits or running as the service user is insufficient when
+        systemd bind-mount hardening can make an otherwise writable path
+        read-only inside the service namespace.
+        """
+        checked: dict[str, str] = {}
+        for variable in ("GEOLITE2_CITY_DB", "GEOLITE2_ASN_DB"):
+            configured = os.environ.get(variable)
+            if not configured:
+                continue
+            path = Path(configured)
+            try:
+                if not path.is_file():
+                    raise C2ExecutorError(f"{variable} is not a file: {path}")
+                with path.open("rb") as source:
+                    if not source.read(16):
+                        raise C2ExecutorError(f"{variable} is empty: {path}")
+            except OSError as exc:
+                raise C2ExecutorError(f"{variable} is unreadable: {path}: {exc}") from exc
+            checked[variable] = str(path)
+
+        configured = os.environ.get("THREATINTEL_DB")
+        if configured:
+            path = Path(configured)
+            try:
+                if not path.is_file():
+                    raise C2ExecutorError(f"THREATINTEL_DB is not a file: {path}")
+                with sqlite3.connect(path, timeout=5) as database:
+                    database.execute("BEGIN IMMEDIATE")
+                    database.execute("ROLLBACK")
+                    table = database.execute(
+                        "SELECT 1 FROM sqlite_master "
+                        "WHERE type = 'table' AND name = 'bad_indicators'"
+                    ).fetchone()
+                    if table is None:
+                        raise C2ExecutorError(
+                            f"THREATINTEL_DB lacks bad_indicators table: {path}"
+                        )
+            except sqlite3.Error as exc:
+                raise C2ExecutorError(
+                    f"THREATINTEL_DB cannot create a write transaction: {path}: {exc}"
+                ) from exc
+            checked["THREATINTEL_DB"] = str(path)
+        return checked
 
     def auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.state['credential']}"}
@@ -365,6 +416,8 @@ def run(
         if not enrollment_token:
             raise typer.BadParameter("enrollment-token is required on first run")
         executor.enroll(enrollment_token, name)
+    if not fixture_runtime:
+        executor.preflight_external_data()
     executor.publish_capabilities()
     if enroll_only:
         return

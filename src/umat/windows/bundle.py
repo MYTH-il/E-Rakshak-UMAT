@@ -21,7 +21,7 @@ from umat.contracts.canonical import canonical_json
 from umat.contracts.validator import validate_pinned_native_schema
 
 WINSTDT_COMMIT = "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8"
-HANDOFF_DIGEST = "e4083f603f7cdcd96dbe58f279cb69e8d94e9d85908c4407e01735b83f812f20"
+HANDOFF_DIGEST = "16cbce2d8ac4db7f2db9d986df75dc6a45d092fc4f7a608ebc0443ffb104fd1f"
 ACCESS_DIGEST = "4a47282985e412ee9c061db517bd460dd06db7e560f8a801b4cf7a83c97dbd1a"
 SAMPLE_META_DIGEST = "fe36e4893e689c9570ffede487707002c0af91b183e91aa3ffc873ab2004c8d6"
 
@@ -200,7 +200,7 @@ class WindowsBundleBuilder:
             },
             "selected_profile": profile_snapshot,
             "artifacts": descriptors,
-            "caveats": self._caveats(handoff),
+            "caveats": self._caveats(handoff, profile_snapshot),
         }
         signature = base64.b64encode(self.signing_key.sign(canonical_json(unsigned))).decode()
         manifest = unsigned | {
@@ -223,9 +223,13 @@ class WindowsBundleBuilder:
         return BuiltWindowsBundle(destination, archive, manifest)
 
     @staticmethod
-    def _caveats(handoff: dict[str, Any]) -> list[str]:
+    def _caveats(handoff: dict[str, Any], profile_snapshot: dict[str, Any]) -> list[str]:
         caveats: list[str] = []
-        if handoff.get("network_mode") == "simulated_inetsim":
+        authoritative_mode = profile_snapshot.get("network_mode")
+        if authoritative_mode == "isolated_simulated" or (
+            authoritative_mode != "real_world_egress"
+            and handoff.get("network_mode") == "simulated_inetsim"
+        ):
             caveats.append("network_responses_simulated")
         if (handoff.get("telemetry") or {}).get("telemetry_degraded"):
             caveats.append("host_telemetry_degraded")
