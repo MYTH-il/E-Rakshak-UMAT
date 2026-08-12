@@ -11,7 +11,7 @@
     "platform":{"const":"windows"},
     "created_at":{"type":"string","format":"date-time"},
     "producer":{"$ref":"#/$defs/producer"},
-    "native_contract":{"type":"object","required":["schema_version","source_commit","schema_path","schema_sha256"],"additionalProperties":false,"properties":{"schema_version":{"const":"1.0"},"source_commit":{"const":"7bc74765e9d38d7ba6df3f2115db67761cb4cbd8"},"schema_path":{"const":"schemas/handoff_manifest.schema.json"},"schema_sha256":{"const":"e53705f8a70ceeb86083cec46ae6980147941abf931028ba931bc868b0b39223"}}},
+    "native_contract":{"type":"object","required":["schema_version","source_commit","schema_path","schema_sha256"],"additionalProperties":false,"properties":{"schema_version":{"const":"1.0"},"source_commit":{"const":"7bc74765e9d38d7ba6df3f2115db67761cb4cbd8"},"schema_path":{"const":"schemas/handoff_manifest.schema.json"},"schema_sha256":{"const":"e4083f603f7cdcd96dbe58f279cb69e8d94e9d85908c4407e01735b83f812f20"}}},
     "handoff_manifest":{"type":"object","required":["schema_version","sample_sha256","cape_task_id"],"properties":{"schema_version":{"const":"1.0"},"sample_sha256":{"type":"string"},"cape_task_id":{"type":"integer","minimum":1}},"additionalProperties":true},
     "cape":{"type":"object","required":["task_id","package","detected_type"],"properties":{"task_id":{"type":"integer","minimum":1},"package":{"type":["string","null"]},"detected_type":{"type":["string","null"]}},"additionalProperties":false},
     "selected_profile":{"type":"object"},

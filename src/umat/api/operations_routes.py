@@ -111,6 +111,7 @@ async def add_submission(
     ),
     c2_analysis_enabled: bool = Form(default=False),
     android_interactive: bool = Form(default=False),
+    windows_interactive: bool = Form(default=False),
     principal: Principal = Depends(current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> CreateCaseResponse:
@@ -207,6 +208,7 @@ async def add_submission(
             network_mode=network_mode,
             c2_analysis_enabled=c2_analysis_enabled,
             android_interactive=android_interactive if platform == Platform.ANDROID else False,
+            windows_interactive=windows_interactive if platform == Platform.WINDOWS else False,
             status=RunStatus.AWAITING_CONFIRMATION if duplicates else RunStatus.QUEUED,
         )
         db.add(run)
@@ -353,6 +355,7 @@ async def recent_runs(
                 network_mode=run.network_mode,
                 c2_analysis_enabled=run.c2_analysis_enabled,
                 android_interactive=run.android_interactive,
+                windows_interactive=run.windows_interactive,
                 profile=profile,
                 retry_eligible=retry_eligible(run),
                 created_at=run.created_at,
@@ -392,6 +395,7 @@ async def retry_run(
         network_mode=source.network_mode,
         c2_analysis_enabled=source.c2_analysis_enabled,
         android_interactive=source.android_interactive,
+        windows_interactive=source.windows_interactive,
         status=RunStatus.QUEUED,
         confirmed_at=datetime.now(timezone.utc),
     )

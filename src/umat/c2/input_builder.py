@@ -51,6 +51,7 @@ class C2InputBuilder:
             pcap=by_kind["pcap"],
             platform_manifest=by_kind["platform_manifest"],
             access_events=access_events,
+            etw_events=by_kind.get("etw_events"),
             static_prior=by_kind.get("static_prior"),
             network_activity=by_kind.get("network_activity"),
             analysis_started_at=started,

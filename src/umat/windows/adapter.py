@@ -156,6 +156,7 @@ class WindowsAdapter:
         expected_profile["network_mode"] = run.network_mode
         expected_profile["c2_analysis_enabled"] = run.c2_analysis_enabled
         expected_profile["android_interactive"] = run.android_interactive
+        expected_profile["windows_interactive"] = run.windows_interactive
         if manifest["selected_profile"] != expected_profile:
             raise WindowsAdaptationError("Windows VM profile snapshot mismatch")
 
@@ -322,21 +323,21 @@ class WindowsAdapter:
         access = native / "behavior/access_events.json"
         if not access.is_file():
             return
-        seen: set[str] = set()
+        events_by_capability: dict[str, list[dict[str, Any]]] = {}
         for event in json.loads(access.read_text()):
             capability = str(event["data_type"])
-            if capability not in seen:
-                seen.add(capability)
-                db.add(
-                    WindowsCapability(
-                        adaptation_id=adaptation_id,
-                        analysis_run_id=run_id,
-                        capability=capability,
-                        source="access_events",
-                        confidence="confirmed",
-                        details={"first_event": event},
-                    )
+            events_by_capability.setdefault(capability, []).append(event)
+        for capability, events in events_by_capability.items():
+            db.add(
+                WindowsCapability(
+                    adaptation_id=adaptation_id,
+                    analysis_run_id=run_id,
+                    capability=capability,
+                    source="access_events",
+                    confidence="confirmed",
+                    details={"first_event": events[0], "events": events},
                 )
+            )
 
     @staticmethod
     def _iocs(

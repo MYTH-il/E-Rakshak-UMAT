@@ -25,7 +25,7 @@
       "repository": "https://github.com/MYTH-il/WinST-DT-module.git",
       "commit": "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8",
       "tree_sha256": "bc015bc8223fcd96846882c1533d308348396affb07f7ec8c7b73fae9a812738",
-      "patch_series_sha256": "c6ce031ed77175877d9518385cc41047d5119988ac62190634bc2cdc83d50f39",
+      "patch_series_sha256": "e8214c2a14540a9c00b018d996edb559a52fb451d71079ae1d6d71861effe972",
       "license_status": "authorization_required_no_upstream_license_file"
     },
     "cape": {

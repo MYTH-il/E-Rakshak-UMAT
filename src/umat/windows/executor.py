@@ -24,7 +24,7 @@ from umat.windows.bundle import (
     WindowsBundleBuilder,
     sha256_file,
 )
-from umat.windows.cape import CapeClient, cape_static_prior
+from umat.windows.cape import CapeClient, CapeError, cape_static_prior
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -306,6 +306,8 @@ class WindowsExecutor:
     def _wait(
         self, claim: dict[str, Any], common: dict[str, Any], task_id: int, poll_seconds: float
     ) -> dict[str, Any]:
+        console_registered = False
+        finish_requested = False
         while True:
             heartbeat = common | {"state": "running"}
             heartbeat_response = self.mutate(
@@ -325,6 +327,46 @@ class WindowsExecutor:
                 self.cape.cancel(task_id)
                 raise
             value = self.cape.status(task_id)
+            if (
+                claim["execution_configuration"].get("windows_interactive")
+                and not console_registered
+                and value.get("status") == "running"
+            ):
+                machine_label = str(
+                    value.get("machine")
+                    or claim["execution_configuration"].get("cape_machine_label")
+                    or self.cape.task_machine(task_id)
+                    or ""
+                )
+                if machine_label:
+                    try:
+                        capability = self.cape.open_console(task_id, machine_label)
+                        ready_path = (
+                            f"/api/internal/v1/stages/{claim['stage_id']}/windows-session/ready"
+                        )
+                        ready = common | {
+                            "cape_task_id": task_id,
+                            "machine_label": machine_label,
+                            "console_url": capability["console_url"],
+                            "duration_seconds": 600,
+                        }
+                        self.mutate(ready_path, ready, claim["lease_token"]).raise_for_status()
+                        console_registered = True
+                    except (CapeError, httpx.HTTPError):
+                        # CAPE can report `running` slightly before libvirt has
+                        # published its VNC display. Retry on the next status
+                        # poll without sacrificing the underlying analysis.
+                        pass
+            if console_registered and not finish_requested:
+                poll_path = (
+                    f"/api/internal/v1/stages/{claim['stage_id']}/windows-session/poll"
+                )
+                poll = self.mutate(poll_path, common, claim["lease_token"])
+                poll.raise_for_status()
+                if poll.json().get("finalize"):
+                    self.cape.cancel(task_id)
+                    finish_requested = True
+                    value = self.cape.status(task_id)
             if value.get("status") in {
                 "reported",
                 "completed",
@@ -380,12 +422,21 @@ class WindowsExecutor:
             )
             + "\n"
         )
+        raw_report_path = workspace / "cape-report.json"
+        raw_report = cape_evidence.get("raw_report")
+        if isinstance(raw_report, dict):
+            raw_report_path.write_text(
+                json.dumps(raw_report, sort_keys=True, separators=(",", ":")) + "\n"
+            )
         candidates = [
             (native / "manifest.json", "platform_manifest", "application/json"),
             (native / "network/capture.pcapng", "pcap", "application/vnd.tcpdump.pcap"),
             (native / "behavior/access_events.json", "access_events", "application/json"),
             (prior_path, "static_prior", "application/json"),
+            (raw_report_path, "cape_report", "application/json"),
             (native / "behavior/trace.etl", "raw_etl", "application/octet-stream"),
+            (native / "behavior/kernel.etl", "kernel_etl", "application/octet-stream"),
+            (native / "behavior/cape-etw-events.json", "etw_events", "application/json"),
         ]
         for path, kind, media_type in candidates:
             if path.is_file():

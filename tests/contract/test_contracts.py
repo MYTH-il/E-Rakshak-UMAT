@@ -48,6 +48,8 @@ def test_executor_contract_covers_internal_routes() -> None:
         "/stages/{stage_id}/sample",
         "/stages/{stage_id}/inputs/{artifact_id}",
         "/stages/{stage_id}/heartbeat", "/stages/{stage_id}/native-task",
+        "/stages/{stage_id}/windows-session/ready",
+        "/stages/{stage_id}/windows-session/poll",
         "/stages/{stage_id}/android-session/ready",
         "/stages/{stage_id}/android-session/poll",
         "/stages/{stage_id}/android-session/complete-command",

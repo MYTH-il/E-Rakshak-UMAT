@@ -131,6 +131,7 @@ async def create_case(
     ),
     c2_analysis_enabled: bool = Form(default=False),
     android_interactive: bool = Form(default=False),
+    windows_interactive: bool = Form(default=False),
     principal: Principal = Depends(current_principal),
     db: AsyncSession = Depends(get_db),
 ) -> CreateCaseResponse:
@@ -223,6 +224,7 @@ async def create_case(
             network_mode=network_mode,
             c2_analysis_enabled=c2_analysis_enabled,
             android_interactive=android_interactive if platform == Platform.ANDROID else False,
+            windows_interactive=windows_interactive if platform == Platform.WINDOWS else False,
             status=RunStatus.AWAITING_CONFIRMATION if duplicates else RunStatus.QUEUED,
         )
         db.add(run)
@@ -264,6 +266,9 @@ async def create_case(
                 "c2_analysis_enabled": c2_analysis_enabled,
                 "android_interactive": android_interactive
                 if platform == Platform.ANDROID
+                else False,
+                "windows_interactive": windows_interactive
+                if platform == Platform.WINDOWS
                 else False,
             },
         )
@@ -329,6 +334,7 @@ def serialize_case(case: Case, report: dict[str, Any] | None = None) -> CaseResp
                 network_mode=r.network_mode,
                 c2_analysis_enabled=r.c2_analysis_enabled,
                 android_interactive=r.android_interactive,
+                windows_interactive=r.windows_interactive,
                 stages=[
                     StageResponse(
                         id=s.id,
@@ -346,7 +352,10 @@ def serialize_case(case: Case, report: dict[str, Any] | None = None) -> CaseResp
                 if r.android_configuration
                 else None,
             )
-            for r in case.runs
+            # The web client treats the final entry as the current run. SQL
+            # relationship loading has no implicit ordering, so make the API
+            # contract deterministic for cases containing retries/reruns.
+            for r in sorted(case.runs, key=lambda item: (item.created_at, item.id))
         ],
         report=report,
     )
@@ -442,6 +451,7 @@ async def create_run(
         network_mode=body.network_mode,
         c2_analysis_enabled=body.c2_analysis_enabled,
         android_interactive=body.android_interactive if platform == Platform.ANDROID else False,
+        windows_interactive=body.windows_interactive if platform == Platform.WINDOWS else False,
         status=RunStatus.QUEUED,
         confirmed_at=datetime.now(timezone.utc),
     )
@@ -489,6 +499,9 @@ async def create_run(
             "c2_analysis_enabled": body.c2_analysis_enabled,
             "android_interactive": body.android_interactive
             if platform == Platform.ANDROID
+            else False,
+            "windows_interactive": body.windows_interactive
+            if platform == Platform.WINDOWS
             else False,
         },
     )

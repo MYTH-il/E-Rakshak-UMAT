@@ -459,6 +459,10 @@ def install(
         runner.run(c2_setup, cwd=PROJECT_ROOT)
 
     if "windows" in selected:
+        runner.run(
+            [command("sudo"), "-n", "apt-get", "install", "-y", "tigervnc-viewer"],
+            cwd=PROJECT_ROOT,
+        )
         checkout = Path(manifest["paths"]["winstdt_checkout"])
         acquire_checkout(runner, checkout, manifest["components"]["winstdt"])
         setup = [str(checkout / "scripts/setup-ubuntu24-host.sh")]
@@ -862,11 +866,14 @@ def status() -> None:
             continue
         pcap = handoff.parent / "network/capture.pcapng"
         etl = handoff.parent / "behavior/trace.etl"
+        kernel_etl = handoff.parent / "behavior/kernel.etl"
         if (
             not pcap.is_file()
             or not etl.is_file()
+            or not kernel_etl.is_file()
             or pcap.stat().st_size <= 0
             or etl.stat().st_size <= 0
+            or kernel_etl.stat().st_size <= 0
         ):
             continue
         validation = (
@@ -884,6 +891,7 @@ def status() -> None:
                 "task_id": handoff.parent.name,
                 "pcap_bytes": pcap.stat().st_size,
                 "etl_bytes": etl.stat().st_size,
+                "kernel_etl_bytes": kernel_etl.stat().st_size,
             }
             break
     check("windows_harmless_handoff", accepted_handoff is not None, accepted_handoff or "none")

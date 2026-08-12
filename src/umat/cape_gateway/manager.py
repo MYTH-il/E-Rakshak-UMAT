@@ -25,6 +25,7 @@ import httpx
 from umat.cape_gateway.schemas import MachineResult, ProfileRequest
 
 LABEL_PATTERN = re.compile(r"^umat-[a-z0-9-]{1,80}-[0-9a-f]{8}$")
+CAPE_MACHINE_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class ProfileManagementError(RuntimeError):
@@ -317,6 +318,19 @@ class CapeProfileManager:
         if interface is None:
             raise ProfileManagementError("base domain has no network MAC")
         interface.set("address", mac)
+        devices = root.find("devices")
+        if devices is None:
+            raise ProfileManagementError("base domain has no devices section")
+        # The console relay connects locally on the CAPE host.  Replace any
+        # inherited SPICE/public graphics configuration with an auto-allocated
+        # VNC listener that cannot be reached off-host.
+        for graphics in list(devices.findall("graphics")):
+            devices.remove(graphics)
+        ET.SubElement(
+            devices,
+            "graphics",
+            {"type": "vnc", "port": "-1", "autoport": "yes", "listen": "127.0.0.1"},
+        )
         for entry in root.findall("./sysinfo/system/entry"):
             if entry.get("name") == "uuid":
                 entry.text = root.find("uuid").text  # type: ignore[union-attr]
@@ -448,6 +462,45 @@ if ($profile.administrator) {{
     def _cape_machine_locked(self, label: str) -> bool:
         output = self._cape_db("locked", label, "", "x64")
         return output.strip() == "true"
+
+    def console_target(self, task_id: int, label: str) -> tuple[str, int]:
+        if task_id < 1 or not CAPE_MACHINE_LABEL_PATTERN.fullmatch(label):
+            raise ProfileManagementError("invalid CAPE console target")
+        state = self._capture(
+            ["virsh", "-c", "qemu:///system", "domstate", label], check=False
+        ).strip()
+        if state != "running":
+            raise ProfileManagementError("CAPE machine is not running")
+        assigned = self._cape_task_machine(task_id)
+        if assigned != label:
+            raise ProfileManagementError("CAPE task does not own the requested machine")
+        display = self._capture(
+            ["virsh", "-c", "qemu:///system", "domdisplay", label, "--type", "vnc"]
+        ).strip()
+        match = re.fullmatch(r"vnc://([^:]+):(\d+)", display)
+        if not match or match.group(1) != "127.0.0.1":
+            raise ProfileManagementError(
+                "running CAPE machine has no loopback-only TCP VNC display"
+            )
+        display_number = int(match.group(2))
+        if display_number > 99:
+            raise ProfileManagementError("VNC display number is outside the allowed range")
+        return match.group(1), 5900 + display_number
+
+    def _cape_task_machine(self, task_id: int) -> str:
+        script = """import sys
+from lib.cuckoo.core.database import init_database
+d = init_database(exists_ok=True)
+task = d.view_task(int(sys.argv[1]))
+print(task.machine or "" if task else "")
+"""
+        return self._capture(
+            [
+                "sudo", "-n", "-u", "cape", "/etc/poetry/bin/poetry", "run", "python",
+                "-c", script, str(task_id),
+            ],
+            cwd=self.configuration.cape_root,
+        ).strip()
 
     def _cape_db(self, action: str, label: str, ip: str, architecture: str) -> str:
         script = """import json, sys

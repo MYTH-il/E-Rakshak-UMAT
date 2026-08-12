@@ -32,7 +32,7 @@
     "manifest_sha256":{"type":["string","null"],"pattern":"^[a-f0-9]{64}$"},
     "evidence_hash":{"type":"string","pattern":"^[a-f0-9]{64}$"},
     "case_id":{"type":"string","format":"uuid"},
-    "finding_kind":{"enum":["beacon","exfil","correlation","reputation","covert_channel","dns","static_ioc"]},
+    "finding_kind":{"enum":["beacon","exfil","correlation","reputation","covert_channel","dns","static_ioc","network_observation"]},
     "plain_language":{"type":"string","minLength":1},
     "capped_by_caveat":{"type":["string","null"]},
     "evidence_refs":{"type":"array","items":{"type":"object"}}

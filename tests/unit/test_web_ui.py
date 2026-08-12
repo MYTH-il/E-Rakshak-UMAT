@@ -67,3 +67,22 @@ def test_caveats_are_rendered_as_explanations_not_codes() -> None:
     assert "CAVEAT_TEXT[item.value]" in javascript, (
         "the officer view must render the explanation, not the de-underscored code"
     )
+
+
+def test_windows_run_progress_exposes_live_console_action() -> None:
+    javascript = (ROOT / "src/umat/web/static/app.js").read_text()
+    assert 'button("Launch live console"' in javascript
+    assert "windows-session/launch-viewer" in javascript
+    assert 'item.platform === "windows"' in javascript
+
+
+def test_large_evidence_collections_use_search_and_pagination() -> None:
+    javascript = (ROOT / "src/umat/web/static/app.js").read_text()
+    css = (ROOT / "src/umat/web/static/app.css").read_text()
+    assert "function dataExplorer(" in javascript
+    assert '"Search indicators"' in javascript
+    assert '"Search destinations, IPs, domains or networks"' in javascript
+    assert '"Search actions, files, paths, processes or PIDs"' in javascript
+    assert "filtered.slice(start, start + pageSize)" in javascript
+    assert ".data-pagination" in css
+    assert "overflow-wrap: anywhere" in css

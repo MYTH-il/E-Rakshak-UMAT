@@ -155,6 +155,7 @@ def test_current_c2_runtime_normalizes_modern_static_prior(tmp_path: Path) -> No
                     "evidence": [{"source": "cape"}],
                 },
                 "capa_capabilities": ["T1059"],
+                "evidence_origin": "binary_static",
                 "iocs": [{"type": "domain", "value": "fixture.invalid"}],
             }
         )
@@ -182,3 +183,135 @@ def test_current_c2_runtime_normalizes_modern_static_prior(tmp_path: Path) -> No
         "capabilities": ["T1059"],
         "c2_indicators": [{"type": "domain", "value": "fixture.invalid"}],
     }
+
+
+def test_c2_runtime_rejects_dynamic_observations_as_static_prior(tmp_path: Path) -> None:
+    source = tmp_path / "dynamic-static-prior.json"
+    source.write_text(
+        json.dumps(
+            {
+                "evidence_origin": "runtime_network",
+                "iocs": [{"type": "domain", "value": "amazon.com"}],
+            }
+        )
+    )
+    artifact = InputArtifact(
+        artifact_id=uuid4(),
+        kind="static_prior",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size,
+        media_type="application/json",
+        source_stage_type="platform_analysis",
+        local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(
+        sample_sha256="a" * 64,
+        static_prior=artifact,
+    )
+    normalized_path = SubprocessC2Runtime._prepare_static_prior(context, tmp_path)
+    normalized = json.loads(normalized_path.read_text())
+    assert normalized["c2_indicators"] == []
+
+
+def test_c2_runtime_fails_closed_for_legacy_windows_prior(tmp_path: Path) -> None:
+    source = tmp_path / "legacy-windows-prior.json"
+    source.write_text(
+        json.dumps({"iocs": [{"type": "domain", "value": "go.microsoft.com"}]})
+    )
+    artifact = InputArtifact(
+        artifact_id=uuid4(),
+        kind="static_prior",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size,
+        media_type="application/json",
+        source_stage_type="platform_analysis",
+        local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(
+        platform="windows",
+        sample_sha256="a" * 64,
+        static_prior=artifact,
+    )
+    normalized_path = SubprocessC2Runtime._prepare_static_prior(context, tmp_path)
+    assert json.loads(normalized_path.read_text())["c2_indicators"] == []
+
+
+def test_unclassified_egress_is_a_neutral_network_observation() -> None:
+    events = [
+        {
+            "finding_kind": "exfil",
+            "destination_domain": "amazon.com",
+            "mitre_technique_id": "T1041",
+            "evidence_refs": [
+                {"type": "network_event", "detector": "unclassified_egress"}
+            ],
+        }
+    ]
+    SubprocessC2Runtime._correct_unclassified_egress(events)
+    assert events[0]["finding_kind"] == "network_observation"
+    assert events[0]["mitre_technique_id"] is None
+    assert "not attributed to C2" in events[0]["plain_language"]
+
+
+def test_supported_exfil_is_not_downgraded() -> None:
+    events = [
+        {
+            "finding_kind": "correlation",
+            "data_type_accessed": "browser_credentials",
+            "evidence_refs": [
+                {"type": "network_event", "detector": "unclassified_egress"},
+                {"type": "host_access"},
+            ],
+        }
+    ]
+    SubprocessC2Runtime._correct_unclassified_egress(events)
+    assert events[0]["finding_kind"] == "correlation"
+
+
+def test_correlated_file_access_restores_filename_and_path(tmp_path: Path) -> None:
+    source = tmp_path / "access-events.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "timestamp": "2026-08-11T12:00:00.004Z",
+                    "data_type": "file_access",
+                    "api_call": "NtCreateFile",
+                    "object_name": "Login Data",
+                    "object_path": "C:\\Users\\Analyst\\Chrome\\Login Data",
+                    "access_operation": "GENERIC_READ",
+                    "process": "sample.exe",
+                    "process_id": 1234,
+                    "source_call_id": "77",
+                }
+            ]
+        )
+    )
+    artifact = InputArtifact(
+        artifact_id=uuid4(),
+        kind="access_events",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size,
+        media_type="application/json",
+        source_stage_type="platform_analysis",
+        local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(access_events=artifact)
+    events = [
+        {
+            "finding_kind": "correlation",
+            "timestamp": "2026-08-11T12:00:02Z",
+            "data_type_accessed": "file_access",
+            "access_api_call": "NtCreateFile",
+            "destination_ip": "198.51.100.10",
+            "evidence_refs": [
+                {"type": "host_access", "time_delta_s": 2.0}
+            ],
+        }
+    ]
+    SubprocessC2Runtime._enrich_access_context(context, events)
+    host = events[0]["evidence_refs"][0]
+    assert host["object_name"] == "Login Data"
+    assert host["object_path"].endswith("Chrome\\Login Data")
+    assert host["process_id"] == 1234
+    assert "Login Data" in events[0]["plain_language"]

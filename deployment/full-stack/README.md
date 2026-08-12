@@ -119,5 +119,12 @@ adaptation can add several minutes. Inspect CAPE for native progress and UMAT fo
 progress. The executor records the CAPE task ID and resumes polling rather than resubmitting after
 a restart.
 
+Windows detonation uses a minimum 10-minute CAPE timeout. Manual runs expose a launch action that
+validates the active run and loopback-only task-owned display before starting TigerVNC on the local
+analyst desktop. The installer adds `tigervnc-viewer`; VNC remains bound to `127.0.0.1` and is never
+published to the network. Host/guest clipboard sharing, file transfer, and independent VM power
+controls are not part of this path. Access expires with the CAPE task or its 10-minute capability,
+whichever happens first.
+
 Phase 6 must add automated backup/restore and rollback commands. Until then, do not manually
 remove a legacy database or Docker volume merely to make the status command green.
