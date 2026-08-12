@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -150,6 +151,8 @@ class SubprocessC2Runtime:
             ]
         if context.platform == "windows" and context.access_events:
             command.append(str(context.access_events.local_path))
+        if context.platform == "windows" and context.etw_events:
+            command.extend(["--etw-events", str(context.etw_events.local_path)])
         if context.static_prior:
             static_prior = self._prepare_static_prior(context, workspace)
             command.extend(["--static-prior", str(static_prior)])
@@ -225,6 +228,9 @@ class SubprocessC2Runtime:
             )
         output = workspace / "output"
         events = self._json_list(output / "exfil_events.json", required=True)
+        if context.platform == "windows":
+            self._correct_unclassified_egress(events)
+            self._enrich_access_context(context, events)
         if context.platform == "android" and context.network_activity:
             events.extend(self._proxy_network_events(context))
         return NativeC2Result(
@@ -237,6 +243,132 @@ class SubprocessC2Runtime:
             runtime_identity=self.identity,
             tool_versions={"python": sys.version.split()[0], "c2_commit": self.expected_commit},
         )
+
+    @staticmethod
+    def _correct_unclassified_egress(events: list[dict[str, Any]]) -> None:
+        """Keep the upstream catch-all detector from asserting exfiltration.
+
+        The locked analyzer exposes its native detector in evidence_refs but
+        folds it to ``exfil`` because its original UMAT contract had no neutral
+        observation kind. Preserve positive reputation, static, and host-access
+        evidence; only the explicitly unclassified residual is corrected.
+        """
+        for event in events:
+            refs = event.get("evidence_refs") or []
+            detectors = {
+                ref.get("detector")
+                for ref in refs
+                if isinstance(ref, dict) and ref.get("type") == "network_event"
+            }
+            independently_supported = bool(
+                event.get("reputation_source")
+                or event.get("data_type_accessed")
+                or event.get("finding_kind") == "correlation"
+                or any(
+                    isinstance(ref, dict)
+                    and ref.get("type") in {"threat_intel", "host_access", "static_prior"}
+                    for ref in refs
+                )
+            )
+            if "unclassified_egress" not in detectors or independently_supported:
+                continue
+            destination = event.get("destination_domain") or event.get("destination_ip")
+            event["finding_kind"] = "network_observation"
+            event["mitre_technique_id"] = None
+            event["plain_language"] = (
+                f"Network traffic to {destination or 'an unidentified destination'} was "
+                "observed, but it was not attributed to C2 or data exfiltration."
+            )
+
+    @staticmethod
+    def _enrich_access_context(
+        context: C2AnalysisContext, events: list[dict[str, Any]]
+    ) -> None:
+        """Rejoin correlated rows to the lossless Windows access evidence."""
+        source = context.access_events
+        if source is None:
+            return
+        try:
+            access_events = json.loads(source.local_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(access_events, list):
+            return
+
+        candidates = [item for item in access_events if isinstance(item, dict)]
+        used: set[tuple[str, str]] = set()
+        for event in events:
+            if event.get("finding_kind") != "correlation":
+                continue
+            refs = event.get("evidence_refs") or []
+            host_ref = next(
+                (
+                    ref
+                    for ref in refs
+                    if isinstance(ref, dict) and ref.get("type") == "host_access"
+                ),
+                None,
+            )
+            if host_ref is None:
+                continue
+            try:
+                network_time = datetime.fromisoformat(
+                    str(event["timestamp"]).replace("Z", "+00:00")
+                )
+                access_time = network_time - timedelta(
+                    seconds=float(host_ref.get("time_delta_s") or 0)
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            ranked: list[tuple[float, int, dict[str, Any]]] = []
+            for index, candidate in enumerate(candidates):
+                if candidate.get("data_type") != event.get("data_type_accessed"):
+                    continue
+                if candidate.get("api_call") != event.get("access_api_call"):
+                    continue
+                try:
+                    candidate_time = datetime.fromisoformat(
+                        str(candidate["timestamp"]).replace("Z", "+00:00")
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+                identity = (str(event.get("timestamp")), str(index))
+                if identity in used:
+                    continue
+                ranked.append((abs((candidate_time - access_time).total_seconds()), index, candidate))
+            if not ranked:
+                continue
+            difference, index, match = min(ranked, key=lambda item: (item[0], item[1]))
+            # The upstream correlation rounds its time delta to centiseconds.
+            if difference > 0.011:
+                continue
+            used.add((str(event.get("timestamp")), str(index)))
+            for field in (
+                "object_path",
+                "object_name",
+                "access_operation",
+                "process",
+                "process_id",
+                "process_path",
+                "parent_process_id",
+                "source_call_id",
+            ):
+                if match.get(field) is not None:
+                    host_ref[field] = match[field]
+            name = match.get("object_name") or match.get("object_path")
+            path = match.get("object_path")
+            destination = event.get("destination_domain") or event.get("destination_ip")
+            delta = host_ref.get("time_delta_s")
+            if name:
+                accessed = f"the file {name}"
+                if path and path != name:
+                    accessed += f" at {path}"
+                event["plain_language"] = (
+                    f"This sample accessed {accessed} and contacted "
+                    f"{destination or 'an unidentified destination'}"
+                    f"{f' {delta:g} seconds later' if isinstance(delta, (int, float)) else ''}. "
+                    "This is shown for review and is not confirmed."
+                )
 
     @staticmethod
     def _proxy_network_events(context: C2AnalysisContext) -> list[dict[str, Any]]:
@@ -309,12 +441,36 @@ class SubprocessC2Runtime:
         family = raw.get("family")
         if isinstance(attribution, dict) and attribution.get("evidence"):
             family = attribution.get("family") or family
+        indicators = raw.get("iocs") if "iocs" in raw else raw.get("c2_indicators") or []
+        if not isinstance(indicators, list):
+            raise C2RuntimeError("static prior indicators are not an array")
+        # Modern platform adapters explicitly identify independently obtained
+        # static evidence. Do not pass runtime-observed network destinations to
+        # a detector as priors: that would allow a flow to corroborate itself.
+        if getattr(context, "platform", None) == "windows" and not raw.get("evidence_origin"):
+            indicators = []
+        elif raw.get("evidence_origin"):
+            if raw["evidence_origin"] != "binary_static":
+                indicators = []
+            else:
+                indicators = [
+                    item
+                    for item in indicators
+                    if isinstance(item, dict)
+                    and item.get("evidence_origin", "binary_static") == "binary_static"
+                ]
         normalized = {
             "sample_sha256": context.sample_sha256,
             "family": family,
             "capabilities": raw.get("capa_capabilities") or raw.get("capabilities") or [],
-            "c2_indicators": raw.get("iocs") if "iocs" in raw else raw.get("c2_indicators") or [],
+            "c2_indicators": indicators,
         }
+        # Preserve redacted extractor evidence for runtimes that understand
+        # richer configuration records. Omit empty extensions so legacy inputs
+        # remain byte-shape compatible with the locked runtime.
+        for field in ("configuration_candidates", "extractor_records"):
+            if raw.get(field):
+                normalized[field] = raw[field]
         target = workspace / "static-prior.json"
         target.write_text(json.dumps(normalized, sort_keys=True))
         target.chmod(0o400)

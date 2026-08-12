@@ -37,10 +37,16 @@ def native_bundle(root: Path) -> Path:
     (root / "manifest.json").write_text(json.dumps(manifest))
     (root / "network/capture.pcapng").write_bytes(b"pcap")
     (root / "behavior/trace.etl").write_bytes(b"etl")
+    (root / "behavior/kernel.etl").write_bytes(b"kernel-etl")
     (root / "report.json").write_text('{"signatures":[]}')
     import hashlib
 
-    paths = [root / "network/capture.pcapng", root / "behavior/trace.etl", root / "report.json"]
+    paths = [
+        root / "network/capture.pcapng",
+        root / "behavior/trace.etl",
+        root / "behavior/kernel.etl",
+        root / "report.json",
+    ]
     (root / "hashes.sha256").write_text(
         "".join(
             f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}\n"

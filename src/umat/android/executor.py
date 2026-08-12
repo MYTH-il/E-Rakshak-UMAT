@@ -1261,11 +1261,18 @@ class AndroidExecutor:
             elif isinstance(url, dict) and url.get("url"):
                 values.add(("url", str(url["url"])))
         return {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "analysis_run_id": claim["analysis_run_id"],
             "sample_sha256": claim["sample_sha256"],
+            "evidence_origin": "binary_static",
             "iocs": [
-                {"type": kind, "value": value, "confidence": "unconfirmed"}
+                {
+                    "type": kind,
+                    "value": value,
+                    "confidence": "unconfirmed",
+                    "source": "mobsf_static",
+                    "evidence_origin": "binary_static",
+                }
                 for kind, value in sorted(values)
             ],
         }

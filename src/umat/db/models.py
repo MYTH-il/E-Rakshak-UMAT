@@ -269,6 +269,7 @@ class AnalysisRun(Base):
     network_mode: Mapped[str] = mapped_column(String(32), default="isolated_simulated")
     c2_analysis_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     android_interactive: Mapped[bool] = mapped_column(Boolean, default=False)
+    windows_interactive: Mapped[bool] = mapped_column(Boolean, default=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
@@ -284,6 +285,9 @@ class AnalysisRun(Base):
         lazy="selectin", uselist=False
     )
     android_dynamic_session: Mapped[AndroidDynamicSession | None] = relationship(
+        lazy="selectin", uselist=False
+    )
+    windows_dynamic_session: Mapped[WindowsDynamicSession | None] = relationship(
         lazy="selectin", uselist=False
     )
 
@@ -823,6 +827,32 @@ class AndroidSessionCommand(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WindowsDynamicSession(Base):
+    __tablename__ = "windows_dynamic_sessions"
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid7)
+    analysis_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="RESTRICT"), unique=True, index=True
+    )
+    stage_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_stages.id", ondelete="RESTRICT"), index=True
+    )
+    attempt_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_attempts.id", ondelete="RESTRICT"), index=True
+    )
+    executor_id: Mapped[UUID] = mapped_column(
+        ForeignKey("executors.id", ondelete="RESTRICT"), index=True
+    )
+    state: Mapped[str] = mapped_column(String(32), default="ready", index=True)
+    cape_task_id: Mapped[int] = mapped_column(Integer, index=True)
+    machine_label: Mapped[str] = mapped_column(String(128), index=True)
+    console_url: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status_details: Mapped[dict[str, Any]] = mapped_column(json_dict_type(), default=dict)
 
 
 class WindowsAnalysisMetadata(Base):

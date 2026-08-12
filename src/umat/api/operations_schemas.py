@@ -58,6 +58,7 @@ class RecentRunItem(BaseModel):
     network_mode: str
     c2_analysis_enabled: bool
     android_interactive: bool
+    windows_interactive: bool
     profile: dict[str, Any] | None
     retry_eligible: bool
     created_at: datetime

@@ -28,6 +28,7 @@ from umat.config import get_settings
 from umat.db.session import session_factory
 from umat.storage.local import LocalArtifactStore
 from umat.windows.profile_routes import router as windows_profile_router
+from umat.windows.workflow_routes import router as windows_workflow_router
 
 
 def configure_logging() -> None:
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     application.include_router(operations_router)
     application.include_router(report_router)
     application.include_router(windows_profile_router)
+    application.include_router(windows_workflow_router)
     application.include_router(android_profile_router)
     application.include_router(android_workflow_router)
 

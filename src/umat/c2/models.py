@@ -26,6 +26,7 @@ class C2AnalysisContext(BaseModel):
     pcap: InputArtifact
     platform_manifest: InputArtifact
     access_events: InputArtifact | None = None
+    etw_events: InputArtifact | None = None
     static_prior: InputArtifact | None = None
     network_activity: InputArtifact | None = None
     analysis_started_at: datetime
@@ -53,6 +54,10 @@ class C2AnalysisContext(BaseModel):
                 "artifact_id": str(self.access_events.artifact_id) if self.access_events else None,
                 "source": "etl_derived" if self.access_events else "unavailable",
                 "correlation_eligible": self.correlation_eligible,
+            },
+            "etw_events": {
+                "artifact_id": str(self.etw_events.artifact_id) if self.etw_events else None,
+                "source": "cape_etw" if self.etw_events else "unavailable",
             },
             "static_prior": {
                 "artifact_id": str(self.static_prior.artifact_id) if self.static_prior else None

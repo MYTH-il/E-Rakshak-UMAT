@@ -21,8 +21,8 @@ from umat.contracts.canonical import canonical_json
 from umat.contracts.validator import validate_pinned_native_schema
 
 WINSTDT_COMMIT = "7bc74765e9d38d7ba6df3f2115db67761cb4cbd8"
-HANDOFF_DIGEST = "e53705f8a70ceeb86083cec46ae6980147941abf931028ba931bc868b0b39223"
-ACCESS_DIGEST = "262dc775ee6d53ba6eb4441e94832d38611b9d8cd8203deec346d2d2006e0199"
+HANDOFF_DIGEST = "e4083f603f7cdcd96dbe58f279cb69e8d94e9d85908c4407e01735b83f812f20"
+ACCESS_DIGEST = "4a47282985e412ee9c061db517bd460dd06db7e560f8a801b4cf7a83c97dbd1a"
 SAMPLE_META_DIGEST = "fe36e4893e689c9570ffede487707002c0af91b183e91aa3ffc873ab2004c8d6"
 
 

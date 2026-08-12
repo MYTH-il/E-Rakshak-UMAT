@@ -1,0 +1,108 @@
+diff --git a/schemas/access_events.schema.json b/schemas/access_events.schema.json
+index 073bc8b..ae35200 100644
+--- a/schemas/access_events.schema.json
++++ b/schemas/access_events.schema.json
+@@ -11,7 +11,14 @@
+       "timestamp": {"type":"string", "format":"date-time"},
+       "data_type": {"type":"string", "enum":["browser_credentials","keystrokes","screenshot","clipboard","crypto_wallet","system_info","file_access"]},
+       "api_call": {"type":"string", "minLength":1},
+-      "process": {"type":["string","null"]}
++      "process": {"type":["string","null"]},
++      "object_path": {"type":"string", "maxLength":2048},
++      "object_name": {"type":"string", "maxLength":512},
++      "access_operation": {"type":"string", "maxLength":512},
++      "process_id": {"type":["integer","null"], "minimum":0},
++      "process_path": {"type":"string", "maxLength":2048},
++      "parent_process_id": {"type":["integer","null"], "minimum":0},
++      "source_call_id": {"type":"string", "maxLength":128}
+     }
+   }
+ }
+diff --git a/winstdt/access_events.py b/winstdt/access_events.py
+index 1bd9f90..a000fa8 100644
+--- a/winstdt/access_events.py
++++ b/winstdt/access_events.py
+@@ -2,6 +2,7 @@
+ from __future__ import annotations
+ 
+ import json
++import ntpath
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Any
+@@ -20,6 +21,51 @@ API_TYPES = {
+     "NtReadFile": "file_access", "NtCreateFile": "file_access",
+     "SetClipboardData": "clipboard", "GetComputerNameW": "system_info",
+ }
++OPTIONAL_EVENT_FIELDS = {
++    "object_path", "object_name", "access_operation", "process_id",
++    "process_path", "parent_process_id", "source_call_id",
++}
++
++
++def _arguments(call: dict) -> dict[str, str]:
++    values = {}
++    for item in call.get("arguments", []):
++        if not isinstance(item, dict) or not item.get("name"):
++            continue
++        value = item.get("pretty_value") if item.get("pretty_value") is not None else item.get("value")
++        if value is not None:
++            values[str(item["name"])] = str(value)
++    return values
++
++
++def _bounded(value: Any, maximum: int) -> str | None:
++    if value is None:
++        return None
++    text = str(value).replace("\\x00", "").strip()
++    return text[:maximum] or None
++
++
++def _event_details(call: dict, process: dict) -> dict[str, Any]:
++    arguments = _arguments(call)
++    object_path = next(
++        (_bounded(arguments.get(name), 2048) for name in
++         ("FileName", "HandleName", "ObjectName", "Path", "FilePath", "RegistryPath", "KeyName")
++         if arguments.get(name)),
++        None,
++    )
++    operation = "|".join(filter(None, [
++        arguments.get("DesiredAccess"), arguments.get("CreateDisposition"),
++    ]))[:512] or None
++    details = {
++        "object_path": object_path,
++        "object_name": _bounded(ntpath.basename(object_path), 512) if object_path else None,
++        "access_operation": operation,
++        "process_id": process.get("process_id"),
++        "process_path": _bounded(process.get("module_path") or process.get("process_path"), 2048),
++        "parent_process_id": process.get("parent_id") or process.get("parent_process_id"),
++        "source_call_id": _bounded(call.get("id"), 128),
++    }
++    return {key: value for key, value in details.items() if value is not None}
+ 
+ 
+ def _datetime(value: Any) -> datetime:
+@@ -56,7 +102,7 @@ def _validate_events(events: list[dict], schema_path: Path | None) -> None:
+         except ImportError:
+             pass
+     for event in events:
+-        if set(event) - {"timestamp", "data_type", "api_call", "process"}:
++        if set(event) - ({"timestamp", "data_type", "api_call", "process"} | OPTIONAL_EVENT_FIELDS):
+             raise ValueError("undocumented access-event field")
+         _datetime(event["timestamp"])
+         if event["data_type"] not in set(API_TYPES.values()) or not event["api_call"]:
+@@ -116,9 +162,11 @@ def build_access_events(results: dict, clock: dict, analysis_start: Any, analysi
+                 if corrected < start_time or corrected > end_time:
+                     rejected += 1
+                     continue
+-                events.append({"timestamp": _iso(corrected), "data_type": API_TYPES[call["api"]],
+-                               "api_call": call["api"],
+-                               "process": process.get("process_name") or None})
++                events.append({
++                    "timestamp": _iso(corrected), "data_type": API_TYPES[call["api"]],
++                    "api_call": call["api"], "process": process.get("process_name") or None,
++                    **_event_details(call, process),
++                })
+     try:
+         _validate_events(events, schema_path)
+     except Exception:

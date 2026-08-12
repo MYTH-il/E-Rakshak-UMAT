@@ -159,6 +159,7 @@
     "network_mode",
     "c2_analysis_enabled",
     "android_interactive",
+    "windows_interactive",
     "stages",
     "windows_profile",
     "android_profile"
@@ -215,6 +216,9 @@
     "android_interactive": {
      "type": "boolean"
     },
+    "windows_interactive": {
+     "type": "boolean"
+    },
     "stages": {
      "type": "array",
      "items": {
@@ -267,6 +271,22 @@
     },
     "summary": {
      "type": "string"
+    },
+    "observed_objects": {
+     "type": "array",
+     "maxItems": 100,
+     "items": {
+      "type": "object",
+      "required": ["name", "path", "operation", "process", "process_id"],
+      "additionalProperties": false,
+      "properties": {
+       "name": {"type": ["string", "null"]},
+       "path": {"type": ["string", "null"]},
+       "operation": {"type": ["string", "null"]},
+       "process": {"type": ["string", "null"]},
+       "process_id": {"type": ["integer", "null"]}
+      }
+     }
     }
    }
   },

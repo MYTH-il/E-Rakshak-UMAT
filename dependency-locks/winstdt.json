@@ -10,11 +10,11 @@
   "native_contracts": {
     "handoff": {
       "path": "schemas/handoff_manifest.schema.json",
-      "sha256": "e53705f8a70ceeb86083cec46ae6980147941abf931028ba931bc868b0b39223"
+      "sha256": "e4083f603f7cdcd96dbe58f279cb69e8d94e9d85908c4407e01735b83f812f20"
     },
     "access_events": {
       "path": "schemas/access_events.schema.json",
-      "sha256": "262dc775ee6d53ba6eb4441e94832d38611b9d8cd8203deec346d2d2006e0199"
+      "sha256": "4a47282985e412ee9c061db517bd460dd06db7e560f8a801b4cf7a83c97dbd1a"
     },
     "sample_metadata": {
       "path": "schemas/sample_meta.schema.json",
@@ -31,9 +31,17 @@
       {
         "path": "deployment/windows/patches/0002-deployment-runtime-identity.patch",
         "sha256": "3af414e6f5b857bb565dd8388828bc36c5e02411588fe169746431d5f1edf668"
+      },
+      {
+        "path": "deployment/windows/patches/0003-rich-access-event-context.patch",
+        "sha256": "07267f297f2ae7c4bc8bd7d606cdeea6d99a4897abe8ba4a8bd1025f74b146c8"
+      },
+      {
+        "path": "deployment/windows/patches/0004-declare-kernel-etl-alias.patch",
+        "sha256": "f4dc45ee55edf35a4234d6fe02928f950d3e73b6ca1eb700052ad6d9f0eb8488"
       }
     ],
-    "patch_series_sha256": "c6ce031ed77175877d9518385cc41047d5119988ac62190634bc2cdc83d50f39"
+    "patch_series_sha256": "e8214c2a14540a9c00b018d996edb559a52fb451d71079ae1d6d71861effe972"
   },
   "license_status": "authorization_required_no_upstream_license_file",
   "redistribution_allowed": false,

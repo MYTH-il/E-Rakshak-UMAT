@@ -39,6 +39,8 @@ from umat.api.executor_schemas import (
     RegisterExecutorRequest,
     RegisterExecutorResponse,
     WindowsProfileOperationCompleteRequest,
+    WindowsSessionPollRequest,
+    WindowsSessionReadyRequest,
 )
 from umat.audit import append_audit
 from umat.auth.security import random_token, token_hash
@@ -68,6 +70,7 @@ from umat.db.models import (
     StageState,
     StageType,
     Submission,
+    WindowsDynamicSession,
     WindowsProfileOperation,
     WindowsProfileOperationState,
     WindowsProfileOperationType,
@@ -416,6 +419,14 @@ async def expire_attempt(
             session.state = "expired"
             session.ended_at = now
             session.last_seen_at = now
+    if run and stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "windows":
+        windows_session = await db.scalar(
+            select(WindowsDynamicSession).where(WindowsDynamicSession.analysis_run_id == run.id)
+        )
+        if windows_session:
+            windows_session.state = "expired"
+            windows_session.ended_at = now
+            windows_session.last_seen_at = now
     lease.released_at = now
     lease.release_reason = reason
     attempt.ended_at = now
@@ -644,6 +655,7 @@ async def claim_stage(
             "pcap",
             "platform_manifest",
             "access_events",
+            "etw_events",
             "static_prior",
             "network_activity",
         }
@@ -687,6 +699,7 @@ async def claim_stage(
     execution_configuration["network_mode"] = run.network_mode
     execution_configuration["c2_analysis_enabled"] = run.c2_analysis_enabled
     execution_configuration["android_interactive"] = run.android_interactive
+    execution_configuration["windows_interactive"] = run.windows_interactive
     return ClaimResponse(
         stage_id=stage.id,
         attempt_id=attempt.id,
@@ -1017,6 +1030,123 @@ async def native_task(
         payload={"task_type": body.task_type, "native_task_id": body.native_task_id},
     )
     response = {"backend_task_id": str(task.id), "recovered": False}
+    record.response_json = response
+    await db.commit()
+    return response
+
+
+@router.post("/stages/{stage_id}/windows-session/ready")
+async def windows_session_ready(
+    stage_id: UUID,
+    body: WindowsSessionReadyRequest,
+    request: Request,
+    headers: tuple[str, str, str, str, str] = Depends(mutation_headers),
+    executor: Executor = Depends(current_executor),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    timestamp, nonce, key, signature, lease_token = headers
+    stage, attempt, _lease, record, replay = await verify_stage_mutation(
+        db=db,
+        executor=executor,
+        request=request,
+        stage_id=stage_id,
+        body=body.model_dump(mode="json"),
+        timestamp=timestamp,
+        nonce=nonce,
+        idempotency_key=key,
+        signature=signature,
+        lease_token=lease_token,
+    )
+    if replay and record.response_json:
+        return record.response_json
+    run = await db.get(AnalysisRun, stage.analysis_run_id)
+    if not run or run.platform.value != "windows" or not run.windows_interactive:
+        raise HTTPException(status.HTTP_409_CONFLICT, "run is not manual Windows analysis")
+    task = await db.scalar(select(BackendTask).where(BackendTask.stage_id == stage.id))
+    if not task or task.task_type != "cape" or task.native_task_id != str(body.cape_task_id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "CAPE task does not belong to this stage")
+    now = datetime.now(timezone.utc)
+    session = await db.scalar(
+        select(WindowsDynamicSession)
+        .where(WindowsDynamicSession.analysis_run_id == run.id)
+        .with_for_update()
+    )
+    proposed_expiry = now + timedelta(seconds=body.duration_seconds)
+    values = {
+        "stage_id": stage.id,
+        "attempt_id": attempt.id,
+        "executor_id": executor.id,
+        "state": "ready",
+        "cape_task_id": body.cape_task_id,
+        "machine_label": body.machine_label,
+        "console_url": body.console_url,
+        "expires_at": proposed_expiry,
+        "ended_at": None,
+        "last_seen_at": now,
+        "status_details": {"message": "Live CAPE console is ready"},
+    }
+    if session is None:
+        session = WindowsDynamicSession(analysis_run_id=run.id, **values)
+        db.add(session)
+        await db.flush()
+    else:
+        if session.cape_task_id == body.cape_task_id:
+            # Executor/API restarts may re-register the same native task. A
+            # recovery must never grant a fresh 10-minute observation window.
+            values["expires_at"] = min(session.expires_at, proposed_expiry)
+        for field, value in values.items():
+            setattr(session, field, value)
+    response = {"session_id": str(session.id), "expires_at": session.expires_at.isoformat()}
+    record.response_json = response
+    await append_audit(
+        db,
+        actor_type="executor",
+        actor_id=str(executor.id),
+        action="windows_session.ready",
+        target_type="windows_dynamic_session",
+        target_id=str(session.id),
+        payload={
+            "analysis_run_id": str(run.id),
+            "cape_task_id": body.cape_task_id,
+            "machine_label": body.machine_label,
+            "expires_at": session.expires_at.isoformat(),
+        },
+    )
+    await db.commit()
+    return response
+
+
+@router.post("/stages/{stage_id}/windows-session/poll")
+async def windows_session_poll(
+    stage_id: UUID,
+    body: WindowsSessionPollRequest,
+    request: Request,
+    headers: tuple[str, str, str, str, str] = Depends(mutation_headers),
+    executor: Executor = Depends(current_executor),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    timestamp, nonce, key, signature, lease_token = headers
+    stage, _attempt, _lease, record, replay = await verify_stage_mutation(
+        db=db, executor=executor, request=request, stage_id=stage_id,
+        body=body.model_dump(mode="json"), timestamp=timestamp, nonce=nonce,
+        idempotency_key=key, signature=signature, lease_token=lease_token,
+    )
+    if replay and record.response_json:
+        return record.response_json
+    session = await db.scalar(
+        select(WindowsDynamicSession).where(
+            WindowsDynamicSession.analysis_run_id == stage.analysis_run_id
+        )
+    )
+    now = datetime.now(timezone.utc)
+    finalize = bool(
+        session and (session.state == "finalizing" or session.expires_at <= now)
+    )
+    if session:
+        session.last_seen_at = now
+        if finalize:
+            session.state = "finalizing"
+    response = {"finalize": finalize}
     record.response_json = response
     await db.commit()
     return response
@@ -1402,6 +1532,14 @@ async def complete_stage(
             session.state = "ended"
             session.ended_at = now
             session.last_seen_at = now
+    if stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "windows":
+        windows_session = await db.scalar(
+            select(WindowsDynamicSession).where(WindowsDynamicSession.analysis_run_id == run.id)
+        )
+        if windows_session:
+            windows_session.state = "ended"
+            windows_session.ended_at = now
+            windows_session.last_seen_at = now
     if (
         requested_state == StageState.UNSUPPORTED
         and stage.stage_type == StageType.PLATFORM_ANALYSIS
@@ -1483,6 +1621,14 @@ async def fail_stage(
             )
             session.ended_at = now
             session.last_seen_at = now
+    if run and stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "windows":
+        windows_session = await db.scalar(
+            select(WindowsDynamicSession).where(WindowsDynamicSession.analysis_run_id == run.id)
+        )
+        if windows_session:
+            windows_session.state = "failed"
+            windows_session.ended_at = now
+            windows_session.last_seen_at = now
     if body.retryable and attempt_count < stage.max_attempts:
         stage.state = StageState.QUEUED
         stage.next_attempt_at = now + timedelta(seconds=min(300, 2**attempt_count))
@@ -1553,6 +1699,14 @@ async def cancellation_ack(
             session.state = "cancelled"
             session.ended_at = now
             session.last_seen_at = now
+    if stage.stage_type == StageType.PLATFORM_ANALYSIS and run.platform.value == "windows":
+        windows_session = await db.scalar(
+            select(WindowsDynamicSession).where(WindowsDynamicSession.analysis_run_id == run.id)
+        )
+        if windows_session:
+            windows_session.state = "cancelled"
+            windows_session.ended_at = now
+            windows_session.last_seen_at = now
     stage.state = StageState.CANCELLED
     attempt.state = AttemptState.CANCELLED
     attempt.ended_at = now

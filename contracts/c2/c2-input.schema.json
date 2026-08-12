@@ -13,6 +13,7 @@
     "analysis_window":{"type":"object","required":["started_at","ended_at"],"properties":{"started_at":{"type":"string","format":"date-time"},"ended_at":{"type":"string","format":"date-time"}},"additionalProperties":false},
     "guest_ip":{"type":["string","null"],"format":"ipvanyaddress"},
     "access_events":{"type":"object","required":["artifact_id","source","correlation_eligible"],"properties":{"artifact_id":{"type":["string","null"],"format":"uuid"},"source":{"enum":["etl_derived","unavailable"]},"correlation_eligible":{"type":"boolean"}},"additionalProperties":false},
+    "etw_events":{"type":"object","required":["artifact_id","source"],"properties":{"artifact_id":{"type":["string","null"],"format":"uuid"},"source":{"enum":["cape_etw","unavailable"]}},"additionalProperties":false},
     "static_prior":{"type":"object","required":["artifact_id"],"properties":{"artifact_id":{"type":["string","null"],"format":"uuid"}},"additionalProperties":false},
     "network_activity":{"type":"object","required":["artifact_id"],"properties":{"artifact_id":{"type":["string","null"],"format":"uuid"}},"additionalProperties":false},
     "platform_manifest":{"$ref":"#/$defs/artifact"}

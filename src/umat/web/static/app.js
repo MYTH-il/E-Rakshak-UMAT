@@ -45,6 +45,17 @@ function isAdmin() { return hasRole("administrator"); }
 function isAnalyst() { return hasRole("analyst") || isAdmin(); }
 function canSubmit() { return isAnalyst() || hasRole("officer"); }
 function canControlRuns() { return isAnalyst(); }
+async function launchWindowsViewer(runId, control) {
+  if (control) control.disabled = true;
+  try {
+    const result = await api(`/api/v1/analysis-runs/${runId}/windows-session/launch-viewer`, { method: "POST" });
+    toast(`${result.viewer} launched on this workstation.`);
+  } catch (failure) {
+    toast(failure.message, true);
+  } finally {
+    if (control) control.disabled = false;
+  }
+}
 const app = document.querySelector("#app");
 
 function node(tag, className, text) {
@@ -311,7 +322,8 @@ async function renderSubmit() {
   [["Isolated / simulated (recommended)", "isolated_simulated"], ["Controlled real-world egress (requires ready gateway)", "real_world_egress"]].forEach(([label, value]) => { const option = node("option", "", label); option.value = value; networkMode.append(option); }); append(networkWrap, networkLabel, networkMode);
   const c2Wrap = node("label", "field full checkbox-field"); const c2Enabled = node("input"); c2Enabled.type = "checkbox"; c2Enabled.name = "c2_analysis_enabled"; append(c2Wrap, c2Enabled, node("span", "", "Run C2 analyzer on captured traffic (guest remains governed by the selected network mode)"));
   const interactiveWrap = node("label", "field full checkbox-field"); const androidInteractive = node("input"); androidInteractive.type = "checkbox"; androidInteractive.name = "android_interactive"; androidInteractive.checked = true; append(interactiveWrap, androidInteractive, node("span", "", "Hold Android guests for an interactive analyst session (ignored for non-APKs; automatically finalized after 15 minutes)"));
-  append(grid, title.wrap, reference.wrap, file.wrap, profileWrap, androidProfileWrap, networkWrap, c2Wrap, interactiveWrap);
+  const windowsInteractiveWrap = node("label", "field full checkbox-field"); const windowsInteractive = node("input"); windowsInteractive.type = "checkbox"; windowsInteractive.name = "windows_interactive"; append(windowsInteractiveWrap, windowsInteractive, node("span", "", "Manual Windows analysis: open a live console and disable CAPE mouse automation for 10 minutes"));
+  append(grid, title.wrap, reference.wrap, file.wrap, profileWrap, androidProfileWrap, networkWrap, c2Wrap, interactiveWrap, windowsInteractiveWrap);
   const note = node("div", "notice", "Isolated/simulated networking is the malware-safe baseline. Controlled egress is accepted only while the sacrificial WireGuard gateway, policy route, expiring firewall leases, and mandatory capture are healthy.");
   const submit = button("Create case and analyze", "btn btn-primary"); submit.type = "submit";
   append(form, grid, note, append(node("div", "form-actions"), submit));
@@ -325,6 +337,7 @@ async function renderSubmit() {
     data.append("network_mode", networkMode.value);
     data.append("c2_analysis_enabled", c2Enabled.checked ? "true" : "false");
     data.append("android_interactive", androidInteractive.checked ? "true" : "false");
+    data.append("windows_interactive", windowsInteractive.checked ? "true" : "false");
     try {
       const result = await api("/api/v1/cases", { method: "POST", body: data });
       if (result.duplicate_cases.length) toast("Duplicate content found. Confirmation is required before analysis starts.");
@@ -433,8 +446,12 @@ function rerunCard(caseData, run) {
   const interactive = node("input"); interactive.type = "checkbox"; interactive.name = "android_interactive";
   interactive.checked = Boolean(run?.android_interactive);
   append(interactiveWrap, interactive, node("span", "", "Request an interactive Android session"));
+  const windowsInteractiveWrap = node("label", "field checkbox-field");
+  const windowsInteractive = node("input"); windowsInteractive.type = "checkbox";
+  windowsInteractive.checked = Boolean(run?.windows_interactive);
+  append(windowsInteractiveWrap, windowsInteractive, node("span", "", "Manual Windows session (disables CAPE mouse automation)"));
 
-  append(grid, sampleWrap, networkWrap, c2Wrap, interactiveWrap);
+  append(grid, sampleWrap, networkWrap, c2Wrap, interactiveWrap, windowsInteractiveWrap);
   const submit = button("Queue additional run", "btn btn-primary"); submit.type = "submit";
   append(form, grid, append(node("div", "form-actions"), submit));
   form.addEventListener("submit", async (event) => {
@@ -445,6 +462,7 @@ function rerunCard(caseData, run) {
         network_mode: network.value,
         c2_analysis_enabled: c2.checked,
         android_interactive: interactive.checked,
+        windows_interactive: windowsInteractive.checked,
       };
       if (run?.windows_profile?.profile_id) body.windows_profile_id = run.windows_profile.profile_id;
       if (run?.android_profile?.profile_id) body.android_profile_id = run.android_profile.profile_id;
@@ -499,7 +517,10 @@ function caseOperationsCard(caseData, run) {
   const interactiveWrap = node("label", "field checkbox-field");
   const interactive = node("input"); interactive.type = "checkbox";
   append(interactiveWrap, interactive, node("span", "", "Request an interactive Android session when the file is an APK"));
-  append(uploadGrid, sample.wrap, network.wrap, c2Wrap, interactiveWrap);
+  const windowsInteractiveWrap = node("label", "field checkbox-field");
+  const windowsInteractive = node("input"); windowsInteractive.type = "checkbox";
+  append(windowsInteractiveWrap, windowsInteractive, node("span", "", "Manual Windows session without CAPE mouse automation"));
+  append(uploadGrid, sample.wrap, network.wrap, c2Wrap, interactiveWrap, windowsInteractiveWrap);
   const add = button("Add submission and analyze", "btn btn-primary"); add.type = "submit";
   append(upload, uploadGrid, append(node("div", "form-actions"), add));
   upload.addEventListener("submit", async (event) => {
@@ -509,6 +530,7 @@ function caseOperationsCard(caseData, run) {
     data.append("network_mode", network.select.value);
     data.append("c2_analysis_enabled", c2.checked ? "true" : "false");
     data.append("android_interactive", interactive.checked ? "true" : "false");
+    data.append("windows_interactive", windowsInteractive.checked ? "true" : "false");
     try {
       const result = await addCaseSubmission(caseData.case_id, data);
       state.activeRunId = result.analysis_run_id;
@@ -570,6 +592,11 @@ async function renderCase(caseId, preserveTab = false) {
   if (run?.platform === "android" && canControlRuns()) {
     actions.append(link("Open Android workflow", `/analysis/${run.id}/android`, "btn btn-small"));
   }
+  if (run?.platform === "windows" && run.windows_interactive && canControlRuns()) {
+    const launchViewer = button("Open live Windows console", "btn btn-small");
+    launchViewer.addEventListener("click", () => launchWindowsViewer(run.id, launchViewer));
+    actions.append(launchViewer);
+  }
   if (run && !["terminal", "cancelling"].includes(run.status) && canControlRuns()) {
     const cancel = button("Cancel run", "btn btn-danger btn-small");
     cancel.addEventListener("click", async () => {
@@ -628,7 +655,13 @@ function renderOverview(content, report, run) {
     return;
   }
   const grid = node("div", "grid grid-2");
-  grid.append(listCard("Information accessed", report.information_accessed, (item) => [human(item.data_type), `${human(item.evidence_level)} · ${human(item.confidence)}`]));
+  grid.append(listCard("Information accessed", report.information_accessed, (item) => {
+    const objects = [...new Set((item.observed_objects || []).map((entry) => entry.name || entry.path?.split(/[\\/]/).pop()).filter(Boolean))];
+    const evidence = `${human(item.evidence_level)} · ${human(item.confidence)}`;
+    const visible = objects.slice(0, 5);
+    const remainder = objects.length > visible.length ? ` · +${objects.length - visible.length} more` : "";
+    return [human(item.data_type), visible.length ? `${evidence} · ${visible.join(", ")}${remainder}` : evidence];
+  }));
   grid.append(destinationsCard(report.destinations));
   content.append(grid);
   content.append(node("h3", "section-title", "What was taken and where it went"));
@@ -660,26 +693,20 @@ function destinationDetail(item) {
 
 function destinationsCard(destinations) {
   const card = node("section", "card card-body");
-  card.append(node("h3", "card-title", "Destinations contacted"));
-  const list = node("ul", "data-list");
-  if (!destinations?.length) list.append(node("li", "empty", "No outbound destinations were recorded."));
-  (destinations || []).forEach((item) => {
-    const row = node("li", `data-item${item.known_bad ? " data-item-alert" : ""}`);
-    const copy = node("div");
-    append(copy, node("strong", "", item.value), node("small", "", destinationDetail(item)));
-    if (item.known_bad) {
-      const reason = item.reputation_note
-        ? `Known malicious: ${item.reputation_note}`
-        : "Listed on threat intelligence as malicious.";
-      append(copy, node("small", "alert-text", item.reputation_source
-        ? `${reason} (source: ${item.reputation_source})`
-        : reason));
-    }
-    row.append(copy);
-    if (item.known_bad) row.append(badge("known bad"));
-    list.append(row);
-  });
-  card.append(list);
+  const rows = [...(destinations || [])].sort((a, b) => Number(b.known_bad) - Number(a.known_bad));
+  card.append(node("h3", "card-title", `Destinations contacted (${rows.length.toLocaleString()})`));
+  card.append(dataExplorer(
+    ["Destination", "Connection", "Assessment"],
+    rows,
+    (item) => [
+      item.value,
+      destinationDetail(item),
+      item.known_bad
+        ? (item.reputation_note || `Known malicious${item.reputation_source ? ` · ${item.reputation_source}` : ""}`)
+        : "No independent malicious reputation recorded"
+    ],
+    "Search destinations, IPs, domains or networks",
+    10));
   return card;
 }
 
@@ -811,7 +838,7 @@ function renderFindings(content, report) {
     const rows = findings
       .filter((f) => !activeSource || f.source === activeSource)
       .sort((a, b) => severityRank(b) - severityRank(a));
-    listWrap.replaceChildren(table(
+    listWrap.replaceChildren(dataExplorer(
       ["Finding", "Source", "Severity", "Confidence", "Evidence", "Security mappings"],
       rows,
       (item) => [
@@ -821,7 +848,8 @@ function renderFindings(content, report) {
         human(item.confidence),
         human(item.evidence_level),
         (item.security_mappings || item.mitre_technique_ids || []).join(", ") || "—"
-      ]));
+      ],
+      "Search findings"));
   }
   [["All sources", ""], ...sources.map((src) => [human(src), src])].forEach(([label, value]) => {
     const chip = button(label, `tab${value === activeSource ? " active" : ""}`);
@@ -837,12 +865,14 @@ function renderFindings(content, report) {
   paintFindings();
 
   content.append(node("h3", "section-title", "Indicators of compromise"));
-  content.append(table(["Type", "Value", "Confidence", "Source", "Traffic"], technical.iocs,
-    (item) => [item.type, item.value, human(item.confidence), item.source, item.seen_in_traffic ? "Observed" : "Static"]));
+  content.append(dataExplorer(["Type", "Value", "Confidence", "Source", "Traffic"], technical.iocs,
+    (item) => [item.type, item.value, human(item.confidence), item.source, item.seen_in_traffic ? "Observed" : "Static"],
+    "Search indicators"));
   content.append(node("h3", "section-title", "Unified timeline"));
   if (technical.timeline?.length) {
-    content.append(table(["Time", "Actor", "Event", "MITRE"], technical.timeline,
-      (item) => [formatDate(item.occurred_at), item.actor, item.description, item.mitre_technique_id || "—"]));
+    content.append(dataExplorer(["Time", "Actor", "Event", "MITRE"], technical.timeline,
+      (item) => [formatDate(item.occurred_at), item.actor, item.description, item.mitre_technique_id || "—"],
+      "Search timeline events"));
   } else {
     content.append(node("div", "card empty",
       "No ordered timeline was produced for this run. Host-activity timing is required to build one, and it was not available."));
@@ -861,10 +891,50 @@ function severityRank(item) {
 }
 
 function table(headers, rows, mapper) {
-  const wrap = node("div", "table-wrap"); const element = node("table"); const head = node("thead"); const headRow = node("tr"); headers.forEach((item) => headRow.append(node("th", "", item))); head.append(headRow); const body = node("tbody");
+  const wrap = node("div", "table-wrap"); const element = node("table", "data-table"); const head = node("thead"); const headRow = node("tr"); headers.forEach((item) => headRow.append(node("th", "", item))); head.append(headRow); const body = node("tbody");
   if (!rows?.length) { const row = node("tr"); const cell = node("td", "empty", "No records available."); cell.colSpan = headers.length; row.append(cell); body.append(row); }
   (rows || []).forEach((item) => { const row = node("tr"); mapper(item).forEach((value) => row.append(node("td", "", value ?? "—"))); body.append(row); });
   element.append(head, body); wrap.append(element); return wrap;
+}
+
+function dataExplorer(headers, rows, mapper, placeholder = "Search records", pageSize = 25) {
+  const source = rows || [];
+  const explorer = node("section", "data-explorer");
+  const toolbar = node("div", "data-toolbar");
+  const search = node("input", "data-search");
+  search.type = "search";
+  search.placeholder = placeholder;
+  search.setAttribute("aria-label", placeholder);
+  const count = node("span", "mono muted");
+  toolbar.append(search, count);
+  const viewport = node("div");
+  const pagination = node("div", "data-pagination");
+  let page = 1;
+
+  function paint() {
+    const query = search.value.trim().toLowerCase();
+    const filtered = query
+      ? source.filter((item) => JSON.stringify(item).toLowerCase().includes(query))
+      : source;
+    const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    page = Math.min(page, pages);
+    const start = (page - 1) * pageSize;
+    viewport.replaceChildren(table(headers, filtered.slice(start, start + pageSize), mapper));
+    count.textContent = `${filtered.length.toLocaleString()} of ${source.length.toLocaleString()} records`;
+    pagination.replaceChildren();
+    const previous = button("Previous", "btn btn-small");
+    const position = node("span", "mono muted", `Page ${page} of ${pages}`);
+    const next = button("Next", "btn btn-small");
+    previous.disabled = page <= 1;
+    next.disabled = page >= pages;
+    previous.addEventListener("click", () => { page -= 1; paint(); });
+    next.addEventListener("click", () => { page += 1; paint(); });
+    pagination.append(previous, position, next);
+  }
+  search.addEventListener("input", () => { page = 1; paint(); });
+  explorer.append(toolbar, viewport, pagination);
+  paint();
+  return explorer;
 }
 
 function renderEvidence(content, report) {
@@ -877,6 +947,21 @@ function renderEvidence(content, report) {
   if (!report.artifacts.length) list.append(node("div", "card empty", "No artifacts are authorized for your role."));
   report.artifacts.forEach((item) => { const row = node("div", "card case-row"); const identity = node("div"); append(identity, node("h3", "", human(item.kind)), node("div", "mono muted", item.sha256)); const download = link("Download", item.download_path, "btn btn-small"); download.removeEventListener("click", navigateEvent); append(row, identity, node("div", "", formatBytes(item.size_bytes)), badge(item.access_tier), download); list.append(row); });
   content.append(list);
+  const accessEvents = report.technical?.access_events || [];
+  content.append(node("h3", "section-title", `Host access events (${accessEvents.length})`));
+  content.append(dataExplorer(
+    ["Time", "Action", "Object", "Path", "Process", "PID", "Source call"],
+    accessEvents,
+    (item) => [
+      item.timestamp ? formatDate(item.timestamp) : "—",
+      item.action || item.api_call || "—",
+      item.object_name || "—",
+      item.object_path || "—",
+      item.process_path || item.process || "—",
+      item.process_id ?? "—",
+      item.source_call_id || "—"
+    ],
+    "Search actions, files, paths, processes or PIDs"));
 }
 
 // Diagnostics matter as much as progress: a stalled or failed run must say why
@@ -1220,7 +1305,7 @@ async function renderRecentRuns() {
         const identity = node("div");
         append(identity, link(item.case_title || "Untitled case", `/cases/${item.case_id}`), node("div", "mono muted", `${item.case_reference || item.case_id} · ${item.filename}`), node("div", "mono muted", item.id));
         append(head, identity, badge(item.platform), badge(item.status), item.result ? badge(item.result) : null);
-        const policy = node("div", "muted", `${human(item.network_mode)} · C2 ${item.c2_analysis_enabled ? "enabled" : "disabled"} · ${formatDate(item.updated_at)}`);
+        const policy = node("div", "muted", `${human(item.network_mode)} · C2 ${item.c2_analysis_enabled ? "enabled" : "disabled"} · ${item.windows_interactive ? "manual Windows" : "automated"} · ${formatDate(item.updated_at)}`);
         const diagnostics = node("details"); diagnostics.append(node("summary", "", "Stage diagnostics"));
         const stages = node("div", "case-list");
         item.stages.forEach((stage) => {
@@ -1231,6 +1316,11 @@ async function renderRecentRuns() {
         diagnostics.append(stages);
         const actions = node("div", "actions-row");
         actions.append(link("Open case", `/cases/${item.case_id}`, "btn btn-small"));
+        if (item.platform === "windows" && item.windows_interactive && !["terminal", "cancelling"].includes(item.status) && canControlRuns()) {
+          const launchViewer = button("Launch live console", "btn btn-primary btn-small");
+          launchViewer.addEventListener("click", () => launchWindowsViewer(item.id, launchViewer));
+          actions.append(launchViewer);
+        }
         if (item.retry_eligible && canControlRuns()) {
           const retry = button("Retry", "btn btn-small");
           retry.addEventListener("click", async () => {

@@ -61,17 +61,28 @@ if combined.hexdigest() != series["patch_series_sha256"]:
 PY
 patched_root="$(mktemp -d)"
 trap 'rm -rf -- "$patched_root" "${temporary:-}"' EXIT
-mkdir -p "$patched_root/cape/modules/reporting" "$patched_root/tests"
-cp "$WINSTDT_CHECKOUT/cape/modules/reporting/winstdt_handoff_export.py" \
+mkdir -p "$patched_root/cape/modules/reporting" "$patched_root/tests" \
+  "$patched_root/winstdt" "$patched_root/schemas"
+git -C "$WINSTDT_CHECKOUT" show HEAD:cape/modules/reporting/winstdt_handoff_export.py > \
   "$patched_root/cape/modules/reporting/winstdt_handoff_export.py"
-cp "$WINSTDT_CHECKOUT/tests/test_winstdt_handoff_export.py" \
+git -C "$WINSTDT_CHECKOUT" show HEAD:tests/test_winstdt_handoff_export.py > \
   "$patched_root/tests/test_winstdt_handoff_export.py"
+git -C "$WINSTDT_CHECKOUT" show HEAD:winstdt/access_events.py > \
+  "$patched_root/winstdt/access_events.py"
+git -C "$WINSTDT_CHECKOUT" show HEAD:schemas/access_events.schema.json > \
+  "$patched_root/schemas/access_events.schema.json"
 for patch_file in "$WINSTDT_PATCH_ROOT"/*.patch; do
   patch --batch --forward -d "$patched_root" -p1 < "$patch_file"
 done
 sudo -n install -o cape -g cape -m 0644 \
   "$patched_root/cape/modules/reporting/winstdt_handoff_export.py" \
   "$CAPE_ROOT/modules/reporting/winstdt_handoff_export.py"
+sudo -n install -o root -g root -m 0644 "$patched_root/winstdt/access_events.py" \
+  "$CAPE_ROOT/winstdt/access_events.py"
+sudo -n install -o "$(stat -c %U "$WINSTDT_CHECKOUT/schemas")" \
+  -g "$(stat -c %G "$WINSTDT_CHECKOUT/schemas")" -m 0644 \
+  "$patched_root/schemas/access_events.schema.json" \
+  "$WINSTDT_CHECKOUT/schemas/access_events.schema.json"
 
 cape_ref="$(git -c "safe.directory=$CAPE_ROOT" -C "$CAPE_ROOT" rev-parse HEAD)"
 winstdt_ref="$(git -c "safe.directory=$WINSTDT_CHECKOUT" -C "$WINSTDT_CHECKOUT" rev-parse HEAD)"

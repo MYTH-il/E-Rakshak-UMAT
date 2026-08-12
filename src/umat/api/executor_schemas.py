@@ -116,6 +116,20 @@ class AndroidCommandCompleteRequest(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
 
 
+class WindowsSessionReadyRequest(BaseModel):
+    lease_id: UUID
+    attempt_id: UUID
+    cape_task_id: int = Field(ge=1)
+    machine_label: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+    console_url: str = Field(pattern=r"^ws://127\.0\.0\.1:[0-9]+/api/v1/console/", max_length=2048)
+    duration_seconds: int = Field(default=600, ge=600, le=1800)
+
+
+class WindowsSessionPollRequest(BaseModel):
+    lease_id: UUID
+    attempt_id: UUID
+
+
 class ArtifactEnvelope(BaseModel):
     lease_id: UUID
     attempt_id: UUID

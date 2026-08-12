@@ -35,3 +35,14 @@ class ProfileRequest(BaseModel):
 class MachineResult(BaseModel):
     operation_id: UUID
     machine_label: str
+
+
+class ConsoleRequest(BaseModel):
+    machine_label: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+    duration_seconds: int = Field(default=600, ge=600, le=1800)
+
+
+class ConsoleResult(BaseModel):
+    console_url: str
+    machine_label: str
+    expires_at: str

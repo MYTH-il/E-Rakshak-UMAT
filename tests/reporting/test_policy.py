@@ -12,6 +12,73 @@ def test_android_network_only_never_promotes_data_access() -> None:
     assert CaseAggregator._capabilities([], [event], Platform.ANDROID) == []
 
 
+def test_windows_capability_preserves_accessed_file_context() -> None:
+    capability = SimpleNamespace(
+        capability="file_access",
+        confidence="confirmed",
+        details={
+            "events": [
+                {
+                    "object_name": "Login Data",
+                    "object_path": r"C:\Users\Analyst\Edge\Login Data",
+                    "access_operation": "FILE_READ_DATA",
+                    "process_path": r"C:\Temp\sample.exe",
+                    "process_id": 4242,
+                }
+            ]
+        },
+    )
+    result = CaseAggregator._capabilities([capability], [], Platform.WINDOWS)
+    assert result[0]["observed_objects"] == [
+        {
+            "name": "Login Data",
+            "path": r"C:\Users\Analyst\Edge\Login Data",
+            "operation": "FILE_READ_DATA",
+            "process": r"C:\Temp\sample.exe",
+            "process_id": 4242,
+        }
+    ]
+
+
+def test_windows_access_event_projection_keeps_action_object_and_provenance() -> None:
+    capability = SimpleNamespace(
+        capability="file_access",
+        details={
+            "events": [
+                {
+                    "timestamp": "2026-08-11T22:40:07Z",
+                    "data_type": "file_access",
+                    "api_call": "NtCreateFile",
+                    "access_operation": "FILE_READ_DATA|FILE_OPEN",
+                    "object_name": "Login Data",
+                    "object_path": r"C:\Users\Analyst\Edge\Login Data",
+                    "process": "sample.exe",
+                    "process_path": r"C:\Temp\sample.exe",
+                    "process_id": 4242,
+                    "parent_process_id": 1000,
+                    "source_call_id": "3349",
+                }
+            ]
+        },
+    )
+    assert CaseAggregator._access_events([capability]) == [
+        {
+            "timestamp": "2026-08-11T22:40:07Z",
+            "data_type": "file_access",
+            "action": "FILE_READ_DATA|FILE_OPEN",
+            "api_call": "NtCreateFile",
+            "object_name": "Login Data",
+            "object_path": r"C:\Users\Analyst\Edge\Login Data",
+            "process": "sample.exe",
+            "process_path": r"C:\Temp\sample.exe",
+            "process_id": 4242,
+            "parent_process_id": 1000,
+            "source_call_id": "3349",
+            "source": "winstdt_access_events",
+        }
+    ]
+
+
 def test_android_network_only_rewrites_causal_provenance() -> None:
     link = SimpleNamespace(
         statement="Contacts were stolen.",

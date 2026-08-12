@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -192,8 +192,19 @@ class CaseAggregator:
         caveats = self._caveats(adaptations, stages, windows_metadata, run.platform)
         if not run.c2_analysis_enabled:
             caveats.append("c2_workflow_skipped")
+        access_events = (
+            self._access_events(windows_capabilities)
+            if run.platform == Platform.WINDOWS
+            else []
+        )
         finding_items = self._findings(
-            run, windows_findings, android_findings, c2_findings, adaptations, artifacts
+            run,
+            windows_findings,
+            android_findings,
+            c2_findings,
+            adaptations,
+            artifacts,
+            access_events,
         )
         verdict = self._verdict(
             finding_items,
@@ -248,6 +259,7 @@ class CaseAggregator:
             },
             "technical": {
                 "findings": finding_items,
+                "access_events": access_events,
                 "iocs": [
                     {
                         "type": item.ioc_type,
@@ -356,6 +368,7 @@ class CaseAggregator:
         c2_findings: list[C2Finding],
         adaptations: list[AdaptationRecord],
         artifacts: list[Artifact],
+        access_events: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         adaptation_map = {item.id: item for item in adaptations}
         artifact_map: dict[UUID, list[str]] = {}
@@ -431,6 +444,12 @@ class CaseAggregator:
                 "correlation",
                 "exfil",
             }
+            details = dict(c2_item.details)
+            summary = c2_item.plain_language
+            if c2_item.finding_kind == "correlation":
+                summary, details = CaseAggregator._restore_access_object(
+                    summary, details, access_events
+                )
             findings.append(
                 {
                     "finding_id": str(c2_item.id),
@@ -449,9 +468,9 @@ class CaseAggregator:
                     "summary": (
                         "Potential outbound transfer behavior was observed, but no Android data item attribution was established."
                         if android_network_only
-                        else c2_item.plain_language
+                        else summary
                     ),
-                    "details": c2_item.details,
+                    "details": details,
                     "mitre_technique_ids": _unique([c2_item.details.get("mitre_technique_id")]),
                     "security_mappings": _unique([c2_item.details.get("mitre_technique_id")]),
                     "evidence_artifact_ids": artifact_map.get(c2_item.stage_id, []),
@@ -463,6 +482,66 @@ class CaseAggregator:
         )
 
     @staticmethod
+    def _restore_access_object(
+        summary: str,
+        details: dict[str, Any],
+        access_events: list[dict[str, Any]],
+    ) -> tuple[str, dict[str, Any]]:
+        refs = [dict(ref) if isinstance(ref, dict) else ref for ref in details.get("evidence_refs", [])]
+        host_ref = next(
+            (ref for ref in refs if isinstance(ref, dict) and ref.get("type") == "host_access"),
+            None,
+        )
+        if host_ref is None or host_ref.get("object_name") or host_ref.get("object_path"):
+            return summary, details
+        try:
+            network_time = datetime.fromisoformat(str(details["timestamp"]).replace("Z", "+00:00"))
+            access_time = network_time - timedelta(seconds=float(host_ref.get("time_delta_s") or 0))
+        except (KeyError, TypeError, ValueError):
+            return summary, details
+        ranked: list[tuple[float, int, dict[str, Any]]] = []
+        for index, event in enumerate(access_events):
+            if not (event.get("object_name") or event.get("object_path")):
+                continue
+            if event.get("data_type") != details.get("data_type_accessed"):
+                continue
+            if event.get("api_call") != details.get("access_api_call"):
+                continue
+            try:
+                event_time = datetime.fromisoformat(str(event["timestamp"]).replace("Z", "+00:00"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            ranked.append((abs((event_time - access_time).total_seconds()), index, event))
+        if not ranked:
+            return summary, details
+        difference, index, match = min(ranked, key=lambda item: (item[0], item[1]))
+        if difference > 0.011:
+            return summary, details
+        for field in (
+            "object_name", "object_path", "action", "process", "process_path",
+            "process_id", "parent_process_id", "source_call_id",
+        ):
+            if match.get(field) is not None:
+                host_ref[field] = match[field]
+        details["evidence_refs"] = refs
+        name = match.get("object_name") or match.get("object_path")
+        path = match.get("object_path")
+        if not name:
+            return summary, details
+        accessed = f"the file {name}"
+        if path and path != name:
+            accessed += f" at {path}"
+        destination = details.get("destination_domain") or details.get("destination_ip")
+        delta = host_ref.get("time_delta_s")
+        return (
+            f"This sample accessed {accessed} and contacted "
+            f"{destination or 'an unidentified destination'}"
+            f"{f' {delta:g} seconds later' if isinstance(delta, (int, float)) else ''}. "
+            "This is shown for review and is not confirmed.",
+            details,
+        )
+
+    @staticmethod
     def _capabilities(
         capabilities: list[WindowsCapability],
         exfil_events: list[ExfilEvent],
@@ -471,11 +550,39 @@ class CaseAggregator:
     ) -> list[dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
         for item in capabilities:
+            details = item.details if isinstance(item.details, dict) else {}
+            events = details.get("events")
+            if not isinstance(events, list):
+                events = [details.get("first_event")] if isinstance(details.get("first_event"), dict) else []
+            observed_objects: list[dict[str, str | int | None]] = []
+            seen_objects: set[tuple[str, str, str, str, str]] = set()
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                observed = {
+                    "name": str(event.get("object_name") or "") or None,
+                    "path": str(event.get("object_path") or "") or None,
+                    "operation": str(event.get("access_operation") or event.get("api_call") or "") or None,
+                    "process": str(event.get("process_path") or event.get("process") or "") or None,
+                    "process_id": event.get("process_id") if isinstance(event.get("process_id"), int) else None,
+                }
+                identity = (
+                    str(observed["name"] or ""),
+                    str(observed["path"] or ""),
+                    str(observed["operation"] or ""),
+                    str(observed["process"] or ""),
+                    str(observed["process_id"] or ""),
+                )
+                if not observed["name"] and not observed["path"] or identity in seen_objects:
+                    continue
+                seen_objects.add(identity)
+                observed_objects.append(observed)
             result[item.capability] = {
                 "data_type": item.capability,
                 "evidence_level": "observed",
                 "confidence": item.confidence,
                 "summary": f"Access to {item.capability.replace('_', ' ')} was observed.",
+                "observed_objects": observed_objects,
             }
         for android_item in android_capabilities or []:
             current = result.get(android_item.data_type)
@@ -488,6 +595,7 @@ class CaseAggregator:
                     if android_item.evidence_level == "observed"
                     else f"The app declares permission to access {android_item.data_type.replace('_', ' ')}; use was not established."
                 ),
+                "observed_objects": [],
             }
             if not current or _confidence(android_item.confidence) > _confidence(
                 str(current["confidence"])
@@ -504,6 +612,7 @@ class CaseAggregator:
                         "evidence_level": "observed",
                         "confidence": exfil_item.confidence,
                         "summary": f"Access to {exfil_item.data_type_accessed.replace('_', ' ')} was observed.",
+                        "observed_objects": [],
                     },
                 )
                 current["evidence_level"] = "correlated"
@@ -512,6 +621,37 @@ class CaseAggregator:
                     f"Access to {exfil_item.data_type_accessed.replace('_', ' ')} was correlated with network activity."
                 )
         return sorted(result.values(), key=lambda item: str(item["data_type"]))
+
+    @staticmethod
+    def _access_events(capabilities: list[WindowsCapability]) -> list[dict[str, Any]]:
+        """Project every normalized WinST/DT access record without summarizing it away."""
+        records: list[dict[str, Any]] = []
+        for capability in capabilities:
+            details = capability.details if isinstance(capability.details, dict) else {}
+            events = details.get("events")
+            if not isinstance(events, list):
+                first = details.get("first_event")
+                events = [first] if isinstance(first, dict) else []
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                records.append(
+                    {
+                        "timestamp": event.get("timestamp"),
+                        "data_type": event.get("data_type") or capability.capability,
+                        "action": event.get("access_operation") or event.get("api_call"),
+                        "api_call": event.get("api_call"),
+                        "object_name": event.get("object_name"),
+                        "object_path": event.get("object_path"),
+                        "process": event.get("process"),
+                        "process_path": event.get("process_path"),
+                        "process_id": event.get("process_id"),
+                        "parent_process_id": event.get("parent_process_id"),
+                        "source_call_id": event.get("source_call_id"),
+                        "source": "winstdt_access_events",
+                    }
+                )
+        return sorted(records, key=lambda item: str(item.get("timestamp") or ""))
 
     @staticmethod
     def _destinations(observations: list[NetworkObservation]) -> list[dict[str, Any]]:

@@ -1,0 +1,41 @@
+diff --git a/cape/modules/reporting/winstdt_handoff_export.py b/cape/modules/reporting/winstdt_handoff_export.py
+--- a/cape/modules/reporting/winstdt_handoff_export.py
++++ b/cape/modules/reporting/winstdt_handoff_export.py
+@@ -31,5 +31,6 @@ SCHEMA_VERSION = "1.0"
+ MODULE_VERSION = "0.2.0"
+ TRACE_ETL_PATH = "behavior/trace.etl"
++KERNEL_ETL_PATH = "behavior/kernel.etl"
+ PCAP_PATH = "network/capture.pcapng"
+ CLOCK_SYNC_PATH = "behavior/clock-sync.json"
+ HASH_MANIFEST_PATH = "hashes.sha256"
+@@ -143,6 +144,7 @@ def export_handoff_bundle(
+         package = build_package_inputs(results, analysis_path, options)
+         copy_if_present(package.pcap_source, tmp_bundle / PCAP_PATH, options)
+         copy_if_present(package.etl_source, tmp_bundle / TRACE_ETL_PATH, options)
++        copy_if_present(package.etl_source, tmp_bundle / KERNEL_ETL_PATH, options)
+         copy_if_present(package.clock_sync_source, tmp_bundle / CLOCK_SYNC_PATH, options)
+         access_status = write_access_events(
+             tmp_bundle / ACCESS_EVENTS_PATH, tmp_bundle / ACCESS_EVENTS_STATUS_PATH,
+@@ -354,6 +356,7 @@ def build_manifest(
+         "artifact_paths": {
+             "pcap": PCAP_PATH,
+             "trace_etl": TRACE_ETL_PATH,
++            "kernel_etl": KERNEL_ETL_PATH,
+             "report_json": REPORT_JSON_PATH,
+             "report_html": REPORT_HTML_PATH,
+             "access_events": ACCESS_EVENTS_PATH,
+diff --git a/tests/test_winstdt_handoff_export.py b/tests/test_winstdt_handoff_export.py
+--- a/tests/test_winstdt_handoff_export.py
++++ b/tests/test_winstdt_handoff_export.py
+@@ -81,9 +81,11 @@ class WinstdtHandoffExportTests(unittest.TestCase):
+         self.assertTrue(manifest["telemetry"]["telemetry_degraded"])
+         self.assertEqual(manifest["artifact_paths"]["trace_etl"], "behavior/trace.etl")
++        self.assertEqual(manifest["artifact_paths"]["kernel_etl"], "behavior/kernel.etl")
+         self.assertEqual(manifest["artifact_paths"]["report_json"], "report.json")
+         self.assertEqual(manifest["artifact_paths"]["report_html"], "report.html")
+         self.assertTrue((bundle / "network" / "capture.pcapng").is_file())
+         self.assertTrue((bundle / "behavior" / "trace.etl").is_file())
++        self.assertTrue((bundle / "behavior" / "kernel.etl").is_file())
+         self.assertEqual(manifest["artifact_paths"]["clock_sync"], "behavior/clock-sync.json")
+         self.assertTrue((bundle / "behavior" / "clock-sync.json").is_file())
+         self.assertEqual(json.loads((bundle / "behavior" / "access_events.json").read_text()), [])

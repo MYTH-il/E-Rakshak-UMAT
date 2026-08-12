@@ -227,7 +227,7 @@ class ResultBundleBuilder:
             return "covert_channel"
         if (native.get("reputation_score") or 0) > 0:
             return "reputation"
-        return "beacon"
+        return "network_observation"
 
     @staticmethod
     def _write_json(path: Path, value: Any) -> None:

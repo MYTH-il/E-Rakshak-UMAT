@@ -44,6 +44,7 @@ class CreateRunRequest(BaseModel):
     network_mode: Literal["isolated_simulated", "real_world_egress"] = "isolated_simulated"
     c2_analysis_enabled: bool = False
     android_interactive: bool = False
+    windows_interactive: bool = False
 
 
 class RunActionResponse(BaseModel):
@@ -69,6 +70,7 @@ class RunResponse(BaseModel):
     network_mode: str
     c2_analysis_enabled: bool
     android_interactive: bool = False
+    windows_interactive: bool = False
     stages: list[StageResponse]
     windows_profile: dict[str, Any] | None = None
     android_profile: dict[str, Any] | None = None
