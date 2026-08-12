@@ -253,7 +253,7 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         ("UMAT_CAPE_MANAGEMENT_URL", "http://127.0.0.1:8091"),
         ("UMAT_QUARANTINE_ROOT", "/var/lib/umat/quarantine"),
         ("UMAT_ARTIFACT_ROOT", "/var/lib/umat/artifacts"),
-        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/f3e89cc-umat.1"),
+        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/478f131-umat.1"),
         ("UMAT_WINSTDT_SCHEMA_ROOT", "/opt/umat/upstreams/winstdt/schemas"),
     ]
     additions = [f"{key}={value}" for key, value in values if key not in present]

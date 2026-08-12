@@ -78,6 +78,26 @@ def test_runtime_locks_have_complete_immutable_identities() -> None:
     assert COMMIT.fullmatch(winstdt["cape"]["commit"])
 
 
+def test_c2_promotion_records_every_upstream_change_and_observed_test_total() -> None:
+    c2 = load(LOCK_ROOT / "c2-exfil.json")
+    validation = c2["validation"]
+    assert validation["upstream_tests_collected"] == (
+        validation["upstream_tests_passed"] + validation["upstream_tests_skipped"]
+    )
+    assert validation["upstream_tests_deselected_missing_corpus"] == 0
+    changes = {
+        item["commit"]: item["functionality"]
+        for item in validation["included_upstream_commits"]
+    }
+    assert set(changes) == {
+        "ef0c32ce7b4ffa28de093aa296b0d70d76b2fbd8",
+        "478f131de510ad580754f152d946086b3aeacf05",
+    }
+    combined = " ".join(changes.values()).lower()
+    for behavior in ("shared hosting", "dns tunnel", "destination", "bounded-memory"):
+        assert behavior in combined
+
+
 def test_deployment_manifest_covers_every_runtime_lock() -> None:
     manifest = load(ROOT / "deployment/full-stack/manifest.json")
     components = manifest["components"]

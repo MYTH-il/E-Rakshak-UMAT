@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly COMMIT="f3e89cc54d368259eb8dc2bf895260b90dbb504a"
-readonly TREE_SHA256="909c770a2f99ea6666d24b233f1cd42d7cfcef3271a55df7a35b6af44fefb59f"
-readonly EFFECTIVE_VERSION="f3e89cc-umat.1"
+readonly COMMIT="478f131de510ad580754f152d946086b3aeacf05"
+readonly TREE_SHA256="792c340721cc75dfc9b43a5bba4908be22071b75bd99f2871e9bd85d52407c28"
+readonly EFFECTIVE_VERSION="478f131-umat.1"
 readonly DEPENDENCY_LOCK_SHA256="18d8e1acfd170b8f8c321aa3737b465ea4f19d28bcefd9534f5b6becb6e1ea6d"
 readonly EMPTY_PATCH_SERIES_SHA256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -73,7 +73,7 @@ sudo "$stage/.venv/bin/pip" install --disable-pip-version-check --require-hashes
   -r "$DEPENDENCY_LOCK"
 result="$(mktemp)"
 (cd "$stage/source" && sudo "$stage/.venv/bin/pytest" -q) | tee "$result"
-grep -Eq '331 passed, 15 skipped' "$result" || {
+grep -Eq '334 passed, 15 skipped' "$result" || {
   echo "unexpected C2 upstream test result" >&2
   exit 1
 }
@@ -97,8 +97,8 @@ Path("$manifest").write_text(json.dumps({
     "effective_tree_sha256": "$TREE_SHA256",
     "dependency_lock_sha256": "$DEPENDENCY_LOCK_SHA256",
     "validated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    "upstream_tests_collected": 346,
-    "upstream_tests_passed": 331,
+    "upstream_tests_collected": 349,
+    "upstream_tests_passed": 334,
     "upstream_tests_skipped": 15,
     "upstream_tests_deselected_missing_corpus": 0,
 }, indent=2) + "\n")

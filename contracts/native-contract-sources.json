@@ -23,7 +23,7 @@
     },
     "c2_events": {
       "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
-      "commit": "f3e89cc54d368259eb8dc2bf895260b90dbb504a",
+      "commit": "478f131de510ad580754f152d946086b3aeacf05",
       "path": "sql/schema.sql",
       "native_schema_version": "1.3",
       "sha256": "ea63d21c78511c23ae470ceda6aed8548367bf5a89f6949dadce5655eda0f3d4"
