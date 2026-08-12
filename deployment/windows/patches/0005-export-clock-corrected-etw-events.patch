@@ -1,0 +1,165 @@
+diff --git a/cape/modules/reporting/winstdt_handoff_export.py b/cape/modules/reporting/winstdt_handoff_export.py
+--- a/cape/modules/reporting/winstdt_handoff_export.py
++++ b/cape/modules/reporting/winstdt_handoff_export.py
+@@ -42,4 +42,5 @@ EVENTS_JSONL_PATH = "behavior/events.jsonl"
+ ACCESS_EVENTS_PATH = "behavior/access_events.json"
+ ACCESS_EVENTS_STATUS_PATH = "behavior/access_events.status.json"
++CAPE_ETW_EVENTS_PATH = "behavior/cape-etw-events.json"
+ SIGNATURE_PATH = "integrity/signature.sha256"
+ BASELINE_PROVIDERS = [
+@@ -148,5 +149,8 @@ def export_handoff_bundle(
+             tmp_bundle / ACCESS_EVENTS_PATH, tmp_bundle / ACCESS_EVENTS_STATUS_PATH,
+             results, package.clock_sync_source, analysis_path
+         )
++        write_cape_etw_events(
++            tmp_bundle / CAPE_ETW_EVENTS_PATH, analysis_path, results, package.clock_sync_source
++        )
+ 
+         profile, resolved_options = resolve_profile(results, options.default_profile)
+@@ -361,4 +365,5 @@ def build_manifest(
+             "access_events": ACCESS_EVENTS_PATH,
+             "access_events_status": ACCESS_EVENTS_STATUS_PATH,
++            "cape_etw_events": CAPE_ETW_EVENTS_PATH,
+             **({"clock_sync": CLOCK_SYNC_PATH} if usable_file(package.clock_sync_source) else {}),
+         },
+@@ -850,4 +855,120 @@ ACCESS_API_TYPES = {
+ }
+ 
++WINDOWS_EPOCH_100NS = 116444736000000000
++
++
++def _filetime_datetime(value: Any) -> datetime | None:
++    try:
++        ticks = int(str(value))
++        return datetime.fromtimestamp(
++            (ticks - WINDOWS_EPOCH_100NS) / 10_000_000, timezone.utc
++        )
++    except (TypeError, ValueError, OSError, OverflowError):
++        return None
++
++
++def _correct_etw_time(guest: datetime, clock: dict[str, Any]) -> datetime | None:
++    measurements = as_dict(clock.get("measurements"))
++    start = as_dict(measurements.get("start"))
++    end = as_dict(measurements.get("end"))
++    if not start or not end:
++        return None
++    start_sample = as_dict(start.get("selected_sample"))
++    end_sample = as_dict(end.get("selected_sample"))
++    try:
++        start_host = int(start_sample["host_midpoint_unix_ns"])
++        end_host = int(end_sample["host_midpoint_unix_ns"])
++        start_offset = int(start["guest_minus_host_ns"])
++        end_offset = int(end["guest_minus_host_ns"])
++    except (KeyError, TypeError, ValueError):
++        return None
++    guest_ns = int(guest.timestamp() * 1_000_000_000)
++    span = end_host - start_host
++    fraction = 0.0 if span <= 0 else min(1.0, max(0.0, (guest_ns - start_host) / span))
++    offset = start_offset + int((end_offset - start_offset) * fraction)
++    return datetime.fromtimestamp((guest_ns - offset) / 1_000_000_000, timezone.utc)
++
++
++def _process_context(results: dict[str, Any]) -> dict[int, dict[str, Any]]:
++    processes = [
++        item for item in as_dict(results.get("behavior")).get("processes", [])
++        if isinstance(item, dict) and isinstance(item.get("process_id"), int)
++    ]
++    target = as_dict(as_dict(results.get("target")).get("file"))
++    target_name = Path(first_text(target.get("name"), target.get("path"))).name.lower()
++    sample_pids = {
++        int(item["process_id"]) for item in processes
++        if target_name and (
++            first_text(item.get("process_name")).lower() == target_name
++            or Path(first_text(item.get("module_path"))).name.lower() == target_name
++        )
++    }
++    changed = True
++    while changed:
++        changed = False
++        for item in processes:
++            pid = int(item["process_id"])
++            parent = item.get("parent_id") or item.get("parent_process_id")
++            if parent in sample_pids and pid not in sample_pids:
++                sample_pids.add(pid)
++                changed = True
++    return {
++        int(item["process_id"]): {
++            "process": first_text(item.get("process_name")) or None,
++            "process_path": first_text(item.get("module_path"), item.get("process_path")) or None,
++            "parent_process_id": item.get("parent_id") or item.get("parent_process_id"),
++            "sample_lineage": int(item["process_id"]) in sample_pids,
++        }
++        for item in processes
++    }
++
++
++def write_cape_etw_events(path: Path, analysis_path: Path, results: dict[str, Any],
++                          clock_path: Path | None) -> None:
++    """Package decoded ETW with host-clock timestamps and process lineage."""
++    clock = read_first_json([clock_path] if clock_path else [])
++    process_context = _process_context(results)
++    sources = {
++        "Microsoft-Windows-Kernel-Network": analysis_path / "aux/network_etw.json",
++        "Microsoft-Windows-DNS-Client": analysis_path / "aux/dns_etw.json",
++        "Microsoft-Windows-WMI-Activity": analysis_path / "aux/wmi_etw.json",
++    }
++    events, counts = [], {}
++    for provider, source in sources.items():
++        count = 0
++        if source.is_file():
++            for line_number, line in enumerate(
++                source.read_text(encoding="utf-8", errors="replace").splitlines(), 1
++            ):
++                try:
++                    payload = json.loads(line)
++                except json.JSONDecodeError:
++                    continue
++                if not isinstance(payload, dict):
++                    continue
++                pid_value = payload.get("pid") or payload.get("ProcessId")
++                try:
++                    pid = int(pid_value) if pid_value not in (None, "") else None
++                except (TypeError, ValueError):
++                    pid = None
++                guest_time = _filetime_datetime(payload.get("timestamp"))
++                corrected = _correct_etw_time(guest_time, clock) if guest_time else None
++                context = process_context.get(pid or -1, {})
++                events.append({
++                    "provider": provider, "event_id": payload.get("event_id"),
++                    "source_line": line_number,
++                    "timestamp": corrected.isoformat().replace("+00:00", "Z") if corrected else None,
++                    "process_id": pid, **context, "payload": payload,
++                })
++                count += 1
++        counts[provider] = count
++    write_json(path, {
++        "schema_version": "1.0", "source": "cape_pywintrace",
++        "clock_algorithm": "linear_start_end_interpolation",
++        "clock_quality_acceptable": bool(as_dict(clock.get("quality")).get("acceptable")),
++        "maximum_uncertainty_ns": as_dict(clock.get("quality")).get("maximum_observed_uncertainty_ns"),
++        "event_count": len(events), "provider_counts": counts, "events": events,
++    })
++
+ 
+ def write_access_events(path: Path, status_path: Path, results: dict[str, Any],
+diff --git a/schemas/handoff_manifest.schema.json b/schemas/handoff_manifest.schema.json
+--- a/schemas/handoff_manifest.schema.json
++++ b/schemas/handoff_manifest.schema.json
+@@ -249,4 +249,6 @@
+         ,"clock_sync": { "const": "behavior/clock-sync.json" },
+-        "access_events": { "const": "behavior/access_events.json" }
++        "access_events": { "const": "behavior/access_events.json" },
++        "cape_etw_events": { "const": "behavior/cape-etw-events.json" },
++        "kernel_etl": { "const": "behavior/kernel.etl" }
+       }
+     },
+diff --git a/tests/test_winstdt_handoff_export.py b/tests/test_winstdt_handoff_export.py
+--- a/tests/test_winstdt_handoff_export.py
++++ b/tests/test_winstdt_handoff_export.py
+@@ -86,4 +86,5 @@ class WinstdtHandoffExportTests(unittest.TestCase):
+         self.assertTrue((bundle / "network" / "capture.pcapng").is_file())
+         self.assertTrue((bundle / "behavior" / "trace.etl").is_file())
+         self.assertTrue((bundle / "behavior" / "kernel.etl").is_file())
++        self.assertTrue((bundle / "behavior" / "cape-etw-events.json").is_file())
+         self.assertEqual(manifest["artifact_paths"]["clock_sync"], "behavior/clock-sync.json")

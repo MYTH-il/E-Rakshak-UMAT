@@ -39,9 +39,13 @@
       {
         "path": "deployment/windows/patches/0004-declare-kernel-etl-alias.patch",
         "sha256": "f4dc45ee55edf35a4234d6fe02928f950d3e73b6ca1eb700052ad6d9f0eb8488"
+      },
+      {
+        "path": "deployment/windows/patches/0005-export-clock-corrected-etw-events.patch",
+        "sha256": "328e134734feee89bae2bb7b5c75216d3cffee49b8d7b14a2e50e583f4ceed45"
       }
     ],
-    "patch_series_sha256": "e8214c2a14540a9c00b018d996edb559a52fb451d71079ae1d6d71861effe972"
+    "patch_series_sha256": "0872af85962c030c781b1f64a3172cfd5658a628b09ff8a61b5cf748e519433b"
   },
   "license_status": "authorization_required_no_upstream_license_file",
   "redistribution_allowed": false,

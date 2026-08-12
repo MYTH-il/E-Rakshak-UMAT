@@ -315,3 +315,66 @@ def test_correlated_file_access_restores_filename_and_path(tmp_path: Path) -> No
     assert host["object_path"].endswith("Chrome\\Login Data")
     assert host["process_id"] == 1234
     assert "Login Data" in events[0]["plain_language"]
+
+
+def test_etw_network_corroboration_rejects_browser_process_attribution(tmp_path: Path) -> None:
+    source = tmp_path / "cape-etw-events.json"
+    source.write_text(json.dumps({
+        "schema_version": "1.0",
+        "clock_quality_acceptable": True,
+        "maximum_uncertainty_ns": 500_000_000,
+        "events": [{
+            "provider": "Microsoft-Windows-Kernel-Network",
+            "timestamp": "2026-08-11T12:00:02.2Z",
+            "process_id": 44,
+            "process": "msedge.exe",
+            "process_path": "C:\\Program Files\\Edge\\msedge.exe",
+            "sample_lineage": False,
+            "payload": {"pid": 44, "dst_ip": "198.51.100.10", "dst_port": 443},
+        }],
+    }))
+    artifact = InputArtifact(
+        artifact_id=uuid4(), kind="etw_events",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size, media_type="application/json",
+        source_stage_type="platform_analysis", local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(etw_events=artifact)
+    events = [{
+        "finding_kind": "correlation", "confidence_tier": "weak",
+        "timestamp": "2026-08-11T12:00:02Z", "destination_ip": "198.51.100.10",
+        "destination_port": 443, "mitre_technique_id": "T1041", "evidence_refs": [],
+    }]
+    SubprocessC2Runtime._corroborate_etw_network(context, events)
+    assert events[0]["finding_kind"] == "network_observation"
+    assert events[0]["capped_by_caveat"] == "network_process_not_sample"
+    assert events[0]["evidence_refs"][0]["process"] == "msedge.exe"
+
+
+def test_etw_network_corroboration_preserves_sample_attribution(tmp_path: Path) -> None:
+    source = tmp_path / "cape-etw-events.json"
+    source.write_text(json.dumps({
+        "schema_version": "1.0",
+        "clock_quality_acceptable": True,
+        "events": [{
+            "provider": "Microsoft-Windows-Kernel-Network",
+            "timestamp": "2026-08-11T12:00:02Z",
+            "process_id": 77, "process": "sample.exe", "sample_lineage": True,
+            "payload": {"pid": 77, "dst_ip": "203.0.113.8", "dst_port": 80},
+        }],
+    }))
+    artifact = InputArtifact(
+        artifact_id=uuid4(), kind="etw_events",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size, media_type="application/json",
+        source_stage_type="platform_analysis", local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(etw_events=artifact)
+    events = [{
+        "finding_kind": "correlation", "confidence_tier": "weak",
+        "timestamp": "2026-08-11T12:00:02Z", "destination_ip": "203.0.113.8",
+        "destination_port": 80, "evidence_refs": [],
+    }]
+    SubprocessC2Runtime._corroborate_etw_network(context, events)
+    assert events[0]["finding_kind"] == "correlation"
+    assert events[0]["evidence_refs"][0]["sample_lineage"] is True

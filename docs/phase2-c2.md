@@ -25,6 +25,20 @@ Correlated Windows events retain the complete host-access evidence reference: co
 and path, access operation/API, process identity, PID lineage, and source call ID. Human-readable
 findings name the accessed file rather than reducing it to the label `file_access`.
 
+The Windows handoff also exports CAPE's decoded kernel-network, DNS-client, and WMI ETW streams as
+`cape-etw-events.json`. Guest FILETIME values are transformed onto the host/PCAP clock with the
+same bounded start/end interpolation used for access evidence. Kernel-network observations retain
+their PID, five-tuple, provider, source line, clock uncertainty, and CAPE process-lineage context.
+Before persistence, UMAT binds a network finding to the matching destination, port, and corrected
+timestamp. A temporal match attributed to the submitted sample or one of its descendants may
+retain a behavioral correlation; a match from another PID, or no process-attributed match, is
+downgraded to a neutral network observation. Static indicators and independent reputation results
+are retained but carry the process-attribution caveat.
+
+This establishes direct ETW-to-PCAP network corroboration. It does not claim that capemon file
+accesses are independently kernel-ETW-corroborated: that state remains `not_available` until a
+decoded kernel-file stream is supplied.
+
 The upstream detector's residual `unclassified_egress` category is normalized to
 `network_observation`, with no exfiltration ATT&CK technique. It remains visible for evidentiary
 review but is not an exfiltration claim. Specific exfiltration detectors, threat-intelligence

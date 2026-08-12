@@ -231,6 +231,7 @@ class SubprocessC2Runtime:
         if context.platform == "windows":
             self._correct_unclassified_egress(events)
             self._enrich_access_context(context, events)
+            self._corroborate_etw_network(context, events)
         if context.platform == "android" and context.network_activity:
             events.extend(self._proxy_network_events(context))
         return NativeC2Result(
@@ -369,6 +370,108 @@ class SubprocessC2Runtime:
                     f"{f' {delta:g} seconds later' if isinstance(delta, (int, float)) else ''}. "
                     "This is shown for review and is not confirmed."
                 )
+
+    @staticmethod
+    def _corroborate_etw_network(
+        context: C2AnalysisContext, events: list[dict[str, Any]]
+    ) -> None:
+        """Bind PCAP findings to decoded kernel-network events and processes."""
+        source = context.etw_events
+        if source is None:
+            return
+        try:
+            document = json.loads(source.local_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(document, dict) or document.get("schema_version") != "1.0":
+            return
+        raw_events = document.get("events")
+        if not isinstance(raw_events, list):
+            return
+        uncertainty = float(document.get("maximum_uncertainty_ns") or 0) / 1_000_000_000
+        tolerance = max(0.75, min(2.0, uncertainty + 0.25))
+        network_events = [
+            item
+            for item in raw_events
+            if document.get("clock_quality_acceptable") is True
+            and isinstance(item, dict)
+            and item.get("provider") == "Microsoft-Windows-Kernel-Network"
+            and isinstance(item.get("payload"), dict)
+            and item.get("timestamp")
+        ]
+        protected_kinds = {"static_ioc", "reputation", "covert_channel", "dns"}
+        for event in events:
+            destination_ip = str(event.get("destination_ip") or "")
+            destination_port = int(event.get("destination_port") or 0)
+            if not destination_ip or not destination_port:
+                continue
+            try:
+                observed_at = datetime.fromisoformat(
+                    str(event["timestamp"]).replace("Z", "+00:00")
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            matches: list[tuple[float, dict[str, Any]]] = []
+            for item in network_events:
+                payload = item["payload"]
+                try:
+                    if str(payload.get("dst_ip") or "") != destination_ip:
+                        continue
+                    if int(payload.get("dst_port") or 0) != destination_port:
+                        continue
+                    etw_time = datetime.fromisoformat(
+                        str(item["timestamp"]).replace("Z", "+00:00")
+                    )
+                except (TypeError, ValueError):
+                    continue
+                delta = abs((etw_time - observed_at).total_seconds())
+                if delta <= tolerance:
+                    matches.append((delta, item))
+            matches.sort(key=lambda value: value[0])
+            sample_matches = [value for value in matches if value[1].get("sample_lineage")]
+            selected = sample_matches[0] if sample_matches else (matches[0] if matches else None)
+            if selected:
+                delta, item = selected
+                payload = item["payload"]
+                event.setdefault("evidence_refs", []).append(
+                    {
+                        "type": "etw_network",
+                        "artifact_id": str(source.artifact_id),
+                        "sha256": source.sha256,
+                        "provider": item["provider"],
+                        "timestamp": item["timestamp"],
+                        "time_delta_s": round(delta, 6),
+                        "pid": item.get("process_id") or payload.get("pid"),
+                        "process": item.get("process"),
+                        "process_path": item.get("process_path"),
+                        "sample_lineage": bool(item.get("sample_lineage")),
+                        "src_ip": payload.get("src_ip"),
+                        "src_port": payload.get("src_port"),
+                        "dst_ip": payload.get("dst_ip"),
+                        "dst_port": payload.get("dst_port"),
+                        "protocol": payload.get("protocol"),
+                    }
+                )
+            if sample_matches:
+                continue
+            if event.get("finding_kind") in protected_kinds:
+                event["capped_by_caveat"] = (
+                    "network_process_not_sample" if matches else "network_process_unattributed"
+                )
+                continue
+            process = selected[1].get("process") if selected else None
+            event["finding_kind"] = "network_observation"
+            event["confidence_tier"] = "weak"
+            event["mitre_technique_id"] = None
+            event["capped_by_caveat"] = (
+                "network_process_not_sample" if matches else "network_process_unattributed"
+            )
+            destination = event.get("destination_domain") or destination_ip
+            event["plain_language"] = (
+                f"Network traffic to {destination} was observed"
+                + (f" from {process}" if process else " without sample-process attribution")
+                + "; it is not attributed to this sample's C2 or exfiltration behavior."
+            )
 
     @staticmethod
     def _proxy_network_events(context: C2AnalysisContext) -> list[dict[str, Any]]:
