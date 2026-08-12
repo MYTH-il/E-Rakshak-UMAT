@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from umat.android.executor import app as android_executor_app
 from umat.c2.executor import app as c2_executor_app
+from umat.cli.main import app as main_app
 from umat.deployment.cli import (
     CommandRunner,
     DeploymentError,
@@ -157,6 +158,77 @@ def test_control_plane_compose_requires_external_password() -> None:
     assert "postgres:18.4@sha256:" in compose
     assert "umat-postgres-18:/var/lib/postgresql" in compose
     assert "/var/lib/postgresql/data" not in compose
+    assert "restart: unless-stopped" in compose
+
+
+def test_unified_operator_command_is_installed() -> None:
+    installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
+    assert "/usr/local/bin/umat" in installer
+    assert '.venv/bin/umat" "\\$@"' in installer
+
+
+def test_unified_operator_command_exposes_supported_groups() -> None:
+    result = CliRunner().invoke(main_app, ["--help"])
+    assert result.exit_code == 0
+    for command_name in ("start", "status", "admin", "ops"):
+        assert command_name in result.stdout
+
+
+def test_startup_command_exposes_health_timeout_and_status_override() -> None:
+    result = CliRunner().invoke(main_app, ["start", "--help"])
+    assert result.exit_code == 0
+    assert "--timeout" in result.stdout
+    assert "--skip-status" in result.stdout
+
+
+def test_startup_command_orders_dependencies_before_executors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr("umat.deployment.startup.verify_installation", lambda: None)
+    monkeypatch.setattr(
+        "umat.deployment.startup.sudo_systemctl",
+        lambda action, units: events.append(f"systemctl:{action}:{units[0]}"),
+    )
+    monkeypatch.setattr(
+        "umat.deployment.startup.reset_and_start_units",
+        lambda units: (
+            events.append(f"systemctl:reset-failed:{units[0]}"),
+            events.append(f"systemctl:start:{units[0]}"),
+        ),
+    )
+    monkeypatch.setattr(
+        "umat.deployment.startup.compose_up",
+        lambda path: events.append(f"compose:{path.parent.name}"),
+    )
+    monkeypatch.setattr(
+        "umat.deployment.startup.wait_for_postgres",
+        lambda timeout: events.append("health:UMAT PostgreSQL"),
+    )
+    monkeypatch.setattr(
+        "umat.deployment.startup.wait_for_url",
+        lambda name, url, timeout: events.append(f"health:{name}"),
+    )
+    monkeypatch.setattr("umat.deployment.startup.path_exists", lambda path: False)
+
+    result = CliRunner().invoke(main_app, ["start", "--skip-status"])
+
+    assert result.exit_code == 0
+    assert events == [
+        "systemctl:start:docker.service",
+        "compose:single-host",
+        "health:UMAT PostgreSQL",
+        "compose:android",
+        "systemctl:reset-failed:umat-guest-guard.service",
+        "systemctl:start:umat-guest-guard.service",
+        "systemctl:reset-failed:umat-api.service",
+        "systemctl:start:umat-api.service",
+        "health:UMAT API",
+        "health:CAPE gateway",
+        "health:MobSF",
+        "systemctl:reset-failed:umat-windows-executor.service",
+        "systemctl:start:umat-windows-executor.service",
+    ]
 
 
 def test_root_owned_deployment_state_falls_back_to_sudo(

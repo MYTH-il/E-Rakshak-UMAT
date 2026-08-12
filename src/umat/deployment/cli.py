@@ -562,7 +562,8 @@ def install(
             administrator = [
                 command("uv"),
                 "run",
-                "umat-admin",
+                "umat",
+                "admin",
                 "create-user",
                 "--username",
                 admin_username,
@@ -584,7 +585,8 @@ def install(
                 [
                     command("uv"),
                     "run",
-                    "umat-admin",
+                    "umat",
+                    "admin",
                     "seed-android-profiles",
                     "--admin",
                     admin_username,

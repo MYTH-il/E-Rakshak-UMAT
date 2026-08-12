@@ -70,9 +70,9 @@ jobs:
               connection.execute("CREATE DATABASE umat_migration")
           PY
           uv run alembic upgrade head
-          uv run umat-admin create-user --username admin --role administrator \
+          uv run umat admin create-user --username admin --role administrator \
             --password verification-only-admin-password --non-interactive
-          uv run umat-admin seed-android-profiles --admin admin
+          uv run umat admin seed-android-profiles --admin admin
 
       - name: Static verification
         run: |

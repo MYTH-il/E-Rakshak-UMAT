@@ -34,6 +34,21 @@ Run the command once without `--execute` and inspect the complete plan. Then add
 uv run umat-deploy status
 ```
 
+### Starting after a host reboot
+
+The service installer places `umat` in `/usr/local/bin`. Run it as the normal deployment
+operator after a fresh boot:
+
+```bash
+umat start
+```
+
+It restores the PostgreSQL and MobSF Compose projects before starting the systemd control plane and
+executors, waits for local readiness, and then runs the full deployment status gate. The operation
+is safe to repeat and does not reinstall components or start an analysis guest. Use
+`umat start --skip-status` only for diagnosis when an already-known qualification gate is expected
+to remain degraded; service startup and endpoint readiness still fail closed.
+
 Rerun the same command after correcting a failed upstream phase. Existing verified checkouts,
 generated secrets, databases, images, and setup markers are preserved. Completion is recorded only
 after the upstream harmless Windows deployment validation, executor enrollment, and final health
@@ -80,7 +95,7 @@ Automatic installation creates one-time Windows, C2, and Android enrollment toke
 them immediately. For a deliberately skipped or replacement Windows enrollment, use:
 
 ```bash
-uv run umat-admin enroll-executor --created-by admin \
+uv run umat admin enroll-executor --created-by admin \
   --executor-type windows --stage-type platform_analysis > /secure/umat-windows.token
 sudo deployment/full-stack/enroll-windows-executor.sh \
   --token-file /secure/umat-windows.token
@@ -140,5 +155,5 @@ from opening its required write transaction. Install the tracked
 `umat-c2-executor-data.conf` drop-in and restart the executor after updating the databases. A failed
 preflight keeps the executor unavailable instead of exhausting analysis-stage retries.
 
-Phase 6 provides `umat-ops backup create`, `verify`, `restore`, and `rollback`. Do not manually
+Phase 6 provides `umat ops backup create`, `verify`, `restore`, and `rollback`. Do not manually
 remove a legacy database or Docker volume merely to make the status command green.

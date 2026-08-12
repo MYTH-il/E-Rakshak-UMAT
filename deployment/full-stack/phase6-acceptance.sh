@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root="${1:-}"
-[[ "$project_root" == /* && -x "$project_root/.venv/bin/umat-admin" ]] || {
+[[ "$project_root" == /* && -x "$project_root/.venv/bin/umat" ]] || {
   echo "usage: $0 /absolute/path/to/UMAT" >&2
   exit 2
 }
@@ -19,7 +19,7 @@ for unit in "${units[@]}"; do
 done
 curl --fail --silent --show-error http://127.0.0.1:8080/health/ready >/dev/null
 curl --fail --silent --show-error http://127.0.0.1:8080/metrics | grep -q umat_process_uptime_seconds
-"$project_root/.venv/bin/umat-admin" verify-audit
+"$project_root/.venv/bin/umat" admin verify-audit
 "$project_root/deployment/full-stack/verify-executor-isolation.sh"
 systemd-analyze security umat-api.service --no-pager >/dev/null
 sudo -n nft list table inet umat_host >/dev/null

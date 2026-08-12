@@ -103,6 +103,17 @@ if [[ "$EXECUTE" -eq 1 ]]; then
 fi
 rm -f -- "$gateway_unit"
 
+umat_launcher="$(mktemp)"
+cat >"$umat_launcher" <<EOF
+#!/usr/bin/env sh
+exec "$PROJECT_ROOT/.venv/bin/umat" "\$@"
+EOF
+echo "+ install /usr/local/bin/umat"
+if [[ "$EXECUTE" -eq 1 ]]; then
+  sudo -n install -m 0755 "$umat_launcher" /usr/local/bin/umat
+fi
+rm -f -- "$umat_launcher"
+
 windows_unit="$(mktemp)"
 cat >"$windows_unit" <<EOF
 [Unit]

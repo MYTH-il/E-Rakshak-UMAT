@@ -42,8 +42,8 @@ test = [
 ]
 
 [project.scripts]
+umat = "umat.cli.main:app"
 umat-api = "umat.api.app:run"
-umat-admin = "umat.cli.admin:app"
 umat-fake-executor = "umat.executors.fake:app"
 umat-c2-adapter = "umat.c2.adapter_cli:app"
 umat-c2-executor = "umat.c2.executor:app"
@@ -57,7 +57,6 @@ umat-scheduler = "umat.scheduler.worker:app"
 umat-deploy = "umat.deployment.cli:app"
 umat-cape-gateway = "umat.cape_gateway.app:run"
 umat-egress-broker = "umat.egress.app:run"
-umat-ops = "umat.operations.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/umat"]

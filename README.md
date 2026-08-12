@@ -50,9 +50,9 @@ As of 2026-08-12:
 
 - Ruff passes for `src` and `tests`.
 - Strict mypy passes for the application source tree.
-- The default offline suite passes: **157 passed, 9 skipped**. The skipped tests require explicitly
+- The default offline suite passes: **162 passed, 9 skipped**. The skipped tests require explicitly
   configured disposable PostgreSQL integration/migration databases.
-- The CI-equivalent database-backed suite passes with **124 passed, 0 skipped** against disposable
+- The CI-equivalent database-backed suite passes with **171 passed, 0 skipped** against disposable
   PostgreSQL 18.4 databases, including migration downgrade/re-upgrade tests. CI also runs four
   Playwright workflow groups covering authentication, intake, duplicate confirmation,
   reruns, retries, cancellation, case editing, in-case submission, run diagnosis, worker inventory,
@@ -158,7 +158,7 @@ cp .env.example .env
 # Edit UMAT_POSTGRES_PASSWORD and the password inside UMAT_DATABASE_URL.
 sudo docker compose --env-file .env -f deployment/single-host/compose.yaml up -d postgres
 uv run alembic upgrade head
-uv run umat-admin create-user --username admin --role administrator
+uv run umat admin create-user --username admin --role administrator
 ```
 
 Run the long-lived processes in separate terminals:
@@ -272,11 +272,20 @@ service never receives Docker, ADB or MobSF credentials.
 Operational checks:
 
 ```bash
+umat start
+umat status
 uv run umat-deploy status
 systemctl --no-pager --failed
 systemctl status umat-api umat-scheduler umat-report-worker umat-adapter-worker
 systemctl status umat-windows-executor umat-c2-executor umat-android-executor
 ```
+
+After a host reboot, run `umat start` from the normal deployment operator account. The command is
+idempotent: it starts Docker and libvirt, restores the UMAT PostgreSQL and MobSF Compose stacks,
+starts the firewall, CAPE, control-plane and enrolled executor services in dependency order, waits
+for the local endpoints, and applies the comprehensive `umat-deploy status` gate. It does not
+reinstall the platform, create an analysis run, or boot the Windows analysis guest. A nonzero exit
+means the system did not reach the qualified deployment state; inspect the printed status details.
 
 ## Documentation
 

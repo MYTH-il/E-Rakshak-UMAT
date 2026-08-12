@@ -7,9 +7,9 @@ validated with `pg_restore --list`, inventories every artifact by SHA-256, check
 content-addressed objects, and is atomically published.
 
 ```bash
-sudo -u <control-user> /path/to/.venv/bin/umat-ops backup create \
+sudo -u <control-user> /path/to/.venv/bin/umat ops backup create \
   --destination /var/lib/umat-backups
-umat-ops backup verify /var/lib/umat-backups/<backup-id>
+umat ops backup verify /var/lib/umat-backups/<backup-id>
 ```
 
 Keep backups on encrypted storage separate from the analysis host. Copy `manifest.json` and its
@@ -17,9 +17,9 @@ digest to the evidence register. A restore requires both `--execute` and the exa
 first captures the live database and artifacts as a paired rollback set.
 
 ```bash
-umat-ops backup restore /var/lib/umat-backups/<backup-id> \
+umat ops backup restore /var/lib/umat-backups/<backup-id> \
   --confirm-backup-id <backup-id> --execute
-umat-ops backup rollback /var/lib/umat/.artifacts.rollback-<backup-id> \
+umat ops backup rollback /var/lib/umat/.artifacts.rollback-<backup-id> \
   --confirm-restore-id <backup-id> --execute
 ```
 
@@ -33,8 +33,8 @@ Seal it on the connected staging host; this makes inputs read-only, writes the c
 and prints its digest. Transport the resulting manifest SHA-256 over a separate trusted channel:
 
 ```bash
-umat-ops offline seal /mnt/umat-stage
-umat-ops offline verify /mnt/umat-stage --manifest-sha256 <trusted-sha256>
+umat ops offline seal /mnt/umat-stage
+umat ops offline verify /mnt/umat-stage --manifest-sha256 <trusted-sha256>
 UV_NO_INDEX=1 UV_OFFLINE=1 UV_CACHE_DIR=/mnt/umat-stage/uv-cache uv sync --frozen --offline
 ```
 

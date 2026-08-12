@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-[[ "$PROJECT_ROOT" = /* && -x "$PROJECT_ROOT/.venv/bin/umat-admin" ]] || exit 2
+[[ "$PROJECT_ROOT" = /* && -x "$PROJECT_ROOT/.venv/bin/umat" ]] || exit 2
 
 SERVICE_USER="${UMAT_SERVICE_USER:-$(id -un)}"
 FULL_ENV="${UMAT_ENV_FILE:-/etc/umat/full-stack.env}"
@@ -32,7 +32,7 @@ enroll_generic() {
     echo "$component executor already enrolled"
   else
     local token enrollment
-    token="$(UMAT_DATABASE_URL="$database_url" "$PROJECT_ROOT/.venv/bin/umat-admin" \
+    token="$(UMAT_DATABASE_URL="$database_url" "$PROJECT_ROOT/.venv/bin/umat" admin \
       enroll-executor --created-by "$ADMIN" --executor-type "$component" --stage-type "$stage_type")"
     enrollment="$(mktemp)"
     cp "$env_file" "$enrollment"
@@ -54,7 +54,7 @@ for component in "${COMPONENTS[@]}"; do
         sudo -n systemctl enable --now umat-windows-executor.service
       else
         token_file="$(mktemp)"
-        UMAT_DATABASE_URL="$database_url" "$PROJECT_ROOT/.venv/bin/umat-admin" \
+        UMAT_DATABASE_URL="$database_url" "$PROJECT_ROOT/.venv/bin/umat" admin \
           enroll-executor --created-by "$ADMIN" --executor-type windows \
           --stage-type platform_analysis >"$token_file"
         chmod 0600 "$token_file"
