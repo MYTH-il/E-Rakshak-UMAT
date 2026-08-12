@@ -14,10 +14,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "analysis_runs",
-        sa.Column("windows_interactive", sa.Boolean(), nullable=False, server_default=sa.false()),
+    # Revision 0001 creates its phase-one tables from current SQLAlchemy
+    # metadata, so a brand-new database can already contain this later column.
+    # Existing installations at 0010 do not. Keep the migration valid for both
+    # paths, matching the guards used by revisions 0007 through 0009.
+    connection = op.get_bind()
+    existing = connection.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'analysis_runs' "
+            "AND column_name = 'windows_interactive'"
+        )
     )
+    if existing.fetchone() is None:
+        op.add_column(
+            "analysis_runs",
+            sa.Column(
+                "windows_interactive",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            ),
+        )
 
 
 def downgrade() -> None:

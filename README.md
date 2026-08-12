@@ -239,10 +239,19 @@ recovery, enrollment, and status semantics.
    analysis** independently if the captured/simulated traffic should be processed by the offline C2
    workflow. Do not select real-world egress until the external sacrificial egress architecture in
    [the network guide](docs/network-architecture.md) is deployed and authorized.
-4. Monitor the platform, optional C2, adaptation, aggregation, and report stages. A nominal
-   five-minute CAPE analysis commonly takes longer end to end because VM startup and native
+4. For a manual Windows run, enable **interactive analyst session**. When the platform stage is
+   live, **Open live Windows console** launches the run-owned TigerVNC display directly. CAPE's
+   mouse/keyboard automation is disabled for that run. The console, controlled egress lease, and
+   disposable VM expire with the 10-minute observation window; evidence collection and all
+   downstream stages then continue automatically. Never enter real credentials or transfer files
+   between the analyst workstation and guest.
+5. Monitor the platform, optional C2, adaptation, aggregation, and report stages. A nominal
+   ten-minute CAPE analysis commonly takes longer end to end because VM startup and native
    post-processing are outside that timer.
-5. Review the UMAT report and download authorized JSON/PDF/CSV or evidence artifacts. Use CAPE's
+6. Review the UMAT report and download authorized JSON/PDF/CSV or evidence artifacts. File-access
+   evidence includes CAPE's concrete object filename/path and process context when present. Generic
+   network egress remains visible as an observation and is not labeled exfiltration without an
+   independent supporting signal. Use CAPE's
    interface only for native diagnostics while the UMAT UI backlog remains open.
 
 For an Android APK, leave **interactive analyst session** enabled to hold the disposable ReDroid

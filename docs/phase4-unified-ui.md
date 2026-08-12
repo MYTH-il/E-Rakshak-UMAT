@@ -57,15 +57,16 @@ license remains undecided.
 
 ## Current browser scope
 
-The browser is an implemented foundation, not yet the complete operator console. The backend and
-workers can run CAPE end to end even where the UI cannot currently express or diagnose the
-operation. Pending UI work includes case management and search, a recent-analysis list, multiple
-analyses per case, a complete new-analysis dialog for all platform/profile/network/C2 variations,
-available-worker inventory, guest-profile lists, platform-specific Windows and Android profile
-creation/retirement menus, and complete RBAC-aware navigation/actions. Native-task progress,
-post-processing state, retries, cancellation, evidence, and error diagnostics also need a fuller
-presentation. Until then, use `/api/v1` and native CAPE diagnostics for capabilities absent from
-the browser.
+The browser now provides case creation/search, recent analyses, repeated runs per case, platform
+and network/C2 choices, automated versus manual Windows execution, direct TigerVNC launch while a
+Windows run is live, cancellation, run progress, evidence downloads, and paginated/searchable
+technical findings, IOCs, destinations, timeline, and access events. Long filenames and paths wrap
+without breaking the report layout.
+
+Administrative guest-profile lifecycle, complete worker inventory, and the deepest native CAPE
+diagnostics remain API/native-tool operations. The live Windows console intentionally provides no
+independent VM power control, host clipboard bridge, or file transfer, and disappears when the
+run-scoped capability expires.
 
 ## Exports
 

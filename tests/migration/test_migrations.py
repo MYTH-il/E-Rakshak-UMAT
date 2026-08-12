@@ -55,5 +55,12 @@ def test_full_upgrade_downgrade_and_role_seed() -> None:
     alembic("upgrade", "head")
     with create_engine(sync_url()).connect() as connection:
         assert connection.execute(text("select count(*) from roles")).scalar_one() == 3
+        assert connection.execute(
+            text(
+                "select count(*) from information_schema.columns "
+                "where table_name = 'analysis_runs' "
+                "and column_name = 'windows_interactive'"
+            )
+        ).scalar_one() == 1
     alembic("downgrade", "base")
     alembic("upgrade", "head")
