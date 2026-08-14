@@ -31,16 +31,20 @@
     },
     "cape": {
       "repository": "https://github.com/kevoreilly/CAPEv2.git",
-      "commit": "aaebb80f3ce27164b4661c1241e14236764962b1"
+      "commit": "aaebb80f3ce27164b4661c1241e14236764962b1",
+      "integration_patch": {
+        "path": "deployment/full-stack/patches/cape-guest-analyzer-retry.patch",
+        "sha256": "3f6ec3568b3efb599980094e5e02e78e9dcaf4cb656ce183d6737a2d0e53710e"
+      }
     },
     "c2": {
       "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
       "commit": "478f131de510ad580754f152d946086b3aeacf05",
-      "effective_version": "478f131-umat.1",
+      "effective_version": "478f131-umat.2",
       "upstream_tree_sha256": "792c340721cc75dfc9b43a5bba4908be22071b75bd99f2871e9bd85d52407c28",
-      "effective_tree_sha256": "792c340721cc75dfc9b43a5bba4908be22071b75bd99f2871e9bd85d52407c28",
+      "effective_tree_sha256": "0fa3e0a81129a1ac53066a2f4f4a746f0cdba135f6868f950d16555950f8b6a3",
       "dependency_lock_sha256": "18d8e1acfd170b8f8c321aa3737b465ea4f19d28bcefd9534f5b6becb6e1ea6d",
-      "patch_series_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patch_series_sha256": "410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199",
       "license_status": "authorization_required_no_upstream_license_file"
     },
     "android": {

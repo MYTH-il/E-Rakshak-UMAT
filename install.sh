@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 bootstrap_packages=(
-  ca-certificates curl git patch python3.12 python3.12-venv
+  ca-certificates curl git patch publicsuffix python3.12 python3.12-venv tcpdump
   docker.io docker-compose-v2 libvirt-daemon-system libvirt-clients
   qemu-kvm qemu-utils tar adb android-sdk openjdk-17-jre-headless socat
 )

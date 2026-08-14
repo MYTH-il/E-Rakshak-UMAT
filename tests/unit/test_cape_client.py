@@ -241,6 +241,7 @@ def test_cape_configs_produce_redacted_family_neutral_c2_candidates() -> None:
     token = evidence["cape"]["config_records"][0]["values"]["bot_token"]
     assert token["redacted"] is True
     assert token["sha256"] != "secret-value"
+    assert evidence["cape"]["configuration_extraction"]["status"] == "native_extracted"
 
     prior = cape_static_prior(evidence, "run-id", "a" * 64)
     assert prior["family"] == "GenericStealer"
@@ -273,6 +274,45 @@ def test_static_strings_supply_candidates_when_family_extractor_is_empty() -> No
     assert any("bot<redacted>" in item["value"] for item in candidates if item["type"] == "url")
     assert all("redacted-fixture" not in item["value"] for item in candidates)
     assert {item["source"] for item in candidates} == {"cape_static_string"}
+    assert all(
+        item["provenance"]["validation"] == "offline_public_suffix_and_source_context_v2"
+        for item in candidates
+    )
+    assert evidence["cape"]["configuration_extraction"] == {
+        "status": "static_fallback",
+        "native_record_count": 0,
+        "native_candidate_count": 0,
+        "static_candidate_count": len(candidates),
+    }
+
+
+def test_static_strings_reject_code_namespaces_and_file_names() -> None:
+    evidence = normalize_cape_evidence(
+        {
+            "target": {
+                "file": {
+                    "strings": [
+                        "System.Diagnostics",
+                        "System.Net",
+                        "Microsoft.VisualBasic.ApplicationServices",
+                        "bcrypt.dll",
+                        "tor-win32-0.4.3.6.zip",
+                        "14.0.0.0",
+                        "not-a-public-domain.rkst",
+                        "dist.torproject.org",
+                        "https://download.example.org/path.looks-like.test/archive.zip",
+                    ]
+                }
+            },
+            "CAPE": {"configs": [], "payloads": []},
+        }
+    )
+
+    assert [(item["type"], item["value"]) for item in evidence["cape"]["static_candidates"]] == [
+        ("domain", "dist.torproject.org"),
+        ("domain", "download.example.org"),
+        ("url", "https://download.example.org/path.looks-like.test/archive.zip"),
+    ]
 
 
 def test_cape_evidence_waits_for_complete_report_document(monkeypatch) -> None:  # type: ignore[no-untyped-def]

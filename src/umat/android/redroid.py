@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from umat.android.avd import RunningAVD
+from umat.capture import wait_for_pcap_writer
 
 MITMPROXY_IMAGE = (
     "mitmproxy/mitmproxy@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f"
@@ -178,7 +179,10 @@ class RedroidManager:
                 + last_probe_error.decode(errors="replace").strip()
             )
         pcap = workspace / "android-capture.pcap"
-        self.capture_log_stream = (workspace / "tcpdump.log").open("ab")
+        capture_log = workspace / "tcpdump.log"
+        pcap.unlink(missing_ok=True)
+        capture_log.unlink(missing_ok=True)
+        self.capture_log_stream = capture_log.open("ab")
         self.capture_process = subprocess.Popen(  # noqa: S603
             [
                 "/usr/bin/docker",
@@ -194,6 +198,17 @@ class RedroidManager:
             stdout=subprocess.DEVNULL,
             stderr=self.capture_log_stream,
         )
+        self.capture_log_stream.flush()
+        try:
+            wait_for_pcap_writer(self.capture_process, pcap, capture_log)
+        except Exception:
+            self.capture_process.terminate()
+            try:
+                self.capture_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.capture_process.kill()
+                self.capture_process.wait(timeout=5)
+            raise
         self.running = RunningAVD(container_name, self.adb_address, pcap, guest_ip)
         return self.running
 

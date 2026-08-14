@@ -213,6 +213,57 @@ def test_c2_runtime_rejects_dynamic_observations_as_static_prior(tmp_path: Path)
     assert normalized["c2_indicators"] == []
 
 
+def test_c2_runtime_filters_legacy_static_string_false_positives(tmp_path: Path) -> None:
+    source = tmp_path / "static-prior.json"
+    values = [
+        ("domain", "system.net"),
+        ("domain", "bcrypt.dll"),
+        ("domain", "dist.torproject.org"),
+        ("domain", "api.telegram.org"),
+        ("domain", "www.theonionrouter.com"),
+        (
+            "url",
+            "https://www.theonionrouter.com/dist.torproject.org/torbrowser/archive.zip",
+        ),
+    ]
+    source.write_text(
+        json.dumps(
+            {
+                "evidence_origin": "binary_static",
+                "iocs": [
+                    {
+                        "type": indicator_type,
+                        "value": value,
+                        "source": "cape_static_string",
+                        "evidence_origin": "binary_static",
+                    }
+                    for indicator_type, value in values
+                ],
+            }
+        )
+    )
+    artifact = InputArtifact(
+        artifact_id=uuid4(),
+        kind="static_prior",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size,
+        media_type="application/json",
+        source_stage_type="platform_analysis",
+        local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(
+        platform="windows", sample_sha256="a" * 64, static_prior=artifact
+    )
+
+    normalized_path = SubprocessC2Runtime._prepare_static_prior(context, tmp_path)
+
+    assert [item["value"] for item in json.loads(normalized_path.read_text())["c2_indicators"]] == [
+        "api.telegram.org",
+        "www.theonionrouter.com",
+        "https://www.theonionrouter.com/dist.torproject.org/torbrowser/archive.zip",
+    ]
+
+
 def test_c2_runtime_fails_closed_for_legacy_windows_prior(tmp_path: Path) -> None:
     source = tmp_path / "legacy-windows-prior.json"
     source.write_text(
@@ -351,6 +402,60 @@ def test_etw_network_corroboration_rejects_browser_process_attribution(tmp_path:
     assert events[0]["evidence_refs"][0]["process"] == "msedge.exe"
 
 
+def test_etw_network_corroboration_does_not_confirm_reputation_for_other_process(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "cape-etw-events.json"
+    source.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "clock_quality_acceptable": True,
+                "events": [
+                    {
+                        "provider": "Microsoft-Windows-Kernel-Network",
+                        "timestamp": "2026-08-11T12:00:02Z",
+                        "process_id": 3448,
+                        "sample_lineage": False,
+                        "payload": {"dst_ip": "198.51.100.10", "dst_port": 443},
+                    }
+                ],
+            }
+        )
+    )
+    artifact = InputArtifact(
+        artifact_id=uuid4(),
+        kind="etw_events",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size,
+        media_type="application/json",
+        source_stage_type="platform_analysis",
+        local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(etw_events=artifact)
+    events = [
+        {
+            "finding_kind": "reputation",
+            "confidence_tier": "confirmed",
+            "timestamp": "2026-08-11T12:00:02Z",
+            "destination_domain": "cdn.example.test",
+            "destination_ip": "198.51.100.10",
+            "destination_port": 443,
+            "reputation_source": "known_bad_ja3",
+            "mitre_technique_id": "T1071",
+            "evidence_refs": [],
+        }
+    ]
+
+    SubprocessC2Runtime._corroborate_etw_network(context, events)
+
+    assert events[0]["finding_kind"] == "network_observation"
+    assert events[0]["confidence_tier"] == "weak"
+    assert events[0]["mitre_technique_id"] is None
+    assert "matched threat-intelligence evidence" in events[0]["plain_language"]
+    assert "not attributed to this sample" in events[0]["plain_language"]
+
+
 def test_etw_network_corroboration_preserves_sample_attribution(tmp_path: Path) -> None:
     source = tmp_path / "cape-etw-events.json"
     source.write_text(json.dumps({
@@ -378,3 +483,113 @@ def test_etw_network_corroboration_preserves_sample_attribution(tmp_path: Path) 
     SubprocessC2Runtime._corroborate_etw_network(context, events)
     assert events[0]["finding_kind"] == "correlation"
     assert events[0]["evidence_refs"][0]["sample_lineage"] is True
+
+
+def test_etw_dns_corroboration_rejects_non_sample_lookup(tmp_path: Path) -> None:
+    source = tmp_path / "cape-etw-events.json"
+    source.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "events": [
+                    {
+                        "provider": "Microsoft-Windows-DNS-Client",
+                        "process_id": 412,
+                        "sample_lineage": False,
+                        "payload": {
+                            "QueryType": "Query",
+                            "ProcessId": 412,
+                            "QueryName": "clientconfig.passport.net",
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    artifact = InputArtifact(
+        artifact_id=uuid4(),
+        kind="etw_events",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=source.stat().st_size,
+        media_type="application/json",
+        source_stage_type="platform_analysis",
+        local_path=source,
+    )
+    context = C2AnalysisContext.model_construct(etw_events=artifact)
+    events = [
+        {
+            "finding_kind": "dns",
+            "confidence_tier": "weak",
+            "destination_domain": "clientconfig.passport.net",
+            "mitre_technique_id": "T1071.004",
+            "evidence_refs": [],
+        }
+    ]
+
+    SubprocessC2Runtime._corroborate_etw_dns(context, events)
+
+    assert events[0]["finding_kind"] == "network_observation"
+    assert events[0]["mitre_technique_id"] is None
+    assert events[0]["capped_by_caveat"] == "network_process_not_sample"
+    assert events[0]["evidence_refs"][0]["pid"] == 412
+
+
+def test_duplicate_downgraded_network_observations_are_coalesced() -> None:
+    common = {
+        "finding_kind": "network_observation",
+        "confidence_tier": "weak",
+        "timestamp": "2026-08-11T12:00:02Z",
+        "destination_domain": "go.microsoft.com",
+        "destination_ip": "198.51.100.10",
+        "destination_port": 443,
+        "protocol": "TCP",
+        "capped_by_caveat": "network_process_not_sample",
+        "plain_language": "Network traffic was observed without attribution.",
+    }
+    events = [
+        {**common, "evidence_refs": [{"type": "host_access", "source_call_id": "a"}]},
+        {
+            **common,
+            "destination_ip": "203.0.113.20",
+            "evidence_refs": [{"type": "host_access", "source_call_id": "b"}],
+        },
+    ]
+
+    SubprocessC2Runtime._coalesce_network_observations(events)
+
+    assert len(events) == 1
+    assert events[0]["observation_count"] == 2
+    assert events[0]["observed_destination_ips"] == ["198.51.100.10", "203.0.113.20"]
+    assert {ref["source_call_id"] for ref in events[0]["evidence_refs"]} == {"a", "b"}
+
+
+def test_runtime_ioc_csv_retains_observed_event_linkage(tmp_path: Path) -> None:
+    source = tmp_path / "iocs.csv"
+    source.write_text(
+        "destination_ip,destination_port,destination_domain,confidence_tier\n"
+        ",443,client.wns.windows.com,allowlisted\n"
+        ",0,api.telegram.org,strong\n"
+    )
+    events = [
+        {
+            "event_id": "observed-event",
+            "finding_kind": "network_observation",
+            "destination_ip": "",
+            "destination_port": 443,
+            "destination_domain": "client.wns.windows.com",
+            "confidence_tier": "allowlisted",
+        },
+        {
+            "event_id": "dormant-event",
+            "finding_kind": "static_ioc",
+            "destination_ip": "",
+            "destination_port": 0,
+            "destination_domain": "api.telegram.org",
+            "confidence_tier": "strong",
+        },
+    ]
+
+    iocs = SubprocessC2Runtime._read_ioc_csv(source, events)
+
+    assert iocs[0]["source_event_id"] == "observed-event"
+    assert iocs[1]["source_event_id"] == ""

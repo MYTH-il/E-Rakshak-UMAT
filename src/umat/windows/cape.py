@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import re
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -28,6 +29,101 @@ EMAIL_PATTERN = re.compile(r"(?<![\w.-])[\w.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?!
 DOMAIN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9.-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?![A-Za-z0-9.-])"
 )
+PUBLIC_SUFFIX_LIST = Path("/usr/share/publicsuffix/effective_tld_names.dat")
+RESERVED_TEST_TLDS = frozenset({"example", "invalid", "test"})
+STATIC_FILE_SUFFIXES = frozenset(
+    {"7z", "appx", "cab", "cpl", "dll", "dmg", "exe", "gz", "iso", "jar", "msi", "ocx", "rar", "scr", "sys", "tar", "zip"}
+)
+MANAGED_NAMESPACE_PATTERN = re.compile(
+    r"^(?:\d*System(?:\.[A-Z][A-Za-z0-9_]*)+|Microsoft\.VisualBasic(?:\.[A-Z][A-Za-z0-9_]*)*|My(?:\.[A-Z][A-Za-z0-9_]*)+|MyApplication\.app)$"
+)
+
+
+@lru_cache(maxsize=1)
+def _public_tlds() -> frozenset[str]:
+    """Load ICANN top-level labels from the distro's offline PSL snapshot."""
+    try:
+        lines = PUBLIC_SUFFIX_LIST.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return RESERVED_TEST_TLDS
+    return frozenset(
+        {
+            *RESERVED_TEST_TLDS,
+            *(
+                line.lower()
+                for raw in lines
+                if (line := raw.strip())
+                and not line.startswith(("//", "!", "*."))
+                and "." not in line
+            ),
+        }
+    )
+
+
+def _credible_static_domain(domain: str, source_text: str) -> bool:
+    """Require high-confidence domain evidence from an untyped binary string."""
+    explicit_hosts = {
+        host.lower()
+        for url in URL_PATTERN.findall(source_text)
+        if (host := urlparse(url).hostname)
+    }
+    explicit_hosts.update(email.rsplit("@", 1)[1].lower() for email in EMAIL_PATTERN.findall(source_text))
+    if explicit_hosts:
+        return domain.lower() in explicit_hosts
+    suffix = domain.rsplit(".", 1)[-1].lower()
+    if suffix in STATIC_FILE_SUFFIXES or suffix not in _public_tlds():
+        return False
+    original = next(
+        (match.group(0) for match in DOMAIN_PATTERN.finditer(source_text) if match.group(0).lower() == domain.lower()),
+        domain,
+    )
+    return MANAGED_NAMESPACE_PATTERN.fullmatch(original) is None
+
+
+def _credible_static_ip(value: str, source_text: str) -> bool:
+    explicit_hosts = {
+        host
+        for url in URL_PATTERN.findall(source_text)
+        if (host := urlparse(url).hostname)
+    }
+    if value in explicit_hosts:
+        return True
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return not address.is_unspecified and not (
+        isinstance(address, ipaddress.IPv4Address) and int(address) & 0xFFFFFF == 0
+    )
+
+
+def credible_legacy_static_indicator(
+    indicator_type: str, value: str, peer_values: list[str]
+) -> bool:
+    """Validate static-string IOCs created before source-context validation existed."""
+    normalized = value.strip().lower()
+    if indicator_type == "url" or normalized.startswith(("http://", "https://")):
+        return bool(urlparse(value).hostname)
+    if indicator_type == "ip":
+        return _credible_static_ip(value, value)
+    if indicator_type != "domain" or "." not in normalized:
+        return True
+    if (
+        normalized.startswith(("system.", "microsoft.visualbasic", "my."))
+        or normalized == "myapplication.app"
+    ):
+        return False
+    if not _credible_static_domain(normalized, normalized):
+        return False
+    for peer in peer_values:
+        parsed = urlparse(peer) if peer.lower().startswith(("http://", "https://")) else None
+        if (
+            parsed
+            and normalized in parsed.path.lower()
+            and normalized != (parsed.hostname or "").lower()
+        ):
+            return False
+    return True
 
 
 def cape_package_for_sample(sample: Path) -> str:
@@ -189,11 +285,28 @@ def _static_string_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
             strings.extend(str(item) for item in _bounded_list(payload.get("strings"), 2000))
     _, candidates = _config_evidence([{"static_endpoint": item} for item in strings[:20000]])
+    retained: list[dict[str, Any]] = []
     for item in candidates:
+        provenance = _mapping(item.get("provenance"))
+        path = str(provenance.get("field_path") or "")
+        index_match = re.match(r"configs\[(\d+)]", path)
+        source_text = strings[int(index_match.group(1))] if index_match else ""
+        if item.get("type") == "domain" and not _credible_static_domain(
+            str(item.get("value") or ""), source_text
+        ):
+            continue
+        if item.get("type") == "ip" and not _credible_static_ip(
+            str(item.get("value") or ""), source_text
+        ):
+            continue
         item["source"] = "cape_static_string"
         item["confidence"] = "strong"
-        item["provenance"] = {"source": "cape_report_strings"}
-    return candidates
+        item["provenance"] = {
+            "source": "cape_report_strings",
+            "validation": "offline_public_suffix_and_source_context_v2",
+        }
+        retained.append(item)
+    return retained
 
 
 def normalize_cape_evidence(report: dict[str, Any]) -> dict[str, Any]:
@@ -211,6 +324,14 @@ def normalize_cape_evidence(report: dict[str, Any]) -> dict[str, Any]:
         ]
     config_records, config_candidates = _config_evidence(configs)
     static_candidates = _static_string_candidates(report)
+    configuration_extraction = {
+        "status": "native_extracted"
+        if config_records
+        else ("static_fallback" if static_candidates else "not_observed"),
+        "native_record_count": len(config_records),
+        "native_candidate_count": len(config_candidates),
+        "static_candidate_count": len(static_candidates),
+    }
     return {
         "schema_version": "1.0",
         # Projections below are deliberately bounded for downstream processing.
@@ -234,6 +355,7 @@ def normalize_cape_evidence(report: dict[str, Any]) -> dict[str, Any]:
             "config_records": config_records,
             "config_candidates": config_candidates,
             "static_candidates": static_candidates,
+            "configuration_extraction": configuration_extraction,
         },
         "detections": _bounded_list(report.get("detections"), 1000),
         "network": {
@@ -308,6 +430,7 @@ def cape_static_prior(
         "capabilities": techniques,
         "configuration_candidates": config_candidates,
         "extractor_records": _bounded_list(cape.get("config_records"), 1000),
+        "configuration_extraction": _mapping(cape.get("configuration_extraction")),
     }
 
 

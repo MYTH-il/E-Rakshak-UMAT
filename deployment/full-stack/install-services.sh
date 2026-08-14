@@ -138,7 +138,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/srv/winstdt/handoff /opt/umat/upstreams/winstdt/schemas
-InaccessiblePaths=/etc/umat/full-stack.env $PROJECT_ROOT/.env /var/lib/umat/artifacts /var/lib/umat/quarantine /var/lib/umat-backups
+InaccessiblePaths=/etc/umat/full-stack.env -$PROJECT_ROOT/.env /var/lib/umat/artifacts /var/lib/umat/quarantine -/var/lib/umat-backups
 ReadWritePaths=/var/lib/umat/executors/windows /var/lib/umat/windows-work
 
 [Install]
@@ -174,14 +174,14 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-InaccessiblePaths=/etc/umat/full-stack.env $PROJECT_ROOT/.env /var/lib/umat/artifacts /var/lib/umat/quarantine /var/lib/umat-backups
+InaccessiblePaths=/etc/umat/full-stack.env -$PROJECT_ROOT/.env /var/lib/umat/artifacts /var/lib/umat/quarantine -/var/lib/umat-backups
 ReadWritePaths=/var/lib/umat/executors/${executor_name} /var/lib/umat/${executor_name}-work
 
 [Install]
 WantedBy=multi-user.target
 EOF
   if [[ "$executor_name" == "c2" ]]; then
-    sed -i '/ReadWritePaths=/i ReadOnlyPaths=/srv/winstdt/libexec/c2-exfil/478f131-umat.1' "$executor_unit"
+    sed -i '/ReadWritePaths=/i ReadOnlyPaths=/srv/winstdt/libexec/c2-exfil/478f131-umat.2' "$executor_unit"
   else
     sed -i '/ReadWritePaths=/i SupplementaryGroups=kvm docker' "$executor_unit"
   fi
@@ -252,30 +252,38 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     /var/lib/umat/executors/windows /var/lib/umat/windows-work \
     /var/lib/umat/executors/c2 /var/lib/umat/c2-work \
     /var/lib/umat/executors/android /var/lib/umat/android-work
+  # Older single-host installs ran executors as the service account. Preserve
+  # their enrolled state while migrating all executor-private storage to the
+  # dedicated identity used by the hardened units.
+  sudo -n chown -R "$EXECUTOR_USER:$EXECUTOR_USER" \
+    /var/lib/umat/executors/windows /var/lib/umat/windows-work \
+    /var/lib/umat/executors/c2 /var/lib/umat/c2-work \
+    /var/lib/umat/executors/android /var/lib/umat/android-work
   executor_group="$EXECUTOR_USER"
   c2_env="$(mktemp)"
   android_env="$(mktemp)"
   egress_env="$(mktemp)"
   trap 'rm -f -- "$c2_env" "$android_env" "$egress_env"' EXIT
   egress_token=""
-  if sudo -n test -r /etc/umat/egress-broker.env; then
+  if [[ "${UMAT_ROTATE_EGRESS_BROKER_TOKEN:-0}" != "1" ]] && \
+    sudo -n test -r /etc/umat/egress-broker.env; then
     egress_token="$(sudo -n awk -F= '$1 == "UMAT_EGRESS_BROKER_TOKEN" {print substr($0, index($0, "=") + 1)}' /etc/umat/egress-broker.env)"
   fi
   [[ -n "$egress_token" ]] || egress_token="$(openssl rand -hex 32)"
+  # Windows startup and CAPE post-processing routinely exceed 100 MiB even when malware
+  # traffic is small. Keep a finite one-GiB ceiling alongside the port and rate limits.
   printf '%s\n' \
     "UMAT_EGRESS_BROKER_TOKEN=$egress_token" \
     'UMAT_EGRESS_UPLINK=wg-umat-egress' \
     'UMAT_EGRESS_DNS_RESOLVER=10.77.0.53' \
     'UMAT_EGRESS_CAPTURE_ROOT=/var/lib/umat-egress' \
-    # Windows startup and CAPE post-processing routinely exceed 100 MiB even when malware
-    # traffic is small. Keep a finite one-GiB ceiling alongside the port and rate limits.
     'UMAT_EGRESS_MAX_BYTES=1073741824' >"$egress_env"
   sudo -n install -o root -g root -m 0600 "$egress_env" /etc/umat/egress-broker.env
   printf '%s\n' \
     'UMAT_EXECUTOR_URL=http://127.0.0.1:8080' \
     'UMAT_C2_STATE_PATH=/var/lib/umat/executors/c2/state.json' \
     'UMAT_C2_WORK_ROOT=/var/lib/umat/c2-work' \
-    'UMAT_C2_RUNTIME_ROOT=/srv/winstdt/libexec/c2-exfil/478f131-umat.1' \
+    'UMAT_C2_RUNTIME_ROOT=/srv/winstdt/libexec/c2-exfil/478f131-umat.2' \
     'UMAT_C2_EXECUTOR_NAME=c2-executor' >"$c2_env"
   mobsf_api_key="$(sudo -n awk -F= '$1 == "MOBSF_API_KEY" {print substr($0, index($0, "=") + 1)}' "$ENV_FILE")"
   [[ -n "$mobsf_api_key" ]] || { echo 'MOBSF_API_KEY is missing' >&2; exit 1; }
@@ -309,7 +317,21 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   fi
   mkdir -p "$PROJECT_ROOT/var"
   sudo -n systemctl daemon-reload
-  sudo -n systemctl enable --now umat-guest-guard umat-egress-broker umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway umat-android-api-relay
+  core_units=(
+    umat-guest-guard umat-egress-broker umat-api umat-scheduler
+    umat-report-worker umat-adapter-worker umat-cape-gateway umat-android-api-relay
+  )
+  # An installer rerun is also an application upgrade. Restart existing
+  # processes so reporting, capture, and configuration-fallback changes do not
+  # remain hidden behind stale in-memory code.
+  sudo -n systemctl enable "${core_units[@]}"
+  sudo -n systemctl restart "${core_units[@]}"
+  executor_units=(umat-windows-executor umat-c2-executor umat-android-executor)
+  for executor_unit in "${executor_units[@]}"; do
+    if sudo -n systemctl is-enabled --quiet "$executor_unit.service"; then
+      sudo -n systemctl restart "$executor_unit.service"
+    fi
+  done
   if sudo -n test -f /var/lib/libvirt/images/umat-android-worker/umat-android-worker-golden.qcow2; then
     sudo -n systemctl enable --now umat-android-worker-controller.service
   fi

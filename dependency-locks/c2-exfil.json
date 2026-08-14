@@ -2,10 +2,10 @@
   "schema_version": "1.0",
   "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
   "commit": "478f131de510ad580754f152d946086b3aeacf05",
-  "effective_version": "478f131-umat.1",
+  "effective_version": "478f131-umat.2",
   "upstream_tree_sha256": "792c340721cc75dfc9b43a5bba4908be22071b75bd99f2871e9bd85d52407c28",
-  "effective_tree_sha256": "792c340721cc75dfc9b43a5bba4908be22071b75bd99f2871e9bd85d52407c28",
-  "patch_series_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "effective_tree_sha256": "0fa3e0a81129a1ac53066a2f4f4a746f0cdba135f6868f950d16555950f8b6a3",
+  "patch_series_sha256": "410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199",
   "dependency_lock_sha256": "18d8e1acfd170b8f8c321aa3737b465ea4f19d28bcefd9534f5b6becb6e1ea6d",
   "schema_reference": {
     "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
@@ -29,8 +29,8 @@
   "validation": {
     "status": "upstream_478f131_runtime_validated",
     "validated_at": "2026-08-11",
-    "upstream_tests_collected": 349,
-    "upstream_tests_passed": 334,
+    "upstream_tests_collected": 350,
+    "upstream_tests_passed": 335,
     "upstream_tests_skipped": 15,
     "upstream_tests_deselected_missing_corpus": 0,
     "included_upstream_commits": [
@@ -46,12 +46,12 @@
     "android_pcap_only": "UMAT network-only runtime retained with host correlation disabled",
     "windows_handoff_acceptance": {
       "cape_task_id": 10,
-      "runtime_identity": "c2-exfil@478f131-umat.1",
+      "runtime_identity": "c2-exfil@478f131-umat.2",
       "native_events": 9,
       "normalized_events": 9,
       "correlation_mode": "host_network",
       "bundle_contract_valid": true
     },
-    "windows_compatibility": "UMAT passes the analysis run as --case-id and maps the current WinST handoff, access events, sample identity, and static-prior formats into the unchanged upstream schema-v1.3 CLI. The promoted runtime retains normalized Windows handoff paths and simulated destinations while adding shared-hosting feed suppression, parent-aware DNS-tunnel deduplication, domain/IP-safe HTTP destination typing, and bounded-memory capture hashing; live malware acceptance remains required before retiring the prior rollback runtime."
+    "windows_compatibility": "UMAT passes the analysis run as --case-id and maps the current WinST handoff, access events, sample identity, and static-prior formats into the unchanged upstream schema-v1.3 CLI. The promoted runtime retains normalized Windows handoff paths and simulated destinations while adding universal GeoLite2 projection for every IP-bearing event, shared-hosting feed suppression, parent-aware DNS-tunnel deduplication, domain/IP-safe HTTP destination typing, and bounded-memory capture hashing."
   }
 }

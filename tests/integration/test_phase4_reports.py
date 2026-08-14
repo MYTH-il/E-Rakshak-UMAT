@@ -258,7 +258,7 @@ async def test_unified_report_rbac_exports_and_terminal_workflow(tmp_path) -> No
                 actor="network",
                 description="Outbound TLS connection observed.",
                 mitre_technique_id="T1071",
-                details={},
+                details={"confidence_tier": "strong"},
             )
         )
         await db.commit()
@@ -326,6 +326,7 @@ async def test_unified_report_rbac_exports_and_terminal_workflow(tmp_path) -> No
         detail = await analyst_client.get(f"/api/v1/cases/{case_id}")
         assert detail.status_code == 200
         assert detail.json()["report"]["technical"]["findings"]
+        assert detail.json()["report"]["technical"]["timeline"][0]["confidence"] == "strong"
         assert len(detail.json()["report"]["artifacts"]) >= 2
 
     async with session_factory() as db:

@@ -86,3 +86,26 @@ def test_large_evidence_collections_use_search_and_pagination() -> None:
     assert "filtered.slice(start, start + pageSize)" in javascript
     assert ".data-pagination" in css
     assert "overflow-wrap: anywhere" in css
+
+
+def test_administrator_console_exposes_user_and_role_management() -> None:
+    javascript = (ROOT / "src/umat/web/static/app.js").read_text()
+    administration = (ROOT / "src/umat/web/static/administration.js").read_text()
+    assert 'navItem("Users & roles", "/admin/users"' in javascript
+    assert "async function renderUsersAdmin()" in javascript
+    assert 'button("Create user"' in javascript
+    assert 'button("Delete user"' in javascript
+    assert "/api/v1/admin/users" in administration
+
+
+def test_unified_timeline_displays_confidence() -> None:
+    javascript = (ROOT / "src/umat/web/static/app.js").read_text()
+    assert '["Time", "Actor", "Event", "Confidence", "MITRE"]' in javascript
+    assert "human(item.confidence)" in javascript
+    assert "CAPE's family parser returned no record" in javascript
+
+
+def test_ioc_table_sorts_by_confidence_with_allowlisted_last() -> None:
+    javascript = (ROOT / "src/umat/web/static/app.js").read_text()
+    assert "confidenceRank(b.confidence) - confidenceRank(a.confidence)" in javascript
+    assert "allowlisted: 0" in javascript

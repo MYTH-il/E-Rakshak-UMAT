@@ -1,7 +1,7 @@
 "use strict";
 
 import { configureApi, api } from "./api.js";
-import { loadWorkers, updateAndroidProfile, updateWindowsProfile } from "./administration.js";
+import { createUser, deleteUser, loadUsers, loadWorkers, revokeUserSessions, updateAndroidProfile, updateUser, updateWindowsProfile } from "./administration.js";
 import { loadAndroidCommand, loadAndroidWorkflow, submitAndroidCommand } from "./android.js";
 import { addCaseSubmission, queryRecentRuns, retryAnalysisRun, updateCaseMetadata } from "./cases.js";
 import { createReportExport, loadRunReport } from "./reports.js";
@@ -135,6 +135,7 @@ function shell(title, content) {
   if (canSubmit()) sidebar.append(navItem("New analysis", "/submit", path === "/submit"));
   if (state.session.roles.includes("administrator")) {
     sidebar.append(node("div", "nav-label", "Administration"));
+    sidebar.append(navItem("Users & roles", "/admin/users", path === "/admin/users"));
     sidebar.append(navItem("Windows profiles", "/admin/windows", path === "/admin/windows"));
     sidebar.append(navItem("Android profiles", "/admin/android", path === "/admin/android"));
     sidebar.append(navItem("Workers", "/admin/workers", path === "/admin/workers"));
@@ -757,6 +758,19 @@ function platformPanel(details, platform) {
   });
   if (details.telemetry_degraded) facts.append(node("li", "data-item", "Host telemetry was incomplete for this run."));
   if (details.dynamic_completed === false) facts.append(node("li", "data-item", "Dynamic analysis did not complete."));
+  if (details.configuration_extraction) {
+    const extraction = details.configuration_extraction;
+    const primary = extraction.status === "native_extracted"
+      ? `${extraction.native_record_count} native configuration record${extraction.native_record_count === 1 ? "" : "s"}`
+      : extraction.status === "static_fallback"
+        ? `${extraction.static_candidate_count} static configuration candidate${extraction.static_candidate_count === 1 ? "" : "s"}`
+        : "No malware configuration extracted";
+    const secondary = extraction.status === "static_fallback"
+      ? "CAPE's family parser returned no record; candidates were recovered from immutable binary strings."
+      : "CAPE malware configuration extraction";
+    const row = node("li", "data-item"); const copy = node("div");
+    append(copy, node("strong", "", primary), node("small", "", secondary)); row.append(copy); facts.append(row);
+  }
   if (facts.childElementCount) card.append(facts);
 
   const summary = details.evidence_summary;
@@ -865,13 +879,18 @@ function renderFindings(content, report) {
   paintFindings();
 
   content.append(node("h3", "section-title", "Indicators of compromise"));
-  content.append(dataExplorer(["Type", "Value", "Confidence", "Source", "Traffic"], technical.iocs,
+  const indicators = [...(technical.iocs || [])].sort((a, b) =>
+    confidenceRank(b.confidence) - confidenceRank(a.confidence)
+      || Number(Boolean(b.seen_in_traffic)) - Number(Boolean(a.seen_in_traffic))
+      || String(a.value || "").localeCompare(String(b.value || ""))
+      || String(a.source || "").localeCompare(String(b.source || "")));
+  content.append(dataExplorer(["Type", "Value", "Confidence", "Source", "Traffic"], indicators,
     (item) => [item.type, item.value, human(item.confidence), item.source, item.seen_in_traffic ? "Observed" : "Static"],
     "Search indicators"));
   content.append(node("h3", "section-title", "Unified timeline"));
   if (technical.timeline?.length) {
-    content.append(dataExplorer(["Time", "Actor", "Event", "MITRE"], technical.timeline,
-      (item) => [formatDate(item.occurred_at), item.actor, item.description, item.mitre_technique_id || "—"],
+    content.append(dataExplorer(["Time", "Actor", "Event", "Confidence", "MITRE"], technical.timeline,
+      (item) => [formatDate(item.occurred_at), item.actor, item.description, human(item.confidence), item.mitre_technique_id || "—"],
       "Search timeline events"));
   } else {
     content.append(node("div", "card empty",
@@ -888,6 +907,10 @@ function severityOf(item) {
 
 function severityRank(item) {
   return { high: 4, medium: 3, low: 2, informational: 1, unrated: 0 }[severityOf(item)] ?? 0;
+}
+
+function confidenceRank(value) {
+  return { confirmed: 5, strong: 4, weak: 3, unconfirmed: 2, unrated: 1, allowlisted: 0 }[String(value || "unrated").toLowerCase()] ?? 1;
 }
 
 function table(headers, rows, mapper) {
@@ -1367,6 +1390,85 @@ async function renderWorkersAdmin() {
   } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }
 }
 
+function roleControls(roles, selected, prefix) {
+  const group = node("fieldset", "role-picker");
+  group.append(node("legend", "", "Roles"));
+  const inputs = {};
+  roles.forEach((role) => {
+    const label = node("label", "checkbox-field compact");
+    const input = node("input");
+    input.type = "checkbox"; input.value = role; input.checked = selected.includes(role);
+    input.id = `${prefix}-${role}`; inputs[role] = input;
+    append(label, input, node("span", "", human(role))); group.append(label);
+  });
+  return { group, inputs };
+}
+
+function selectedRoles(inputs) {
+  return Object.entries(inputs).filter(([, input]) => input.checked).map(([role]) => role);
+}
+
+async function renderUsersAdmin() {
+  if (!isAdmin()) { go("/cases"); return; }
+  const content = node("div");
+  content.append(pageHead("Access control", "Users & roles", "Create accounts, assign RBAC roles, reset credentials, revoke sessions, and retire access. All changes are written to the audit chain.", null));
+  const create = node("section", "card card-body"); create.append(node("h3", "card-title", "Create user"));
+  const form = node("form"); const grid = node("div", "field-grid");
+  const username = field("Username", "text", "new_username", true); username.input.autocomplete = "off";
+  const password = field("Temporary password", "password", "new_password", true); password.input.minLength = 8; password.input.autocomplete = "new-password";
+  const createRoles = roleControls(["officer", "analyst", "administrator"], ["officer"], "create-role");
+  append(grid, username.wrap, password.wrap, createRoles.group); form.append(grid);
+  const submit = button("Create user", "btn btn-primary"); submit.type = "submit"; form.append(append(node("div", "form-actions"), submit)); create.append(form);
+  content.append(create, node("h3", "section-title", "User accounts"));
+  const list = node("div", "user-list"); content.append(list); shell("Users & roles", content);
+
+  async function load() {
+    const inventory = await loadUsers(); list.replaceChildren();
+    if (!inventory.items.length) list.append(node("div", "card empty", "No user accounts exist."));
+    inventory.items.forEach((item) => {
+      const ownAccount = item.id === state.session.user_id;
+      const card = node("section", "card card-body user-card");
+      const head = node("div", "user-card-head"); const identity = node("div");
+      append(identity, node("h3", "", item.username), node("small", "muted mono", `Created ${formatDate(item.created_at)} · ${item.active_sessions} active session${item.active_sessions === 1 ? "" : "s"}`));
+      const badges = node("div", "user-badges"); item.roles.forEach((role) => badges.append(badge(role))); badges.append(badge(item.enabled ? "active" : "disabled"));
+      append(head, identity, badges); card.append(head);
+
+      const editor = node("details", "user-editor"); editor.append(node("summary", "", "Edit account"));
+      const editForm = node("form"); const editGrid = node("div", "field-grid");
+      const editName = field("Username", "text", `username-${item.id}`, true); editName.input.value = item.username;
+      const editPassword = field("New password (leave blank to keep)", "password", `password-${item.id}`); editPassword.input.minLength = 8; editPassword.input.autocomplete = "new-password";
+      const editRoles = roleControls(inventory.roles, item.roles, `role-${item.id}`);
+      const enabledLabel = node("label", "checkbox-field account-enabled"); const enabled = node("input"); enabled.type = "checkbox"; enabled.checked = item.enabled; enabled.disabled = ownAccount;
+      append(enabledLabel, enabled, node("span", "", "Account enabled")); append(editGrid, editName.wrap, editPassword.wrap, editRoles.group, enabledLabel); editForm.append(editGrid);
+      if (ownAccount && editRoles.inputs.administrator) editRoles.inputs.administrator.disabled = true;
+      const save = button("Save changes", "btn btn-primary btn-small"); save.type = "submit";
+      const revoke = button("Revoke sessions", "btn btn-small"); revoke.disabled = ownAccount || item.active_sessions === 0;
+      revoke.addEventListener("click", async () => { if (!window.confirm(`Revoke all active sessions for ${item.username}?`)) return; try { const result = await revokeUserSessions(item.id); toast(`${result.sessions_revoked} session${result.sessions_revoked === 1 ? "" : "s"} revoked.`); load(); } catch (failure) { toast(failure.message, true); } });
+      const remove = button("Delete user", "btn btn-danger btn-small"); remove.disabled = ownAccount;
+      remove.title = ownAccount ? "You cannot delete the account you are using" : "Delete an unused account";
+      remove.addEventListener("click", async () => { if (!window.confirm(`Permanently delete ${item.username}? Users attached to retained case or audit records must be disabled instead.`)) return; try { await deleteUser(item.id); toast("User deleted."); load(); } catch (failure) { toast(failure.message, true); } });
+      editForm.append(append(node("div", "form-actions"), save, revoke, remove));
+      editForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const roles = selectedRoles(editRoles.inputs); if (!roles.length) { toast("Select at least one role.", true); return; }
+        const body = { username: editName.input.value, roles, enabled: enabled.checked };
+        if (editPassword.input.value) body.password = editPassword.input.value;
+        save.disabled = true;
+        try { const updated = await updateUser(item.id, body); if (ownAccount) { state.session.username = updated.username; state.session.roles = updated.roles; } toast("User account updated."); await load(); }
+        catch (failure) { toast(failure.message, true); } finally { save.disabled = false; }
+      });
+      editor.append(editForm); card.append(editor); list.append(card);
+    });
+  }
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); const roles = selectedRoles(createRoles.inputs); if (!roles.length) { toast("Select at least one role.", true); return; }
+    submit.disabled = true;
+    try { await createUser({ username: username.input.value, password: password.input.value, roles }); toast("User created."); form.reset(); createRoles.inputs.officer.checked = true; await load(); }
+    catch (failure) { toast(failure.message, true); } finally { submit.disabled = false; }
+  });
+  try { await load(); } catch (failure) { list.append(node("div", "notice notice-error", failure.message)); }
+}
+
 async function renderWindowsAdmin() {
   if (!state.session.roles.includes("administrator")) { go("/cases"); return; }
   const content = node("div");
@@ -1449,6 +1551,7 @@ async function renderRoute() {
   if (path === "/" || path === "/cases") return renderCases();
   if (path === "/runs") return renderRecentRuns();
   if (path === "/submit") return renderSubmit();
+  if (path === "/admin/users") return renderUsersAdmin();
   if (path === "/admin/workers") return renderWorkersAdmin();
   if (path === "/admin/windows") return renderWindowsAdmin();
   if (path === "/admin/android") return renderAndroidAdmin();

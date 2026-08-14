@@ -388,7 +388,7 @@ def run(
     runtime_root: Path | None = typer.Option(None, envvar="UMAT_C2_RUNTIME_ROOT"),
     runtime_commit: str = typer.Option("478f131de510ad580754f152d946086b3aeacf05"),
     runtime_patch_sha256: str = typer.Option(
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199"
     ),
     runtime_timeout_seconds: int = typer.Option(1800, min=1),
     max_result_bytes: int = typer.Option(1024 * 1024 * 1024, min=1),

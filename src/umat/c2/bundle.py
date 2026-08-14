@@ -250,7 +250,12 @@ class ResultBundleBuilder:
                 "type": "domain" if event.get("destination_domain") else "ip",
                 "value": event.get("destination_domain") or event.get("destination_ip"),
                 "confidence": event["confidence_tier"],
-                "source_event_id": event["event_id"],
+                "source_event_id": (
+                    event["event_id"]
+                    if event.get("finding_kind") != "static_ioc"
+                    or "contacted on network" in str(event.get("static_match") or "")
+                    else ""
+                ),
             }
             for event in events
             if event.get("destination_domain") or event.get("destination_ip")

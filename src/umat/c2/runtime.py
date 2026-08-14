@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 from umat.c2.models import C2AnalysisContext, NativeC2Result
 from umat.executors.protocol import ExecutorStopRequested
+from umat.windows.cape import credible_legacy_static_indicator
 
 
 class C2RuntimeError(RuntimeError):
@@ -232,6 +233,8 @@ class SubprocessC2Runtime:
             self._correct_unclassified_egress(events)
             self._enrich_access_context(context, events)
             self._corroborate_etw_network(context, events)
+            self._corroborate_etw_dns(context, events)
+            self._coalesce_network_observations(events)
         if context.platform == "android" and context.network_activity:
             events.extend(self._proxy_network_events(context))
         return NativeC2Result(
@@ -239,7 +242,7 @@ class SubprocessC2Runtime:
             attribution=self._json_list(output / "attribution.json"),
             provenance=self._json_list(output / "provenance.json"),
             timeline=self._json_list(output / "timeline.json"),
-            iocs=self._read_ioc_csv(output / "iocs.csv"),
+            iocs=self._read_ioc_csv(output / "iocs.csv", events),
             notes=self._notes(output / "analysis_notes.json"),
             runtime_identity=self.identity,
             tool_versions={"python": sys.version.split()[0], "c2_commit": self.expected_commit},
@@ -399,7 +402,7 @@ class SubprocessC2Runtime:
             and isinstance(item.get("payload"), dict)
             and item.get("timestamp")
         ]
-        protected_kinds = {"static_ioc", "reputation", "covert_channel", "dns"}
+        protected_kinds = {"static_ioc", "dns"}
         for event in events:
             destination_ip = str(event.get("destination_ip") or "")
             destination_port = int(event.get("destination_port") or 0)
@@ -468,10 +471,133 @@ class SubprocessC2Runtime:
             )
             destination = event.get("destination_domain") or destination_ip
             event["plain_language"] = (
-                f"Network traffic to {destination} was observed"
+                (
+                    f"Network traffic to {destination} matched threat-intelligence evidence"
+                    if event.get("reputation_source")
+                    else f"Network traffic to {destination} was observed"
+                )
                 + (f" from {process}" if process else " without sample-process attribution")
                 + "; it is not attributed to this sample's C2 or exfiltration behavior."
             )
+
+    @staticmethod
+    def _corroborate_etw_dns(
+        context: C2AnalysisContext, events: list[dict[str, Any]]
+    ) -> None:
+        """Prevent host DNS-client activity from being attributed to the sample."""
+        source = context.etw_events
+        if source is None:
+            return
+        try:
+            document = json.loads(source.local_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(document, dict) or document.get("schema_version") != "1.0":
+            return
+        raw_events = document.get("events")
+        if not isinstance(raw_events, list):
+            return
+        dns_events = [
+            item
+            for item in raw_events
+            if isinstance(item, dict)
+            and item.get("provider") == "Microsoft-Windows-DNS-Client"
+            and isinstance(item.get("payload"), dict)
+            and str(item["payload"].get("QueryType") or "").lower() in {"query", "response"}
+        ]
+        for event in events:
+            if event.get("finding_kind") != "dns" or not event.get("destination_domain"):
+                continue
+            domain = str(event["destination_domain"]).rstrip(".").lower()
+            matches = [
+                item
+                for item in dns_events
+                if str(item["payload"].get("QueryName") or "").rstrip(".").lower() == domain
+            ]
+            if not matches or any(item.get("sample_lineage") for item in matches):
+                continue
+            item = matches[0]
+            event.setdefault("evidence_refs", []).append(
+                {
+                    "type": "etw_dns",
+                    "artifact_id": str(source.artifact_id),
+                    "sha256": source.sha256,
+                    "provider": item["provider"],
+                    "pid": item.get("process_id") or item["payload"].get("ProcessId"),
+                    "process": item.get("process"),
+                    "process_path": item.get("process_path"),
+                    "sample_lineage": False,
+                    "query_name": item["payload"].get("QueryName"),
+                }
+            )
+            event["finding_kind"] = "network_observation"
+            if event.get("confidence_tier") != "allowlisted":
+                event["confidence_tier"] = "weak"
+            event["mitre_technique_id"] = None
+            event["capped_by_caveat"] = "network_process_not_sample"
+            event["plain_language"] = (
+                f"A DNS lookup for {event['destination_domain']} was observed from a non-sample "
+                "process; it is not attributed to this sample's C2 behavior."
+            )
+
+    @staticmethod
+    def _coalesce_network_observations(events: list[dict[str, Any]]) -> None:
+        """Collapse duplicate neutral observations without discarding their evidence.
+
+        The upstream analyzer can emit several host-access correlations for one
+        packet observation. When ETW disproves sample-process attribution, those
+        correlations all become the same neutral observation. Retain every
+        supporting reference on one event instead of presenting duplicate rows.
+        """
+        retained: list[dict[str, Any]] = []
+        observations: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for event in events:
+            if event.get("finding_kind") != "network_observation":
+                retained.append(event)
+                continue
+            key = (
+                event.get("timestamp"),
+                event.get("destination_domain") or event.get("destination_ip"),
+                event.get("destination_port"),
+                event.get("protocol"),
+                event.get("capped_by_caveat"),
+                event.get("plain_language"),
+            )
+            existing = observations.get(key)
+            if existing is None:
+                event["observation_count"] = int(event.get("observation_count") or 1)
+                observations[key] = event
+                retained.append(event)
+                continue
+            existing["observation_count"] = int(existing.get("observation_count") or 1) + int(
+                event.get("observation_count") or 1
+            )
+            destination_ips = {
+                str(value)
+                for value in [
+                    *(existing.get("observed_destination_ips") or []),
+                    existing.get("destination_ip"),
+                    event.get("destination_ip"),
+                ]
+                if value
+            }
+            if len(destination_ips) > 1:
+                existing["observed_destination_ips"] = sorted(destination_ips)
+            refs = existing.setdefault("evidence_refs", [])
+            known = {
+                canonical
+                for ref in refs
+                if isinstance(ref, dict)
+                and (canonical := json.dumps(ref, sort_keys=True, separators=(",", ":")))
+            }
+            for ref in event.get("evidence_refs") or []:
+                if not isinstance(ref, dict):
+                    continue
+                canonical = json.dumps(ref, sort_keys=True, separators=(",", ":"))
+                if canonical not in known:
+                    refs.append(ref)
+                    known.add(canonical)
+        events[:] = retained
 
     @staticmethod
     def _proxy_network_events(context: C2AnalysisContext) -> list[dict[str, Any]]:
@@ -562,6 +688,18 @@ class SubprocessC2Runtime:
                     if isinstance(item, dict)
                     and item.get("evidence_origin", "binary_static") == "binary_static"
                 ]
+        peer_values = [
+            str(item.get("value") or "") for item in indicators if isinstance(item, dict)
+        ]
+        indicators = [
+            item
+            for item in indicators
+            if not isinstance(item, dict)
+            or item.get("source") != "cape_static_string"
+            or credible_legacy_static_indicator(
+                str(item.get("type") or "unknown"), str(item.get("value") or ""), peer_values
+            )
+        ]
         normalized = {
             "sample_sha256": context.sample_sha256,
             "family": family,
@@ -591,7 +729,7 @@ class SubprocessC2Runtime:
         return value
 
     @staticmethod
-    def _read_ioc_csv(path: Path) -> list[dict[str, Any]]:
+    def _read_ioc_csv(path: Path, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not path.is_file():
             return []
         import csv
@@ -602,12 +740,35 @@ class SubprocessC2Runtime:
                 domain, address = row.get("destination_domain"), row.get("destination_ip")
                 value = domain or address
                 if value:
+                    matched = next(
+                        (
+                            event
+                            for event in events
+                            if str(event.get("destination_domain") or "") == str(domain or "")
+                            and str(event.get("destination_ip") or "") == str(address or "")
+                            and int(event.get("destination_port") or 0)
+                            == int(row.get("destination_port") or 0)
+                        ),
+                        None,
+                    )
+                    observed = bool(
+                        matched
+                        and (
+                            matched.get("finding_kind") != "static_ioc"
+                            or "contacted on network" in str(matched.get("static_match") or "")
+                        )
+                    )
                     normalized.append(
                         {
                             "type": "domain" if domain else "ip",
                             "value": value,
-                            "confidence": row.get("confidence_tier") or "unconfirmed",
-                            "source_event_id": "",
+                            "confidence": (
+                                matched.get("confidence_tier")
+                                if matched
+                                else row.get("confidence_tier")
+                            )
+                            or "unconfirmed",
+                            "source_event_id": str(matched.get("event_id")) if observed else "",
                         }
                     )
         return normalized

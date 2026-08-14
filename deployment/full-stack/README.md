@@ -75,6 +75,12 @@ check succeed. `--skip-runtime-acceptance`, `--skip-executor-enrollment`, and
 9. Run status and harmless acceptance gates. A partial installation remains resumable and is not
    reported as healthy.
 
+Installer reruns restart the installed UMAT services so updated aggregation, capture validation,
+and configuration-fallback code is loaded immediately. The services component installs
+`/usr/bin/tcpdump`, and the egress broker refuses to start unless that exact capture binary is
+executable. CAPE integration verifies the tracked guest-retry patch digest before applying it and
+restarts CAPE's core, web, and processor services after configuration.
+
 The installer downloads three explicitly pinned source checkouts under `/opt/umat/upstreams`:
 WinST/DT, Android/MobSF, and C2. WinST/DT's own verified scripts remain responsible for CAPE,
 VMCloak, the licensed Windows baseline, snapshot creation, and the effective C2 compatibility

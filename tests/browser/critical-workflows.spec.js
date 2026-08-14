@@ -86,6 +86,7 @@ test("officer, analyst, and administrator controls are role-appropriate", async 
   await page.getByRole("link", { name: /Browser report selection/ }).click();
   await expect(page.getByRole("button", { name: "L2 Findings" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Run this sample again" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Users & roles" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Windows profiles" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Sign out" }).click();
@@ -98,6 +99,7 @@ test("officer, analyst, and administrator controls are role-appropriate", async 
 
   await page.getByRole("button", { name: "Sign out" }).click();
   await login(page, "administrator");
+  await expect(page.getByRole("link", { name: "Users & roles" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Windows profiles" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Android profiles" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Workers" })).toBeVisible();

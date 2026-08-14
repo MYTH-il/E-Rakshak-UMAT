@@ -67,6 +67,8 @@ def test_lease_heartbeat_refreshes_fail_closed(
 
     def capture_process(command: list[str], **kwargs: Any) -> Capture:
         capture_commands.append(command)
+        capture_path = Path(command[command.index("-w") + 1])
+        capture_path.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\0" * 21)
         return Capture()
 
     monkeypatch.setattr(subprocess, "Popen", capture_process)
@@ -87,16 +89,79 @@ def test_lease_heartbeat_refreshes_fail_closed(
         guest_ip="10.66.0.101",
     )
     manager.acquire(request)
-    assert capture_commands[0][5:12] == [
+    assert capture_commands[0][:13] == [
+        "/usr/bin/tcpdump",
+        "-Z",
+        "root",
+        "-s",
+        "0",
+        "-U",
+        "-nn",
+        "-i",
+        "virbr-winstdt",
+        "-w",
+        str(tmp_path / f"{request.analysis_run_id}.pcap"),
         "host",
         "10.66.0.101",
-        "and",
-        "not",
-        "host",
-        "10.66.0.1",
-        "-w",
     ]
     manager.heartbeat(request.analysis_run_id)
     manager.revoke(request.analysis_run_id)
     operations = [command[0] for command in commands]
     assert operations == ["add", "delete", "add", "delete"]
+
+
+def test_capture_is_not_authorized_until_tcpdump_opens_valid_pcap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = EgressManager("wg-umat-egress", "10.77.0.53", tmp_path)
+    monkeypatch.setattr(
+        manager,
+        "readiness",
+        lambda: Readiness(
+            status="ready",
+            uplink="wg-umat-egress",
+            dns_resolver="10.77.0.53",
+            checks={"fixture": True},
+        ),
+    )
+    original_is_dir = Path.is_dir
+    monkeypatch.setattr(
+        Path,
+        "is_dir",
+        lambda path: True if str(path).startswith("/sys/class/net/") else original_is_dir(path),
+    )
+
+    class FailedCapture:
+        pid = 12345
+
+        def poll(self) -> int:
+            return 1
+
+    def failed_capture(command: list[str], **kwargs: Any) -> FailedCapture:
+        del command
+        kwargs["stderr"].write(b"tcpdump: permission denied\n")
+        kwargs["stderr"].flush()
+        return FailedCapture()
+
+    monkeypatch.setattr(subprocess, "Popen", failed_capture)
+    nft_calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        manager,
+        "_nft",
+        lambda *args, **kwargs: nft_calls.append(args),
+    )
+    request = LeaseRequest(
+        analysis_run_id="0198fd40-1111-7000-8000-000000000005",
+        platform="android",
+        guest_ip="172.31.0.2",
+    )
+    with pytest.raises(RuntimeError, match="permission denied"):
+        manager.acquire(request)
+    assert nft_calls == []
+
+
+def test_header_only_capture_is_rejected_as_missing_packet_evidence(tmp_path: Path) -> None:
+    capture = tmp_path / "empty.pcap"
+    capture.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\0" * 20)
+    with pytest.raises(RuntimeError, match="no complete packets"):
+        EgressManager._finalize_capture(capture)

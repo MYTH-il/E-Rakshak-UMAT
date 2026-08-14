@@ -240,6 +240,20 @@ potential indicators and must receive the same access control and retention trea
 evidence. The UMAT host also DNATs guest DNS to this address, so a sample cannot select a different
 resolver while its lease is active.
 
+Because Unbound binds to the WireGuard-only address, order it after the tunnel and require the
+tunnel unit. Without this dependency, a cold boot can start Unbound before `10.77.0.53` exists and
+leave recording DNS unavailable even though WireGuard later becomes healthy:
+
+```ini
+# /etc/systemd/system/unbound.service.d/umat-wireguard-ordering.conf
+[Unit]
+Requires=wg-quick@wg0.service
+After=wg-quick@wg0.service
+```
+
+Apply the drop-in with `sudo systemctl daemon-reload`, restart Unbound, and verify both services are
+active. Include a DNS query through `10.77.0.53` in every cold-boot qualification.
+
 ## 5. Configure the UMAT workstation peer
 
 Install WireGuard tools and create `/etc/wireguard/wg-umat-egress.conf` with root-only permissions:
@@ -320,6 +334,7 @@ closed. From the workstation:
 sudo wg show wg-umat-egress
 ip route show table 51820 default
 ip rule show | grep 'lookup 51820'
+dig +time=5 +tries=1 @10.77.0.53 example.com A +short
 curl -fsS http://127.0.0.1:8092/health/ready
 sudo nft list sets ip umat_guest_guard
 uv run umat-deploy status

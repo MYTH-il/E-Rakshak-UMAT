@@ -3,10 +3,12 @@ set -euo pipefail
 
 readonly COMMIT="478f131de510ad580754f152d946086b3aeacf05"
 readonly TREE_SHA256="792c340721cc75dfc9b43a5bba4908be22071b75bd99f2871e9bd85d52407c28"
-readonly EFFECTIVE_VERSION="478f131-umat.1"
+readonly EFFECTIVE_VERSION="478f131-umat.2"
+readonly EFFECTIVE_TREE_SHA256="0fa3e0a81129a1ac53066a2f4f4a746f0cdba135f6868f950d16555950f8b6a3"
 readonly DEPENDENCY_LOCK_SHA256="18d8e1acfd170b8f8c321aa3737b465ea4f19d28bcefd9534f5b6becb6e1ea6d"
-readonly EMPTY_PATCH_SERIES_SHA256="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+readonly PATCH_SERIES_SHA256="410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199"
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly PATCH_FILE="$PROJECT_ROOT/deployment/c2/patches/0001-universal-geolite-event-enrichment.patch"
 readonly CHECKOUT="${UMAT_C2_CHECKOUT:-/opt/umat/upstreams/c2-exfil}"
 readonly WINSTDT_CHECKOUT="${UMAT_WINSTDT_CHECKOUT:-/opt/umat/upstreams/winstdt}"
 readonly RUNTIME_ROOT="${UMAT_C2_RUNTIME_PARENT:-/srv/winstdt/libexec/c2-exfil}"
@@ -27,9 +29,15 @@ observed_commit="$(git -c safe.directory="$CHECKOUT" -C "$CHECKOUT" rev-parse HE
   exit 1
 }
 [[ -f "$DEPENDENCY_LOCK" ]] || { echo "C2 dependency lock is unavailable" >&2; exit 1; }
+[[ -f "$PATCH_FILE" ]] || { echo "C2 deployment patch is unavailable" >&2; exit 1; }
 observed_dependency="$(sha256sum "$DEPENDENCY_LOCK" | awk '{print $1}')"
 [[ "$observed_dependency" == "$DEPENDENCY_LOCK_SHA256" ]] || {
   echo "C2 dependency lock digest mismatch" >&2
+  exit 1
+}
+observed_patch="$(sha256sum "$PATCH_FILE" | awk '{print $1}')"
+[[ "$observed_patch" == "$PATCH_SERIES_SHA256" ]] || {
+  echo "C2 deployment patch digest mismatch" >&2
   exit 1
 }
 
@@ -67,13 +75,32 @@ print(hashlib.sha256("".join(lines).encode()).hexdigest())
 PY
 )"
 [[ "$observed_tree" == "$TREE_SHA256" ]] || { echo "C2 source tree digest mismatch" >&2; exit 1; }
+sudo patch --batch --forward -d "$stage/source" -p1 < "$PATCH_FILE"
+observed_effective_tree="$(sudo "$PROJECT_ROOT/.venv/bin/python" - "$stage/source" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+lines = []
+for path in sorted(root.rglob("*")):
+    if not path.is_file() or "__pycache__" in path.parts or ".pytest_cache" in path.parts:
+        continue
+    lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}\n")
+print(hashlib.sha256("".join(lines).encode()).hexdigest())
+PY
+)"
+[[ "$observed_effective_tree" == "$EFFECTIVE_TREE_SHA256" ]] || {
+  echo "C2 effective source tree digest mismatch" >&2
+  exit 1
+}
 
 sudo python3 -m venv "$stage/.venv"
 sudo "$stage/.venv/bin/pip" install --disable-pip-version-check --require-hashes \
   -r "$DEPENDENCY_LOCK"
 result="$(mktemp)"
 (cd "$stage/source" && sudo "$stage/.venv/bin/pytest" -q) | tee "$result"
-grep -Eq '334 passed, 15 skipped' "$result" || {
+grep -Eq '335 passed, 15 skipped' "$result" || {
   echo "unexpected C2 upstream test result" >&2
   exit 1
 }
@@ -93,12 +120,12 @@ Path("$manifest").write_text(json.dumps({
     "upstream_commit": "$COMMIT",
     "effective_version": "$EFFECTIVE_VERSION",
     "upstream_tree_sha256": "$TREE_SHA256",
-    "patch_series_sha256": "$EMPTY_PATCH_SERIES_SHA256",
-    "effective_tree_sha256": "$TREE_SHA256",
+    "patch_series_sha256": "$PATCH_SERIES_SHA256",
+    "effective_tree_sha256": "$EFFECTIVE_TREE_SHA256",
     "dependency_lock_sha256": "$DEPENDENCY_LOCK_SHA256",
     "validated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    "upstream_tests_collected": 349,
-    "upstream_tests_passed": 334,
+    "upstream_tests_collected": 350,
+    "upstream_tests_passed": 335,
     "upstream_tests_skipped": 15,
     "upstream_tests_deselected_missing_corpus": 0,
 }, indent=2) + "\n")

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     c2_work_root: Path = Path("var/c2-work")
     c2_runtime_commit: str = "478f131de510ad580754f152d946086b3aeacf05"
     c2_runtime_patch_sha256: str = (
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199"
     )
     c2_runtime_timeout_seconds: int = 1800
     c2_max_result_bytes: int = 1024 * 1024 * 1024

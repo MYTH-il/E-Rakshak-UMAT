@@ -13,10 +13,13 @@ set -a
 source "$env_file"
 set +a
 
-units=(umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway)
+units=(umat-api umat-scheduler umat-report-worker umat-adapter-worker umat-cape-gateway umat-egress-broker)
 for unit in "${units[@]}"; do
   systemctl is-active --quiet "$unit.service"
 done
+test -x /usr/bin/tcpdump
+test -s /usr/share/publicsuffix/effective_tld_names.dat
+systemctl show --property=ExecStartPre --value umat-egress-broker.service | grep -q '/usr/bin/test -x /usr/bin/tcpdump'
 curl --fail --silent --show-error http://127.0.0.1:8080/health/ready >/dev/null
 curl --fail --silent --show-error http://127.0.0.1:8080/metrics | grep -q umat_process_uptime_seconds
 "$project_root/.venv/bin/umat" admin verify-audit

@@ -35,6 +35,9 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
         == (winstdt["deployment_patch_series"]["patch_series_sha256"])
     )
     assert components["cape"]["commit"] == winstdt["cape"]["commit"]
+    cape_patch = components["cape"]["integration_patch"]
+    cape_patch_path = ROOT / cape_patch["path"]
+    assert hashlib.sha256(cape_patch_path.read_bytes()).hexdigest() == cape_patch["sha256"]
     assert components["android"]["commit"] == android["commit"]
     assert components["android"]["repository"] == android["repository"]
     assert components["android"]["tree_sha256"] == android["tree_sha256"]
@@ -77,6 +80,12 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
     assert components["c2"]["effective_tree_sha256"] == c2["effective_tree_sha256"]
     assert components["c2"]["dependency_lock_sha256"] == c2["dependency_lock_sha256"]
     assert components["c2"]["patch_series_sha256"] == c2["patch_series_sha256"]
+    c2_patch_digest = hashlib.sha256()
+    c2_patches = sorted((ROOT / "deployment/c2/patches").glob("*.patch"))
+    assert c2_patches
+    for patch_path in c2_patches:
+        c2_patch_digest.update(patch_path.read_bytes())
+    assert c2_patch_digest.hexdigest() == c2["patch_series_sha256"]
     assert components["umat_postgres"]["image"] == (
         f"{postgres['image']}@{postgres['image_digest']}"
     )
@@ -252,10 +261,43 @@ def test_windows_executor_service_has_isolated_credentials_and_storage() -> None
     assert "EnvironmentFile=/etc/umat/windows-executor.env" in installer
     assert "EnvironmentFile=$ENV_FILE" not in installer.split("windows_unit=", 1)[1]
     assert "ReadOnlyPaths=/srv/winstdt/handoff" in installer
+    assert "-$PROJECT_ROOT/.env" in installer
+    assert 'chown -R "$EXECUTOR_USER:$EXECUTOR_USER"' in installer
     assert "UMAT_DATABASE_URL" not in enrollment
     assert "--token-file" in enrollment
     cape_integration = (ROOT / "deployment/full-stack/configure-cape-integration.sh").read_text()
     assert 'chmod 0755 "$CAPE_ROOT/data/7zz"' in cape_integration
+    assert "refusing to replace missing or empty CAPE reporting configuration" in cape_integration
+    assert 'cp --preserve=mode,ownership "$reporting_config"' in cape_integration
+    assert "generated CAPE reporting configuration did not validate" in cape_integration
+    assert "qualify CAPE AgentTesla parser with a bounded decoded-string fixture" in cape_integration
+    assert "CAPE AgentTesla parser qualification passed" in cape_integration
+    assert "cape-guest-analyzer-retry.patch" in cape_integration
+    retry_patch = (
+        ROOT / "deployment/full-stack/patches/cape-guest-analyzer-retry.patch"
+    ).read_text()
+    assert "Transient CAPE Agent analyzer extraction failed" in retry_patch
+    assert "retrying once after snapshot settle" in retry_patch
+    assert "CAPE integration patch digest mismatch" in cape_integration
+    assert "systemctl restart cape.service" in cape_integration
+
+
+def test_service_installer_refreshes_runtime_and_requires_tcpdump() -> None:
+    bootstrap = (ROOT / "install.sh").read_text()
+    deployment_cli = (ROOT / "src/umat/deployment/cli.py").read_text()
+    installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
+    egress_unit = (ROOT / "deployment/full-stack/umat-egress-broker.service").read_text()
+    acceptance = (ROOT / "deployment/full-stack/phase6-acceptance.sh").read_text()
+
+    assert "patch publicsuffix python3.12 python3.12-venv tcpdump" in bootstrap
+    assert '"apt-get", "install", "-y", "publicsuffix", "tcpdump"' in deployment_cli
+    assert 'systemctl restart "${core_units[@]}"' in installer
+    assert 'systemctl restart "$executor_unit.service"' in installer
+    assert "UMAT_ROTATE_EGRESS_BROKER_TOKEN" in installer
+    assert "ExecStartPre=/usr/bin/test -x /usr/bin/tcpdump" in egress_unit
+    assert "umat-egress-broker" in acceptance
+    assert "test -x /usr/bin/tcpdump" in acceptance
+    assert "test -s /usr/share/publicsuffix/effective_tld_names.dat" in acceptance
 
 
 def test_clean_host_installer_is_dry_run_by_default() -> None:
@@ -291,6 +333,7 @@ def test_c2_installers_enforce_every_locked_runtime_identity_field() -> None:
         c2["patch_series_sha256"],
     ):
         assert value in runtime_installer
+    assert c2["patch_series_sha256"] in (ROOT / "src/umat/c2/executor.py").read_text()
     assert c2["effective_version"] in service_installer
     validation = c2["validation"]
     expected_result = (
@@ -320,7 +363,7 @@ def test_executor_units_use_separate_identity_and_hide_control_plane_evidence() 
     assert 'EXECUTOR_USER="${UMAT_EXECUTOR_USER:-umat-executor}"' in installer
     assert "User=$EXECUTOR_USER" in installer
     assert "InaccessiblePaths=/etc/umat/full-stack.env" in installer
-    assert "/var/lib/umat/artifacts /var/lib/umat/quarantine /var/lib/umat-backups" in installer
+    assert "/var/lib/umat/artifacts /var/lib/umat/quarantine -/var/lib/umat-backups" in installer
     firewall = (ROOT / "deployment/full-stack/umat-host-firewall.nft").read_text()
     assert 'meta skuid "umat-executor" tcp dport 55432 reject' in firewall
     assert "umat-c2-executor.service.d/c2-data.conf" in installer
@@ -359,7 +402,8 @@ def test_guest_firewall_is_installed_and_fail_closed() -> None:
     installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
     rules = (ROOT / "deployment/full-stack/umat-guest-guard.nft").read_text()
     unit = (ROOT / "deployment/full-stack/umat-guest-guard.service").read_text()
-    assert "enable --now umat-guest-guard" in installer
+    assert "umat-guest-guard umat-egress-broker" in installer
+    assert 'systemctl restart "${core_units[@]}"' in installer
     assert 'iifname "virbr-winstdt" drop' in rules
     assert "ip saddr 10.66.0.101 tcp sport 8000 accept" in rules
     assert 'iifname "br-umat-android" drop' in rules

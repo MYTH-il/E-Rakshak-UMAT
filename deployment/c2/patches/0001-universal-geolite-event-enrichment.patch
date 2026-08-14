@@ -1,0 +1,100 @@
+diff --git a/pipeline/attribution.py b/pipeline/attribution.py
+index 8a95c26..77ceb28 100644
+--- a/pipeline/attribution.py
++++ b/pipeline/attribution.py
+@@ -130,6 +130,25 @@ def attribute(ip: str, ja3_hash: str | None = None,
+         reputation_hit=hit, reputation_source=source, reputation_note=note)
+ 
+ 
++def enrich_geo_fields(event: dict) -> None:
++    """Fill missing GeoLite2 fields on any event carrying a destination IP.
++
++    Detectors remain responsible for their behavioural and reputation fields,
++    but they must not each reimplement GeoIP projection. Existing non-empty
++    values are authoritative and are never overwritten.
++    """
++    ip = event.get("dst_ip")
++    fields = ("geo_country", "asn", "asn_org")
++    if not isinstance(ip, str) or not ip or all(event.get(field) for field in fields):
++        return
++    result = attribute(ip, ja3_hash=event.get("ja3_hash"), ja4=event.get("ja4"))
++    for field in fields:
++        if not event.get(field):
++            value = getattr(result, field)
++            if value:
++                event[field] = value
++
++
+ def _registered_domain(domain: str) -> str:
+     labels = domain.lower().rstrip(".").split(".")
+     return ".".join(labels[-2:]) if len(labels) >= 2 else domain.lower()
+diff --git a/pipeline/orchestrator.py b/pipeline/orchestrator.py
+index 6e3986c..6781d14 100644
+--- a/pipeline/orchestrator.py
++++ b/pipeline/orchestrator.py
+@@ -30,7 +30,7 @@ from zeek_ingest import load_bundle
+ from traffic_analysis import (detect_beaconing, detect_exfil, detect_ftp_exfil,
+                               detect_unclassified_egress,
+                               network_confidence_tier, _is_private_ip)
+-from attribution import attribute, init_threatintel_db
++from attribution import attribute, enrich_geo_fields, init_threatintel_db
+ from correlation import correlate
+ from etw_ingest import load_etw_events, assess_clock_sync, IngestReport
+ 
+@@ -429,6 +429,13 @@ def build_network_events(pcap_path: str, zeek_dir: str | None = None,
+                 e["confidence_tier"] = "confirmed"
+                 e["reputation_note"] = f"domain intel: {note or source}"
+ 
++    # GeoLite2 applies to every destination IP, not only the detector paths
++    # that needed a full reputation object while constructing their event.
++    # Centralizing this pass prevents valid public destinations from reaching
++    # the report with blank country and network-owner fields.
++    for e in events:
++        enrich_geo_fields(e)
++
+     # --- attribution context enrichment ---
+     # Ensure every reputation-hit finding carries the human-meaningful "who"
+     # (source + note, e.g. "Redline Stealer C2") and asn_org — not just a 0/1
+diff --git a/tests/test_attribution.py b/tests/test_attribution.py
+index 26f6441..4938675 100644
+--- a/tests/test_attribution.py
++++ b/tests/test_attribution.py
+@@ -12,8 +12,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "pipeline"))
+ 
+ from pipeline.attribution import (
+-    attribute, init_threatintel_db, _reputation_lookup, Attribution,
++    attribute, enrich_geo_fields, init_threatintel_db, _reputation_lookup, Attribution,
+ )
++import pipeline.attribution as attribution_module
+ 
+ 
+ class TestReputationHit:
+@@ -109,3 +110,27 @@ class TestGeoGracefulDegradation:
+         assert a.geo_country is None
+         assert a.asn is None
+         assert a.reputation_hit is True   # reputation still works
++
++    def test_event_enrichment_fills_missing_geo_without_overwriting(self, monkeypatch):
++        monkeypatch.setattr(
++            attribution_module,
++            "_geo_lookup",
++            lambda ip: ("US", "AS15169", "Google LLC"),
++        )
++        monkeypatch.setattr(
++            attribution_module,
++            "_reputation_lookup",
++            lambda ip, path: (False, None, None),
++        )
++        event = {
++            "dst_ip": "8.8.8.8",
++            "geo_country": None,
++            "asn": "AS-EXISTING",
++            "asn_org": None,
++        }
++
++        enrich_geo_fields(event)
++
++        assert event["geo_country"] == "US"
++        assert event["asn"] == "AS-EXISTING"
++        assert event["asn_org"] == "Google LLC"

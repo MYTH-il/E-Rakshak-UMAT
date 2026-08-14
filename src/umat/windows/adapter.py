@@ -210,7 +210,15 @@ class WindowsAdapter:
                 profile_snapshot=manifest["selected_profile"],
                 network_mode=handoff.get("network_mode"),
                 telemetry_degraded=bool((handoff.get("telemetry") or {}).get("telemetry_degraded")),
-                details={"handoff": handoff, "report_info": report.get("info", {})},
+                details={
+                    "handoff": handoff,
+                    "report_info": report.get("info", {}),
+                    "configuration_extraction": (
+                        (cape_evidence.get("cape") or {}).get("configuration_extraction")
+                        if isinstance(cape_evidence.get("cape"), dict)
+                        else None
+                    ),
+                },
             )
         )
         self._findings(db, adaptation.id, run.id, cape_evidence or report, sample_meta)

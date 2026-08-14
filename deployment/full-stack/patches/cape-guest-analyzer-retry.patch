@@ -1,0 +1,30 @@
+--- a/lib/cuckoo/core/guest.py
++++ b/lib/cuckoo/core/guest.py
+@@ -211,7 +211,26 @@
+         data = {
+             "dirpath": self.analyzer_path,
+         }
+-        self.post("/extract", files={"zipfile": zip_data}, data=data)
++        try:
++            self.post("/extract", files={"zipfile": zip_data}, data=data)
++        except requests.HTTPError as exc:
++            status_code = exc.response.status_code if exc.response is not None else None
++            if status_code not in {500, 503}:
++                raise
++            response_text = exc.response.text[:1000] if exc.response is not None else ""
++            log.warning(
++                "Task #%s: Transient CAPE Agent analyzer extraction failed "
++                "with HTTP %s; retrying once after snapshot settle: %s",
++                self.task_id,
++                status_code,
++                response_text,
++            )
++            time.sleep(5)
++            # Use a fresh directory so a partially extracted first attempt
++            # can never contaminate the bounded retry.
++            self.determine_analyzer_path()
++            data["dirpath"] = self.analyzer_path
++            self.post("/extract", files={"zipfile": zip_data}, data=data)
+ 
+     def add_config(self, options):
+         """Upload the analysis.conf for this task to the Virtual Machine."""

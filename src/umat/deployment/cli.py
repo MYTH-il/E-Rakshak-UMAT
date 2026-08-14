@@ -262,7 +262,9 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         ("UMAT_CAPE_MANAGEMENT_URL", "http://127.0.0.1:8091"),
         ("UMAT_QUARANTINE_ROOT", "/var/lib/umat/quarantine"),
         ("UMAT_ARTIFACT_ROOT", "/var/lib/umat/artifacts"),
-        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/478f131-umat.1"),
+        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/478f131-umat.2"),
+        ("UMAT_GEOLITE2_CITY_DB", "/srv/winstdt/c2-data/GeoLite2-City.mmdb"),
+        ("UMAT_GEOLITE2_ASN_DB", "/srv/winstdt/c2-data/GeoLite2-ASN.mmdb"),
         ("UMAT_WINSTDT_SCHEMA_ROOT", "/opt/umat/upstreams/winstdt/schemas"),
     ]
     additions = [f"{key}={value}" for key, value in values if key not in present]
@@ -596,6 +598,15 @@ def install(
             )
 
     if "services" in selected:
+        # Static fallback IOC validation uses the distro's offline public suffix
+        # snapshot. The fail-closed egress broker invokes distro tcpdump at the
+        # fixed /usr/bin/tcpdump path and validates its PCAP before opening a
+        # network lease. Install it here too because umat-deploy may be run
+        # without the clean-host bootstrap.
+        runner.run(
+            [command("sudo"), "-n", "apt-get", "install", "-y", "publicsuffix", "tcpdump"],
+            cwd=PROJECT_ROOT,
+        )
         service_script = PROJECT_ROOT / "deployment/full-stack/install-services.sh"
         arguments = [str(service_script), "--project-root", str(PROJECT_ROOT)]
         if execute:

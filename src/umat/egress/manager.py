@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+from umat.capture import pcap_has_complete_packet, wait_for_pcap_writer
 from umat.egress.schemas import LeaseRequest, LeaseResult, Readiness
 
 WINDOWS_NETWORK = ipaddress.ip_network("10.66.0.0/24")
@@ -19,6 +20,7 @@ ANDROID_NETWORK = ipaddress.ip_network("172.31.0.0/24")
 INTERFACES = {"windows": "virbr-winstdt", "android": "br-umat-egress"}
 GATEWAYS = {"windows": "10.66.0.1", "android": "172.31.0.1"}
 SETS = {"windows": "windows_egress_v4", "android": "android_egress_v4"}
+TCPDUMP = "/usr/bin/tcpdump"
 
 
 @dataclass
@@ -59,7 +61,7 @@ class EgressManager:
     def readiness(self) -> Readiness:
         checks = {
             "nft": shutil.which("nft") is not None,
-            "tcpdump": shutil.which("tcpdump") is not None,
+            "tcpdump": Path(TCPDUMP).is_file() and os.access(TCPDUMP, os.X_OK),
             "uplink_present": Path(f"/sys/class/net/{self.uplink}").is_dir(),
             "uplink_up": self._interface_up(self.uplink),
             "recent_wireguard_handshake": self._recent_wireguard_handshake(),
@@ -90,27 +92,36 @@ class EgressManager:
         with self._lock:
             self._revoke_unlocked(request.analysis_run_id)
             capture_path = self.capture_root / f"{request.analysis_run_id}.pcap"
-            capture = subprocess.Popen(  # noqa: S603
-                [
-                    "/usr/bin/tcpdump",
-                    "-U",
-                    "-n",
-                    "-i",
-                    interface,
-                    "host",
-                    str(request.guest_ip),
-                    "and",
-                    "not",
-                    "host",
-                    GATEWAYS[request.platform],
-                    "-w",
-                    str(capture_path),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            capture_log = self.capture_root / f"{request.analysis_run_id}.tcpdump.log"
+            capture_path.unlink(missing_ok=True)
+            capture_log.unlink(missing_ok=True)
+            with capture_log.open("ab") as diagnostic:
+                capture = subprocess.Popen(  # noqa: S603
+                    [
+                        TCPDUMP,
+                        "-Z",
+                        "root",
+                        "-s",
+                        "0",
+                        "-U",
+                        "-nn",
+                        "-i",
+                        interface,
+                        "-w",
+                        str(capture_path),
+                        "host",
+                        str(request.guest_ip),
+                        "and",
+                        "not",
+                        "host",
+                        GATEWAYS[request.platform],
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=diagnostic,
+                    start_new_session=True,
+                )
             try:
+                wait_for_pcap_writer(capture, capture_path, capture_log)
                 self._nft(
                     "add",
                     "element",
@@ -211,6 +222,8 @@ class EgressManager:
         # tcpdump drops privileges and changes the savefile to its own account.
         # Return completed evidence to the broker service group so executors can
         # ingest it without making the capture world-readable.
+        if not pcap_has_complete_packet(path):
+            raise RuntimeError("mandatory egress capture contains no complete packets")
         os.chown(path, os.geteuid(), os.getegid())
         path.chmod(0o640)
 

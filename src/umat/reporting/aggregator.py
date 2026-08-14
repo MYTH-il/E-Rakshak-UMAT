@@ -36,6 +36,8 @@ from umat.db.models import (
     WindowsCapability,
     WindowsFinding,
 )
+from umat.geolocation import lookup_ip
+from umat.windows.cape import credible_legacy_static_indicator
 
 SCHEMA_VERSION = "1.1"
 CONFIDENCE_RANK = {"allowlisted": 0, "unconfirmed": 1, "weak": 2, "strong": 3, "confirmed": 4}
@@ -97,6 +99,23 @@ def _confidence(value: str) -> int:
     return CONFIDENCE_RANK.get(value, 1)
 
 
+def _c2_lacks_sample_process(item: C2Finding) -> bool:
+    if item.finding_kind == "static_ioc":
+        return False
+    if item.capped_by_caveat in {"network_process_not_sample", "network_process_unattributed"}:
+        return True
+    refs = item.details.get("evidence_refs") if isinstance(item.details, dict) else []
+    return item.finding_kind == "dns" and not any(
+        isinstance(ref, dict) and ref.get("sample_lineage") is True for ref in refs or []
+    )
+
+
+def _effective_c2_confidence(item: C2Finding) -> str:
+    if not _c2_lacks_sample_process(item) or item.confidence == "allowlisted":
+        return item.confidence
+    return "weak"
+
+
 def filter_report_for_roles(report: dict[str, Any], roles: frozenset[str]) -> dict[str, Any]:
     """Return a role-safe copy of a report snapshot."""
     filtered = dict(report)
@@ -152,6 +171,37 @@ class CaseAggregator:
         observations = await self._rows(db, NetworkObservation, adaptation_ids)
         exfil_events = await self._rows(db, ExfilEvent, adaptation_ids)
         iocs = await self._rows(db, StaticIOC, adaptation_ids)
+        ioc_values = [item.value for item in iocs]
+        report_iocs = [
+            item
+            for item in iocs
+            if credible_legacy_static_indicator(item.ioc_type, item.value, ioc_values)
+        ]
+        observed_ioc_values = {
+            (
+                "domain" if item.details.get("destination_domain") else "ip",
+                str(item.details.get("destination_domain") or item.details.get("destination_ip")),
+            )
+            for item in c2_findings
+            if isinstance(item.details, dict)
+            and (item.details.get("destination_domain") or item.details.get("destination_ip"))
+            and (
+                item.finding_kind != "static_ioc"
+                or "contacted on network" in str(item.details.get("static_match") or "")
+            )
+        }
+        c2_ioc_confidence: dict[tuple[str, str], str] = {}
+        for item in c2_findings:
+            if not isinstance(item.details, dict):
+                continue
+            value = item.details.get("destination_domain") or item.details.get("destination_ip")
+            if not value:
+                continue
+            key = ("domain" if item.details.get("destination_domain") else "ip", str(value))
+            effective = _effective_c2_confidence(item)
+            if _confidence(effective) > _confidence(c2_ioc_confidence.get(key, "unconfirmed")):
+                c2_ioc_confidence[key] = effective
+        projected_iocs = self._iocs(report_iocs, observed_ioc_values, c2_ioc_confidence)
         provenance = await self._rows(db, ProvenanceLink, adaptation_ids)
         timeline = await self._rows(db, TimelineEvent, adaptation_ids)
         attribution = await self._rows(db, AttributionResult, adaptation_ids)
@@ -260,25 +310,8 @@ class CaseAggregator:
             "technical": {
                 "findings": finding_items,
                 "access_events": access_events,
-                "iocs": [
-                    {
-                        "type": item.ioc_type,
-                        "value": item.value,
-                        "confidence": item.confidence,
-                        "source": item.source,
-                        "seen_in_traffic": item.seen_in_traffic,
-                    }
-                    for item in iocs
-                ],
-                "timeline": [
-                    {
-                        "occurred_at": _iso(item.occurred_at),
-                        "actor": item.actor,
-                        "description": item.description,
-                        "mitre_technique_id": item.mitre_technique_id,
-                    }
-                    for item in sorted(timeline, key=lambda row: row.occurred_at)
-                ],
+                "iocs": projected_iocs,
+                "timeline": self._timeline(timeline),
                 "attribution": [
                     {
                         "family": item.family,
@@ -326,6 +359,87 @@ class CaseAggregator:
         db.add(snapshot)
         await db.flush()
         return snapshot
+
+    @staticmethod
+    def _timeline(events: list[TimelineEvent]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        static_prefix = "C2 in binary, not observed on network: "
+        static_values = [
+            item.description.removeprefix(static_prefix)
+            for item in events
+            if item.description.startswith(static_prefix)
+        ]
+        for item in sorted(events, key=lambda row: row.occurred_at):
+            if item.description.startswith(static_prefix):
+                value = item.description.removeprefix(static_prefix)
+                indicator_type = (
+                    "url"
+                    if value.lower().startswith(("http://", "https://"))
+                    else "ip"
+                    if not any(character.isalpha() for character in value)
+                    else "domain"
+                )
+                if not credible_legacy_static_indicator(indicator_type, value, static_values):
+                    continue
+            details = item.details if isinstance(item.details, dict) else {}
+            confidence = str(
+                details.get("tier")
+                or details.get("confidence_tier")
+                or details.get("confidence")
+                or "unconfirmed"
+            )
+            if confidence not in CONFIDENCE_RANK:
+                confidence = "unconfirmed"
+            rows.append(
+                {
+                    "occurred_at": _iso(item.occurred_at),
+                    "actor": item.actor,
+                    "description": item.description,
+                    "confidence": confidence,
+                    "mitre_technique_id": item.mitre_technique_id,
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _iocs(
+        iocs: list[StaticIOC],
+        observed_values: set[tuple[str, str]] | None = None,
+        confidence_overrides: dict[tuple[str, str], str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Project one canonical IOC row per value/source with honest origin."""
+        observed_values = observed_values or set()
+        confidence_overrides = confidence_overrides or {}
+        grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for item in iocs:
+            key = (item.ioc_type, item.value, item.source)
+            item_confidence = confidence_overrides.get(
+                (item.ioc_type, item.value), item.confidence
+            )
+            existing = grouped.get(key)
+            if existing is None:
+                grouped[key] = {
+                    "type": item.ioc_type,
+                    "value": item.value,
+                    "confidence": item_confidence,
+                    "source": item.source,
+                    "seen_in_traffic": bool(
+                        item.seen_in_traffic or (item.ioc_type, item.value) in observed_values
+                    ),
+                }
+                continue
+            if _confidence(item_confidence) > _confidence(str(existing["confidence"])):
+                existing["confidence"] = item_confidence
+            existing["seen_in_traffic"] = bool(existing["seen_in_traffic"] or item.seen_in_traffic)
+        return sorted(
+            grouped.values(),
+            key=lambda item: (
+                -_confidence(str(item["confidence"])),
+                not bool(item["seen_in_traffic"]),
+                str(item["value"]),
+                str(item["source"]),
+            ),
+        )
 
     @staticmethod
     async def _rows(db: AsyncSession, model: type[Any], adaptation_ids: list[UUID]) -> list[Any]:
@@ -376,6 +490,11 @@ class CaseAggregator:
             if artifact.stage_id:
                 artifact_map.setdefault(artifact.stage_id, []).append(str(artifact.id))
         findings: list[dict[str, Any]] = []
+        static_values = [
+            str(item.details.get("destination_domain") or item.details.get("destination_ip") or "")
+            for item in c2_findings
+            if item.finding_kind == "static_ioc" and isinstance(item.details, dict)
+        ]
         for item in windows_findings:
             adaptation = adaptation_map[item.adaptation_id]
             findings.append(
@@ -440,12 +559,41 @@ class CaseAggregator:
                 }
             )
         for c2_item in c2_findings:
+            if c2_item.finding_kind == "static_ioc":
+                value = str(
+                    c2_item.details.get("destination_domain")
+                    or c2_item.details.get("destination_ip")
+                    or ""
+                )
+                indicator_type = (
+                    "url"
+                    if value.lower().startswith(("http://", "https://"))
+                    else "ip"
+                    if c2_item.details.get("destination_ip")
+                    else "domain"
+                )
+                if not credible_legacy_static_indicator(indicator_type, value, static_values):
+                    continue
             android_network_only = run.platform == Platform.ANDROID and c2_item.finding_kind in {
                 "correlation",
                 "exfil",
             }
             details = dict(c2_item.details)
             summary = c2_item.plain_language
+            finding_kind = c2_item.finding_kind
+            confidence = _effective_c2_confidence(c2_item)
+            mitre_technique_id = c2_item.details.get("mitre_technique_id")
+            caveat = c2_item.capped_by_caveat
+            if _c2_lacks_sample_process(c2_item):
+                finding_kind = "network_observation"
+                mitre_technique_id = None
+                caveat = caveat or "network_process_unattributed"
+                destination = details.get("destination_domain") or details.get("destination_ip")
+                summary = (
+                    f"Network activity involving {destination or 'an unidentified destination'} "
+                    "was observed without sample-process attribution; it is not attributed to "
+                    "this sample's C2 or exfiltration behavior."
+                )
             if c2_item.finding_kind == "correlation":
                 summary, details = CaseAggregator._restore_access_object(
                     summary, details, access_events
@@ -457,12 +605,12 @@ class CaseAggregator:
                     "stage_id": str(c2_item.stage_id),
                     "platform": c2_item.platform.value,
                     "source": "c2",
-                    "kind": c2_item.finding_kind,
+                    "kind": finding_kind,
                     "category": "network",
-                    "confidence": c2_item.confidence,
+                    "confidence": confidence,
                     "evidence_level": (
                         "correlated"
-                        if c2_item.finding_kind == "correlation" and not android_network_only
+                        if finding_kind == "correlation" and not android_network_only
                         else "observed"
                     ),
                     "summary": (
@@ -471,15 +619,91 @@ class CaseAggregator:
                         else summary
                     ),
                     "details": details,
-                    "mitre_technique_ids": _unique([c2_item.details.get("mitre_technique_id")]),
-                    "security_mappings": _unique([c2_item.details.get("mitre_technique_id")]),
+                    "mitre_technique_ids": _unique([mitre_technique_id]),
+                    "security_mappings": _unique([mitre_technique_id]),
                     "evidence_artifact_ids": artifact_map.get(c2_item.stage_id, []),
-                    "caveats": _unique([c2_item.capped_by_caveat]),
+                    "caveats": _unique([caveat]),
                 }
             )
+        findings = CaseAggregator._coalesce_network_findings(findings)
         return sorted(
             findings, key=lambda item: (-_confidence(str(item["confidence"])), str(item["kind"]))
         )
+
+    @staticmethod
+    def _coalesce_network_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Coalesce legacy duplicate neutral rows while preserving provenance."""
+        retained: list[dict[str, Any]] = []
+        observations: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for finding in findings:
+            details = finding.get("details")
+            if (
+                finding.get("source") != "c2"
+                or finding.get("kind") != "network_observation"
+                or not isinstance(details, dict)
+            ):
+                retained.append(finding)
+                continue
+            key = (
+                finding.get("stage_id"),
+                details.get("timestamp"),
+                details.get("destination_domain") or details.get("destination_ip"),
+                details.get("destination_port"),
+                details.get("protocol"),
+                tuple(finding.get("caveats") or []),
+                finding.get("summary"),
+            )
+            existing = observations.get(key)
+            if existing is None:
+                details["observation_count"] = int(details.get("observation_count") or 1)
+                details["source_finding_ids"] = _unique(
+                    [*(details.get("source_finding_ids") or []), finding.get("finding_id")]
+                )
+                observations[key] = finding
+                retained.append(finding)
+                continue
+            existing_details = existing["details"]
+            existing_details["observation_count"] = int(
+                existing_details.get("observation_count") or 1
+            ) + int(details.get("observation_count") or 1)
+            destination_ips = {
+                str(value)
+                for value in [
+                    *(existing_details.get("observed_destination_ips") or []),
+                    existing_details.get("destination_ip"),
+                    details.get("destination_ip"),
+                ]
+                if value
+            }
+            if len(destination_ips) > 1:
+                existing_details["observed_destination_ips"] = sorted(destination_ips)
+            existing_details["source_finding_ids"] = _unique(
+                [
+                    *(existing_details.get("source_finding_ids") or []),
+                    *(details.get("source_finding_ids") or []),
+                    finding.get("finding_id"),
+                ]
+            )
+            refs = existing_details.setdefault("evidence_refs", [])
+            known = {
+                canonical_json(ref)
+                for ref in refs
+                if isinstance(ref, dict)
+            }
+            for ref in details.get("evidence_refs") or []:
+                if not isinstance(ref, dict):
+                    continue
+                canonical = canonical_json(ref)
+                if canonical not in known:
+                    refs.append(ref)
+                    known.add(canonical)
+            existing["evidence_artifact_ids"] = _unique(
+                [
+                    *(existing.get("evidence_artifact_ids") or []),
+                    *(finding.get("evidence_artifact_ids") or []),
+                ]
+            )
+        return retained
 
     @staticmethod
     def _restore_access_object(
@@ -667,12 +891,27 @@ class CaseAggregator:
         destination seen several times may only carry attribution on one of them.
         """
         grouped: dict[tuple[str, int | None], dict[str, Any]] = {}
+        static_values = [
+            str(item.destination_domain or item.destination_ip or "")
+            for item in observations
+            if isinstance(item.details, dict) and item.details.get("finding_kind") == "static_ioc"
+        ]
         for item in observations:
             value = item.destination_domain or item.destination_ip
             if not value:
                 continue
-            key = (value, item.destination_port)
             detail = item.details if isinstance(item.details, dict) else {}
+            if detail.get("finding_kind") == "static_ioc":
+                indicator_type = (
+                    "url"
+                    if value.lower().startswith(("http://", "https://"))
+                    else "ip"
+                    if item.destination_ip
+                    else "domain"
+                )
+                if not credible_legacy_static_indicator(indicator_type, value, static_values):
+                    continue
+            key = (value, item.destination_port)
             existing = grouped.get(key)
             if existing is None:
                 existing = {
@@ -704,6 +943,13 @@ class CaseAggregator:
                 if current is None or score > current:
                     existing["reputation_score"] = float(score)
         for entry in grouped.values():
+            if entry["ip"] and not all(
+                entry[field] for field in ("geo_country", "asn", "asn_org")
+            ):
+                country, asn, organization = lookup_ip(str(entry["ip"]))
+                entry["geo_country"] = entry["geo_country"] or country
+                entry["asn"] = entry["asn"] or asn
+                entry["asn_org"] = entry["asn_org"] or organization
             # A destination is "known bad" only on an independent intel hit, not
             # on behaviour. Behaviour is already carried by the finding tier.
             entry["known_bad"] = bool(entry["reputation_score"]) and entry["reputation_score"] > 0
@@ -909,7 +1155,13 @@ class CaseAggregator:
                 "telemetry_degraded": windows.telemetry_degraded,
             }
             extra = windows.details if isinstance(windows.details, dict) else {}
-            for key in ("malscore", "process_tree", "dropped_files", "cape_package_detected"):
+            for key in (
+                "malscore",
+                "process_tree",
+                "dropped_files",
+                "cape_package_detected",
+                "configuration_extraction",
+            ):
                 if extra.get(key) is not None:
                     detail[key] = extra[key]
         elif android:
