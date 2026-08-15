@@ -20,6 +20,7 @@ import typer
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from umat.android.access_events import AndroidAccessEventCollector
 from umat.android.avd import AvdManager
 from umat.android.bundle import ANDROID_COMMIT, MOBSF_VERSION, AndroidBundleBuilder, sha256_file
 from umat.android.mobsf import MobSFClient
@@ -55,6 +56,7 @@ class AndroidExecutor:
         stimulation_actions: int,
         mobsf_container: str = "android-mobsf-1",
         egress: EgressClient | None = None,
+        egress_guest_ip: str | None = None,
         mitmproxy_image: str = MITMPROXY_IMAGE,
     ) -> None:
         self.client = httpx.Client(base_url=umat_url.rstrip("/"), timeout=120)
@@ -71,6 +73,7 @@ class AndroidExecutor:
         )
         self.mobsf_container = mobsf_container
         self.egress = egress
+        self.egress_guest_ip = egress_guest_ip
         self.mitmproxy_image = mitmproxy_image
         self._egress_active_run: str | None = None
         self.state: dict[str, Any] = (
@@ -183,17 +186,24 @@ class AndroidExecutor:
                     raise RuntimeError("claimed Android sample is not a structurally valid APK")
                 recovered = claim.get("recovered_native_task")
                 if recovered:
-                    scan_hash = str(
+                    expected_scan_hash = str(
                         (recovered.get("recovery_metadata") or {}).get("scan_hash")
                         or recovered["native_task_id"]
                     )
                 else:
-                    uploaded = self.mobsf.upload(sample)
-                    scan_hash = str(uploaded.get("hash") or uploaded.get("scan_hash") or "")
-                    if len(scan_hash) != 32 or any(
-                        char not in "0123456789abcdefABCDEF" for char in scan_hash
-                    ):
-                        raise RuntimeError("MobSF upload returned an invalid scan hash")
+                    expected_scan_hash = ""
+                # A disposable worker reset also resets MobSF's upload volume.
+                # Re-upload on recovery so a persisted backend task never waits
+                # for a report that vanished with the previous worker overlay.
+                uploaded = self.mobsf.upload(sample)
+                scan_hash = str(uploaded.get("hash") or uploaded.get("scan_hash") or "")
+                if len(scan_hash) != 32 or any(
+                    char not in "0123456789abcdefABCDEF" for char in scan_hash
+                ):
+                    raise RuntimeError("MobSF upload returned an invalid scan hash")
+                if expected_scan_hash and scan_hash.lower() != expected_scan_hash.lower():
+                    raise RuntimeError("recovered MobSF scan hash does not match the sample")
+                if not recovered:
                     native = common | {
                         "task_type": "mobsf_scan",
                         # A MobSF hash identifies content, not one execution.
@@ -212,7 +222,7 @@ class AndroidExecutor:
                         claim["lease_token"],
                     ).raise_for_status()
                 outcome, detail = self._analyze_with_heartbeats(
-                    claim, common, workspace, scan_hash, recovered=bool(recovered)
+                    claim, common, workspace, scan_hash, recovered=False
                 )
             completed = common | {"outcome": outcome, "detail": detail}
             self.mutate(
@@ -366,13 +376,18 @@ class AndroidExecutor:
         evidence.update(self._export_mobsf_sources(scan_hash, workspace))
         running = None
         dynamic_started = False
+        access_collector: AndroidAccessEventCollector | None = None
         analysis_error: Exception | None = None
         try:
             running = avd.start(avd_name, workspace)
             if profile.get("network_mode") == "real_world_egress":
                 if not self.egress or not running.guest_ip:
                     raise RuntimeError("controlled egress broker is not configured")
-                self.egress.acquire(claim["analysis_run_id"], "android", running.guest_ip)
+                self.egress.acquire(
+                    claim["analysis_run_id"],
+                    "android",
+                    self.egress_guest_ip or running.guest_ip,
+                )
                 self._egress_active_run = claim["analysis_run_id"]
             check_stop()
             self.mobsf.start_dynamic(scan_hash)
@@ -412,6 +427,18 @@ class AndroidExecutor:
                 activation["stimulation"] = avd.stimulate_package(package_name, activity)
                 if not activation["stimulation"].get("package_process_ids"):
                     caveats.append("android_package_process_not_observed")
+            if package_name:
+                if (activation.get("frida") or {}).get("hook_ready") is True:
+                    access_collector = AndroidAccessEventCollector(
+                        lambda: self.mobsf.api_monitor(scan_hash),
+                        package_name=package_name,
+                        process_ids=(activation.get("stimulation") or {}).get(
+                            "package_process_ids"
+                        )
+                        or [],
+                        started_at=started,
+                    )
+                    access_collector.start()
             activation_path = workspace / "android-activation.json"
             self._json(activation_path, activation)
             evidence["activation"] = activation_path
@@ -436,6 +463,11 @@ class AndroidExecutor:
                 except Exception:
                     caveats.append("application_data_collection_failed")
             evidence.update(avd.collect(workspace / "device-evidence"))
+            if access_collector is not None:
+                access_path = workspace / "android-access-events.json"
+                access_collector.stop(access_path)
+                evidence["access_events"] = access_path
+                access_collector = None
             for kind, getter in (
                 ("api_monitor", self.mobsf.api_monitor),
                 ("frida_logs", self.mobsf.frida_logs),
@@ -465,8 +497,19 @@ class AndroidExecutor:
                 except Exception:
                     caveats.append("android_dynamic_stop_failed")
         finally:
+            if access_collector is not None:
+                try:
+                    access_path = workspace / "android-access-events.json"
+                    access_collector.stop(access_path)
+                    evidence["access_events"] = access_path
+                except Exception:
+                    if "android_api_monitoring_failed" not in caveats:
+                        caveats.append("android_api_monitoring_failed")
             if self._egress_active_run and self.egress:
-                egress_capture = self.egress.revoke(self._egress_active_run)
+                egress_capture = self.egress.revoke(
+                    self._egress_active_run,
+                    workspace / "android-egress-capture.pcap",
+                )
                 self._egress_active_run = None
             avd.stop()
             if isinstance(avd, RedroidManager):
@@ -540,6 +583,9 @@ class AndroidExecutor:
         prior_path = workspace / "c2-static-prior.json"
         self._json(prior_path, prior)
         self._upload(claim, prior_path, "static_prior", "application/json")
+        access_events_path = evidence.get("access_events")
+        if access_events_path and access_events_path.is_file():
+            self._upload(claim, access_events_path, "access_events", "application/json")
         for kind, artifact_path, media_type in (
             (
                 "android_sample",
@@ -644,12 +690,16 @@ class AndroidExecutor:
         process_ids = stimulation.get("package_process_ids") or []
         frida_ok = (activation.get("frida") or {}).get("status") == "ok"
         runtime_behavior = bool(attributable_domains or populated_sections or api_events)
-        instrumentation_evidence = bool(populated_sections or api_events)
+        api_monitor_available = bool(api_path and api_path.is_file())
+        instrumentation_evidence = bool(
+            frida_ok and (api_monitor_available or populated_sections or api_events)
+        )
         return {
             "dynamic_report_available": dynamic is not None,
             "package_process_observed": bool(process_ids),
             "frida_instrumentation_started": frida_ok,
             "api_monitor_event_count": api_events,
+            "api_monitor_available": api_monitor_available,
             "observed_domains": observed_domains,
             "attributable_domains": attributable_domains,
             "populated_runtime_sections": populated_sections,
@@ -1306,6 +1356,7 @@ def run(
     poll_seconds: float = typer.Option(5.0, min=0.5),
     egress_broker_url: str = typer.Option("http://127.0.0.1:8092", envvar="UMAT_EGRESS_BROKER_URL"),
     egress_broker_token: str | None = typer.Option(None, envvar="UMAT_EGRESS_BROKER_TOKEN"),
+    egress_guest_ip: str | None = typer.Option(None, envvar="UMAT_ANDROID_EGRESS_GUEST_IP"),
     mitmproxy_image: str = typer.Option(MITMPROXY_IMAGE, envvar="UMAT_ANDROID_MITMPROXY_IMAGE"),
     exit_after_analysis: bool = typer.Option(
         False, envvar="UMAT_ANDROID_EXIT_AFTER_ANALYSIS"
@@ -1330,6 +1381,7 @@ def run(
         egress=EgressClient(egress_broker_url, egress_broker_token)
         if egress_broker_token
         else None,
+        egress_guest_ip=egress_guest_ip,
         mitmproxy_image=mitmproxy_image,
     )
     if not executor_process.state:

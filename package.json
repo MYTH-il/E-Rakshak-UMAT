@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint:js": "eslint src/umat/web/static tests/browser playwright.config.js",
+    "lint:js": "eslint src/umat/web/static tests/browser tests/javascript playwright.config.js",
+    "test:js": "node --test tests/javascript/*.test.js",
     "test:browser": "playwright test"
   },
   "devDependencies": {

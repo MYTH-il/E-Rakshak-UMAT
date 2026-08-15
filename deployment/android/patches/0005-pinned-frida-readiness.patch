@@ -1,0 +1,168 @@
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -70,6 +70,21 @@
+   poetry cache clear . --all --no-interaction && \
+   rm -rf /root/.cache/
+ 
++# ReDroid runs without Internet access in the default analysis mode. Keep the
++# Frida Python bindings and server exactly version-matched and verify the
++# downloaded server before it becomes part of the immutable analyzer image.
++ARG FRIDA_SERVER_VERSION=17.17.0
++ARG FRIDA_SERVER_SHA256=5f0671fbeaee0b1ee66b1536c3eae966d58765b7e3954ea49932e5931e43bd6c
++RUN test "$(python -c 'import frida; print(frida.__version__)')" = "$FRIDA_SERVER_VERSION" && \
++  mkdir -p /opt/frida-server && \
++  curl -fL --retry 3 \
++    -o /tmp/frida-server.xz \
++    "https://github.com/frida/frida/releases/download/${FRIDA_SERVER_VERSION}/frida-server-${FRIDA_SERVER_VERSION}-android-x86_64.xz" && \
++  echo "${FRIDA_SERVER_SHA256}  /tmp/frida-server.xz" | sha256sum -c - && \
++  python -c "import lzma,pathlib; pathlib.Path('/opt/frida-server/frida-server-${FRIDA_SERVER_VERSION}-android-x86_64').write_bytes(lzma.decompress(pathlib.Path('/tmp/frida-server.xz').read_bytes()))" && \
++  chmod 0755 "/opt/frida-server/frida-server-${FRIDA_SERVER_VERSION}-android-x86_64" && \
++  rm -f /tmp/frida-server.xz
++
+ # Cleanup
+ RUN \
+     apt remove -y \
+--- a/mobsf/DynamicAnalyzer/views/android/frida_core.py
++++ b/mobsf/DynamicAnalyzer/views/android/frida_core.py
+@@ -144,90 +144,67 @@
+ 
+     def setup_redroid_frida(self):
+         """Custom method to deploy and run frida-server on Redroid."""
+-        import urllib.request
+-        import lzma
+         import subprocess
+-        
++
+         device_serial = get_device()
+         adb = ['adb', '-s', device_serial]
+         frida_version = frida.__version__
+-        
++
+         logger.info('Setting up frida-server v%s for Redroid (%s)', frida_version, device_serial)
+-        
+-        try:
+-            # 1. Determine architecture via ADB
++
++        abi = subprocess.check_output(
++            adb + ['shell', 'getprop', 'ro.product.cpu.abi'],
++            timeout=15).decode('utf-8').strip()
++        if abi != 'x86_64':
++            raise RuntimeError(f'Unsupported ReDroid ABI for Frida: {abi}')
++        local_path = Path('/opt/frida-server') / (
++            f'frida-server-{frida_version}-android-{abi}')
++        if not local_path.is_file():
++            raise RuntimeError(
++                f'Pinned Frida server is missing from analyzer image: {local_path}')
++        logger.info('Pushing pinned Frida server to ReDroid')
++        subprocess.run(
++            adb + ['push', str(local_path), '/data/local/tmp/frida-server'],
++            check=True,
++            timeout=120)
++        subprocess.run(
++            adb + ['shell', 'su', '0', 'chmod', '755',
++                   '/data/local/tmp/frida-server'],
++            check=True,
++            timeout=15)
++        subprocess.run(
++            adb + ['shell', 'su', '0', 'killall', '-9', 'frida-server'],
++            stderr=subprocess.DEVNULL,
++            timeout=15)
++        subprocess.run(
++            adb + ['shell', "su 0 sh -c 'nohup "
++                   "/data/local/tmp/frida-server >/dev/null 2>&1 &'"],
++            check=True,
++            timeout=15)
++        deadline = time.monotonic() + 15
++        while time.monotonic() < deadline:
+             try:
+-                abi = subprocess.check_output(adb + ['shell', 'getprop', 'ro.product.cpu.abi']).decode('utf-8').strip()
+-            except subprocess.CalledProcessError:
+-                abi = "x86_64" # Default fallback for Redroid containers
+-                
+-            file_name = f"frida-server-{frida_version}-android-{abi}"
+-            xz_name = f"{file_name}.xz"
+-            download_url = f"https://github.com/frida/frida/releases/download/{frida_version}/{xz_name}"
+-            
+-            # Storing temporarily in /tmp inside the MobSF container
+-            local_path = Path('/tmp') / file_name 
+-            local_xz = Path('/tmp') / xz_name
+-            
+-            # 2. Download and extract if it doesn't already exist
+-            if not local_path.exists():
+-                logger.info('Downloading %s', download_url)
+-                urllib.request.urlretrieve(download_url, local_xz)
+-                logger.info('Extracting frida-server...')
+-                with lzma.open(local_xz) as f_in, open(local_path, 'wb') as f_out:
+-                    f_out.write(f_in.read())
+-                local_xz.unlink()
+-                
+-            # 3. Push to /data/local/tmp on Redroid and make executable
+-            logger.info('Pushing frida-server to Redroid...')
+-            subprocess.run(adb + ['push', str(local_path), '/data/local/tmp/frida-server'], check=True)
+-            subprocess.run(adb + ['shell', 'su', '0', 'chmod', '755', '/data/local/tmp/frida-server'], check=True)
+-            
+-            # 4. Run in background (kill any hung processes first)
+-            logger.info('Starting frida-server in background...')
+-            subprocess.run(adb + ['shell', 'su', '0', 'killall', '-9', 'frida-server'], stderr=subprocess.DEVNULL)
+-            # nohup detaches the process so it runs in the background
+-            subprocess.Popen(adb + ['shell', "su 0 sh -c 'nohup "
+-                                    "/data/local/tmp/frida-server >/dev/null 2>&1 &'"])
+-            
+-            time.sleep(3) # Give the server a few seconds to bind to the port
+-            logger.info('Custom Frida server setup complete.')
+-            
+-        except Exception as e:
+-            logger.error('Failed to setup custom Redroid Frida: %s', e)
++                device = frida.get_device(device_serial, 3)
++                device.enumerate_processes()
++                logger.info('Pinned Frida server is ready')
++                return
++            except (frida.ServerNotRunningError,
++                    frida.TimedOutError,
++                    frida.TransportError):
++                time.sleep(0.5)
++        raise RuntimeError('Pinned Frida server did not become ready')
+ 
+     def spawn(self):
+         """Frida Spawn."""
+         global _FPID
+-        try:
+-            env = Environment() #[cite: 1]
+-            self.clean_up() #[cite: 1]
+-            
+-            # Inject our custom deployment logic here
+-            self.setup_redroid_frida()
+-            
+-            device = frida.get_device(
+-                get_device(),
+-                settings.FRIDA_TIMEOUT) #[cite: 1]
+-            logger.info('Spawning %s', self.package) #[cite: 1]
+-            _FPID = device.spawn([self.package]) #[cite: 1]
+-            device.resume(_FPID) #[cite: 1]
+-            time.sleep(1) #[cite: 1]
+-        except frida.NotSupportedError: #[cite: 1]
+-            logger.exception('Not Supported Error') #[cite: 1]
+-            return
+-        except frida.ServerNotRunningError: #[cite: 1]
+-            logger.warning('Frida server is not running') #[cite: 1]
+-            self.spawn() #[cite: 1]
+-        except frida.TimedOutError: #[cite: 1]
+-            logger.error('Timed out while waiting for device to appear') #[cite: 1]
+-        except (frida.ProcessNotFoundError, #[cite: 1]
+-                frida.ProcessNotRespondingError, #[cite: 1]
+-                frida.TransportError, #[cite: 1]
+-                frida.InvalidOperationError): #[cite: 1]
+-            pass #[cite: 1]
+-        except Exception: #[cite: 1]
+-            logger.exception('Error Connecting to Frida') #[cite: 1]
++        Environment()
++        self.clean_up()
++        self.setup_redroid_frida()
++        device = frida.get_device(get_device(), settings.FRIDA_TIMEOUT)
++        logger.info('Spawning %s', self.package)
++        _FPID = device.spawn([self.package])
++        device.resume(_FPID)
++        time.sleep(1)
+ 
+     def session(self, pid, package):
+         """Use existing session to inject frida scripts."""

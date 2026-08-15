@@ -2,9 +2,12 @@
 
 Phase 5 uses the pinned Android/MobSF fork through its HTTP API. Upstream source is
 checked out outside this repository and verified before its image is built.
-The committed patch fixes the pinned Docker build ordering, makes dependency
-installation fail closed, pins Poetry/base-image inputs, and consumes the
-upstream `poetry.lock`; the patch digest is recorded in the dependency lock.
+The committed patch series fixes the pinned Docker build ordering, makes dependency installation
+fail closed, pins Poetry/base-image inputs, consumes the upstream `poetry.lock`, and packages the
+checksum-verified Frida 17.17.0 x86_64 server in the image. Runtime analysis never downloads a
+Frida binary. MobSF refuses to begin instrumentation unless the packaged server matches the Python
+client, starts in ReDroid, and answers a bounded readiness probe. The complete patch-series digest
+and resulting image digest are recorded in the dependency lock and deployment manifest.
 
 The default worker is the digest-pinned amd64 ReDroid Android 11/API 30 image, executed inside the
 disposable KVM worker provisioned under `deployment/android-worker/`. The host-side Android
@@ -18,6 +21,13 @@ UMAT imports MobSF's native security mappings from the signed static report. Cod
 OWASP MASVS/MSTG, OWASP Mobile and CWE references, while MobSF behavior labels are retained as the
 Android TTP-equivalent taxonomy. These are displayed as security mappings with source provenance;
 UMAT does not fabricate Mobile ATT&CK identifiers that MobSF did not assert.
+
+During dynamic analysis the executor polls MobSF's API monitor and records the first UTC
+observation of each immutable row. Sensitive Android API calls are normalized into the versioned
+`contracts/android/android-access-events.schema.json` contract with process identity, API,
+operation, object reference, source hash, and bounded timestamp uncertainty. Eligible events may
+be associated with nearby PCAP observations, but the result is always weak confidence and carries
+`android_temporal_correlation_only`; timing does not prove payload contents or data theft.
 
 Host prerequisites are Docker, BinderFS, Java, Android platform tools,
 command-line tools, the Android emulator, `socat`, KVM access, and
@@ -76,10 +86,17 @@ signed bundle, and destroys the container and data tree. MobSF and Android
 workers must be isolated from production/user networks before hostile samples
 are executed.
 
-ReDroid is qualified by full acceptance run
-`019fec3b-c602-7b05-aa9d-b72ee7bc0d73`. It completed dynamic analysis, system
-CA installation, Frida injection, PCAP capture, C2 processing, both adaptation
-stages, aggregation, and report generation. ARM images are not provisioned.
+After KVM-worker cutover, the installer disables the legacy host Android executor to prevent a
+claim race. The worker uses `management0` (`10.67.0.10`) for signed UMAT and egress-broker relay
+traffic and presents the post-NAT malware boundary as `10.68.0.10` on `br-umat-malware`. The host
+firewall remains closed without a captured lease. Real-egress qualification additionally permits
+only the exact SpyMax tuple `37.120.141.140:7775/TCP`; it does not create a general port-7775 rule.
+
+ReDroid is qualified by full SpyMax acceptance run
+`01a00541-5f6a-7c54-aa05-fb1a7b41bb64`. It completed pinned Frida readiness and injection with no
+API-monitor polling errors, persisted normalized access events, captured guest and gateway PCAPs,
+and completed C2 processing, both adaptation stages, aggregation, and final report generation.
+ARM images are not provisioned.
 
 For a harmless runtime acceptance input, generate the repository-owned smoke
 application outside the source tree:

@@ -35,7 +35,9 @@ platform import yields `failed`. The product never emits a `safe` verdict.
 
 Android network-only C2 evidence is restricted to network observations. The aggregator removes
 data-item attribution and rewrites causal provenance so a PCAP-only result cannot claim that an
-Android data item was stolen.
+Android data item was stolen. Validated Android telemetry correlations are shown separately as
+weak, temporal associations with an explicit caveat; their wording never claims that packet
+contents or item-level theft were proven.
 
 ## Role views
 
@@ -54,6 +56,13 @@ The visual language is a clean-room adaptation of the pinned Android static-anal
 (dark panels with violet/teal hierarchy), not copied Django/AdminLTE source. This avoids coupling
 UMAT to MobSF templates and avoids importing GPL-3.0-only frontend code while UMAT's distribution
 license remains undecided.
+
+Runtime observations, MobSF scan-log entries, and Android application components are expanded into
+bounded analyst-readable rows rather than rendered as opaque JSON blobs. Long or adversarial
+Unicode component identifiers receive stable readable aliases while the escaped raw identifier
+remains available in a disclosure control. The corresponding formatters are isolated ES modules
+with focused Node tests, and production rendering continues to use text nodes rather than HTML
+injection.
 
 ## Current browser scope
 

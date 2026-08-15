@@ -40,10 +40,14 @@ class C2InputBuilder:
         correlation_eligible = self._correlation_eligible(platform, manifest, access_events)
         caveats = list(manifest.get("caveats") or [])
         if platform == "android":
-            correlation_eligible = False
-            access_events = None
-            if "c2_network_only" not in caveats:
-                caveats.append("c2_network_only")
+            if correlation_eligible:
+                caveats = [value for value in caveats if value != "c2_network_only"]
+                if "android_temporal_correlation_only" not in caveats:
+                    caveats.append("android_temporal_correlation_only")
+            else:
+                access_events = None
+                if "c2_network_only" not in caveats:
+                    caveats.append("c2_network_only")
         context = C2AnalysisContext(
             analysis_run_id=analysis_run_id,
             platform=platform,
@@ -104,7 +108,19 @@ class C2InputBuilder:
     def _correlation_eligible(
         platform: str, manifest: dict[str, Any], access_events: InputArtifact | None
     ) -> bool:
-        if platform != "windows" or not access_events:
+        if not access_events:
+            return False
+        if platform == "android":
+            try:
+                document = json.loads(access_events.local_path.read_text())
+                validate_contract("android/android-access-events.schema.json", document)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ContractError) as exc:
+                raise C2InputError("Android access-event evidence is invalid") from exc
+            return bool(
+                document.get("events")
+                and (document.get("clock") or {}).get("quality_acceptable") is True
+            )
+        if platform != "windows":
             return False
         native = manifest.get("handoff_manifest") or manifest
         correlation = native.get("correlation") or {}

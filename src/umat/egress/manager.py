@@ -16,10 +16,14 @@ from umat.capture import pcap_has_complete_packet, wait_for_pcap_writer
 from umat.egress.schemas import LeaseRequest, LeaseResult, Readiness
 
 WINDOWS_NETWORK = ipaddress.ip_network("10.66.0.0/24")
-ANDROID_NETWORK = ipaddress.ip_network("172.31.0.0/24")
-INTERFACES = {"windows": "virbr-winstdt", "android": "br-umat-egress"}
-GATEWAYS = {"windows": "10.66.0.1", "android": "172.31.0.1"}
+ANDROID_NETWORK = ipaddress.ip_network("10.68.0.0/24")
+INTERFACES = {"windows": "virbr-winstdt", "android": "br-umat-malware"}
+GATEWAYS = {"windows": "10.66.0.1", "android": "10.68.0.1"}
 SETS = {"windows": "windows_egress_v4", "android": "android_egress_v4"}
+ANDROID_SCOPED_TCP_SET = "android_scoped_tcp_v4"
+# This is deliberately not a generic non-web-port allowlist. It is the exact
+# SpyMax endpoint qualified for the controlled Android test campaign.
+ANDROID_SCOPED_TCP_ENDPOINTS = ((ipaddress.IPv4Address("37.120.141.140"), 7775),)
 TCPDUMP = "/usr/bin/tcpdump"
 
 
@@ -70,6 +74,7 @@ class EgressManager:
             "ipv4_forwarding": self._ipv4_forwarding(),
             "windows_policy_set": self._set_exists(SETS["windows"]),
             "android_policy_set": self._set_exists(SETS["android"]),
+            "android_scoped_tcp_policy_set": self._set_exists(ANDROID_SCOPED_TCP_SET),
         }
         return Readiness(
             status="ready" if all(checks.values()) else "not_ready",
@@ -120,17 +125,14 @@ class EgressManager:
                     stderr=diagnostic,
                     start_new_session=True,
                 )
+            authorization_attempted = False
             try:
                 wait_for_pcap_writer(capture, capture_path, capture_log)
-                self._nft(
-                    "add",
-                    "element",
-                    "ip",
-                    "umat_guest_guard",
-                    SETS[request.platform],
-                    f"{{ {request.guest_ip} timeout {request.ttl_seconds}s }}",
-                )
+                authorization_attempted = True
+                self._authorize_lease(request, request.ttl_seconds)
             except Exception:
+                if authorization_attempted:
+                    self._deauthorize_lease(request)
                 self._stop_capture(capture)
                 raise
             self._leases[request.analysis_run_id] = ActiveLease(request, capture_path, capture)
@@ -154,25 +156,16 @@ class EgressManager:
                 self._revoke_unlocked(run_id)
                 raise RuntimeError("egress byte ceiling exceeded; lease revoked")
             # This host nft version has no atomic timeout refresh operation.
-            # Delete first so any failure leaves the lease closed, then add a
-            # fresh short-lived element.
-            self._nft(
-                "delete",
-                "element",
-                "ip",
-                "umat_guest_guard",
-                SETS[lease.request.platform],
-                f"{{ {lease.request.guest_ip} }}",
-                check=False,
-            )
-            self._nft(
-                "add",
-                "element",
-                "ip",
-                "umat_guest_guard",
-                SETS[lease.request.platform],
-                f"{{ {lease.request.guest_ip} timeout {ttl_seconds}s }}",
-            )
+            # Remove the source authorization first and restore it last so a
+            # partial refresh always fails closed, including scoped C2 ports.
+            self._deauthorize_lease(lease.request)
+            try:
+                self._authorize_lease(lease.request, ttl_seconds)
+            except Exception:
+                self._deauthorize_lease(lease.request)
+                self._stop_capture(lease.capture)
+                self._leases.pop(run_id, None)
+                raise
             return LeaseResult(
                 analysis_run_id=run_id,
                 platform=lease.request.platform,
@@ -185,19 +178,17 @@ class EgressManager:
         with self._lock:
             return self._revoke_unlocked(run_id)
 
+    def capture_path(self, run_id: UUID) -> Path:
+        path = self.capture_root / f"{run_id}.pcap"
+        if not pcap_has_complete_packet(path):
+            raise RuntimeError("mandatory egress capture is unavailable or incomplete")
+        return path
+
     def _revoke_unlocked(self, run_id: UUID) -> Path | None:
         lease = self._leases.pop(run_id, None)
         if not lease:
             return None
-        self._nft(
-            "delete",
-            "element",
-            "ip",
-            "umat_guest_guard",
-            SETS[lease.request.platform],
-            f"{{ {lease.request.guest_ip} }}",
-            check=False,
-        )
+        self._deauthorize_lease(lease.request)
         self._stop_capture(lease.capture)
         self._finalize_capture(lease.capture_path)
         return lease.capture_path
@@ -236,6 +227,55 @@ class EgressManager:
 
     def _set_exists(self, name: str) -> bool:
         return self._nft("list", "set", "ip", "umat_guest_guard", name, check=False).returncode == 0
+
+    def _authorize_lease(self, request: LeaseRequest, ttl_seconds: int) -> None:
+        # Install destination-scoped entries before the source lease. Firewall
+        # rules require both, so traffic cannot pass during partial setup.
+        if request.platform == "android":
+            for destination, port in ANDROID_SCOPED_TCP_ENDPOINTS:
+                self._nft(
+                    "add",
+                    "element",
+                    "ip",
+                    "umat_guest_guard",
+                    ANDROID_SCOPED_TCP_SET,
+                    (
+                        f"{{ {request.guest_ip} . {destination} . {port} "
+                        f"timeout {ttl_seconds}s }}"
+                    ),
+                )
+        self._nft(
+            "add",
+            "element",
+            "ip",
+            "umat_guest_guard",
+            SETS[request.platform],
+            f"{{ {request.guest_ip} timeout {ttl_seconds}s }}",
+        )
+
+    def _deauthorize_lease(self, request: LeaseRequest) -> None:
+        # Remove the broad source gate first. Scoped tuples are then inert even
+        # if cleanup is interrupted and will independently expire in-kernel.
+        self._nft(
+            "delete",
+            "element",
+            "ip",
+            "umat_guest_guard",
+            SETS[request.platform],
+            f"{{ {request.guest_ip} }}",
+            check=False,
+        )
+        if request.platform == "android":
+            for destination, port in ANDROID_SCOPED_TCP_ENDPOINTS:
+                self._nft(
+                    "delete",
+                    "element",
+                    "ip",
+                    "umat_guest_guard",
+                    ANDROID_SCOPED_TCP_SET,
+                    f"{{ {request.guest_ip} . {destination} . {port} }}",
+                    check=False,
+                )
 
     def _policy_route_ready(self) -> bool:
         result = subprocess.run(  # noqa: S603
@@ -287,7 +327,7 @@ class EgressManager:
         return (
             result.returncode == 0
             and "from 10.66.0.0/24 lookup 51820" in result.stdout
-            and "from 172.31.0.0/24 lookup 51820" in result.stdout
+            and "from 10.68.0.0/24 lookup 51820" in result.stdout
         )
 
     @staticmethod

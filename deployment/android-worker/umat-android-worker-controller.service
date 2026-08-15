@@ -1,7 +1,7 @@
 [Unit]
 Description=UMAT disposable Android worker lifecycle controller
-After=network-online.target libvirtd.service umat-api.service umat-android-api-relay.service
-Requires=libvirtd.service umat-api.service umat-android-api-relay.service
+After=network-online.target libvirtd.service umat-api.service umat-android-api-relay.service umat-android-egress-relay.service
+Requires=libvirtd.service umat-api.service umat-android-api-relay.service umat-android-egress-relay.service
 
 [Service]
 Type=simple

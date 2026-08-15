@@ -237,6 +237,8 @@ class SubprocessC2Runtime:
             self._coalesce_network_observations(events)
         if context.platform == "android" and context.network_activity:
             events.extend(self._proxy_network_events(context))
+        if context.platform == "android" and context.correlation_eligible:
+            events.extend(self._correlate_android_access(context, events))
         return NativeC2Result(
             events=events,
             attribution=self._json_list(output / "attribution.json"),
@@ -656,6 +658,113 @@ class SubprocessC2Runtime:
         return normalized
 
     @staticmethod
+    def _correlate_android_access(
+        context: C2AnalysisContext, network_events: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Create review-grade Android access/network associations.
+
+        MobSF observations are timestamped by the executor at first observation, so
+        these rows intentionally remain weak and carry an explicit temporal-only caveat.
+        """
+        source = context.access_events
+        if source is None:
+            return []
+        try:
+            document = json.loads(source.local_path.read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise C2RuntimeError("Android access-event evidence is not valid JSON") from exc
+        raw_access = document.get("events") if isinstance(document, dict) else None
+        if not isinstance(raw_access, list):
+            raise C2RuntimeError("Android access-event evidence has no event list")
+        candidates: list[tuple[datetime, dict[str, Any]]] = []
+        for network in network_events:
+            if not isinstance(network, dict) or not (
+                network.get("destination_domain") or network.get("destination_ip")
+            ):
+                continue
+            try:
+                observed_at = datetime.fromisoformat(
+                    str(network["timestamp"]).replace("Z", "+00:00")
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            candidates.append((observed_at, network))
+        correlated: list[dict[str, Any]] = []
+        for access in raw_access[:100000]:
+            if not isinstance(access, dict):
+                continue
+            try:
+                accessed_at = datetime.fromisoformat(
+                    str(access["timestamp"]).replace("Z", "+00:00")
+                )
+                uncertainty = float(access.get("timestamp_uncertainty_ms") or 0) / 1000
+            except (KeyError, TypeError, ValueError):
+                continue
+            tolerance = min(30.0, max(5.0, uncertainty + 5.0))
+            matches = [
+                (abs((network_time - accessed_at).total_seconds()), network)
+                for network_time, network in candidates
+                if abs((network_time - accessed_at).total_seconds()) <= tolerance
+            ]
+            if not matches:
+                continue
+            delta, network = min(
+                matches,
+                key=lambda item: (
+                    item[0],
+                    str(item[1].get("destination_domain") or item[1].get("destination_ip")),
+                ),
+            )
+            destination = network.get("destination_domain") or network.get("destination_ip")
+            refs = [
+                dict(ref) if isinstance(ref, dict) else {"reference": str(ref)}
+                for ref in (network.get("evidence_refs") or [])
+            ]
+            refs.append(
+                {
+                    "type": "host_access",
+                    "source": "android_telemetry",
+                    "artifact_id": str(source.artifact_id),
+                    "sha256": source.sha256,
+                    "source_event_id": access.get("event_id"),
+                    "source_event_sha256": access.get("source_event_sha256"),
+                    "timestamp": access.get("timestamp"),
+                    "timestamp_uncertainty_ms": access.get("timestamp_uncertainty_ms"),
+                    "time_delta_s": round(delta, 3),
+                    "package_name": access.get("package_name"),
+                    "process_ids": access.get("process_ids") or [],
+                    "operation": access.get("operation"),
+                    "object_reference": access.get("object_reference"),
+                    "called_from": access.get("called_from"),
+                }
+            )
+            correlated.append(
+                {
+                    key: value
+                    for key, value in network.items()
+                    if key not in {"event_id", "evidence_hash"}
+                }
+                | {
+                    "data_type_accessed": access.get("data_type"),
+                    "access_api_call": access.get("api_call"),
+                    "finding_kind": "correlation",
+                    "confidence_score": min(
+                        0.55, float(network.get("confidence_score") or 0.4)
+                    ),
+                    "confidence_tier": "weak",
+                    "mitre_technique_id": None,
+                    "plain_language": (
+                        f"The Android app accessed {str(access.get('data_type')).replace('_', ' ')} "
+                        f"and traffic to {destination} was observed within {delta:.1f} seconds. "
+                        "The timing association does not prove that this information was sent."
+                    ),
+                    "capped_by_caveat": "android_temporal_correlation_only",
+                    "evidence_refs": refs,
+                }
+            )
+        return correlated
+
+    @staticmethod
     def _prepare_static_prior(context: C2AnalysisContext, workspace: Path) -> Path:
         source = context.static_prior
         if source is None:
@@ -768,7 +877,9 @@ class SubprocessC2Runtime:
                                 else row.get("confidence_tier")
                             )
                             or "unconfirmed",
-                            "source_event_id": str(matched.get("event_id")) if observed else "",
+                            "source_event_id": (
+                                str(matched.get("event_id")) if observed and matched else ""
+                            ),
                         }
                     )
         return normalized

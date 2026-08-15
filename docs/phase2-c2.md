@@ -17,9 +17,14 @@ artifacts. A Windows static prior is accepted only when its provenance identifie
 binary-static evidence. Legacy unlabeled Windows priors fail closed. CAPE runtime DNS/HTTP/host
 observations never enter this channel, preventing a destination from confirming itself.
 Host/network correlation is allowed only when the Windows handoff manifest explicitly enables
-it. Android consumes PCAP and run metadata; the builder and adapter both enforce network-only
-semantics and reject unsupported host-data claims. MobSF static indicators use the same explicit
-provenance contract.
+it. Android always consumes PCAP and run metadata and may additionally consume a validated
+`android_telemetry` access-event artifact produced from timestamped Frida API-monitor
+observations. The pinned C2 runtime remains unchanged and performs Android network analysis only;
+UMAT then adds review-grade temporal associations when the Android clock-quality gate passes.
+These associations are capped by `android_temporal_correlation_only`, remain weak confidence, and
+explicitly do not prove that the accessed data was transmitted. Without eligible access events,
+the builder and adapter retain the original `c2_network_only` behavior. MobSF static indicators
+use the same explicit provenance contract.
 
 Correlated Windows events retain the complete host-access evidence reference: concrete object name
 and path, access operation/API, process identity, PID lineage, and source call ID. Human-readable

@@ -9,8 +9,9 @@ hardening work are implemented, but the repository is **not yet a production-rea
 release**. Phase 6 operational controls are implemented, while clean-host acceptance and several
 external-runtime promotion gates remain incomplete.
 
-The authoritative design remains the
-[implementation plan](umat-unified-malware-analysis-triage-implementation-plan.md).
+The maintained design record is split across the versioned contracts, dependency locks, phase
+documents, deployment guides, and network runbooks linked below. The completed monolithic
+implementation plan has been retired so it cannot drift from those executable sources of truth.
 
 ## Current implementation status
 
@@ -21,7 +22,7 @@ The authoritative design remains the
 | Phase 2 shared C2 service | Implemented with runtime gates | Isolated executor, input/result validation, adapters, recovery, and Windows/Android inputs exist. The executable runtime is pinned to upstream schema-v1.3 commit `478f131` as effective runtime `478f131-umat.2`, including universal GeoLite2 enrichment, shared-hosting feed suppression, parent-aware DNS-tunnel deduplication, correctly typed HTTP destinations, bounded-memory PCAP hashing, normalized Windows handoff paths, and simulated resolved-destination evidence. |
 | Phase 3 Windows/CAPE | Operational end to end | Submission-format normalization, CAPE execution and recovery, full JSON evidence import, WinST/DT handoff validation, adapters, aggregation, and reporting have completed real LNK-in-ZIP malware runs. CAPE itself is operational; the current UMAT UI does not expose every supported workflow and profile parameter. |
 | Phase 4 API and UI | Operations console implemented | Case/run APIs, L1/L2/L3 views, aggregation, exports, case editing and in-case intake, server-filtered run history, immutable retries, diagnostic progress, worker inventory, and profile administration are available through the role-aware console. |
-| Phase 5 Android/MobSF | Implemented and runtime-validated | The default pinned Android 11/API-30 x86_64 ReDroid profile supports unattended analysis and a brokered interactive analyst session with live screen/input, activities, Frida, TLS/proxy controls, logs, scoped file access, evidence capture, adaptation, aggregation, and reporting. The AOSP AVD is retained as a fallback; ARM profiles are out of scope. |
+| Phase 5 Android/MobSF | Implemented and runtime-validated | The default pinned Android 11/API-30 x86_64 ReDroid profile supports unattended and interactive analysis inside a disposable KVM worker. The qualified image packages a checksum-verified Frida 17.17.0 server, persists normalized API-monitor access events, captures guest and gateway traffic, and supports review-grade Android access/network correlation. The AOSP AVD is retained as a fallback; ARM profiles are out of scope. |
 | Phase 5.5 hardening | Implemented | Scheduler timeouts/retries, cancellation propagation, capability matching, administrative controls, migration/security tests, fail-closed isolated guest networks, and a host guest-firewall service. |
 | Phase 6 hardening and operations | Implemented; acceptance pending | Backup/restore/rollback, offline verification, metrics/logging, deployment limits, TLS/firewall baselines, isolation tests, and runbooks are present. Fresh-host qualification remains. |
 
@@ -34,11 +35,13 @@ WinST/DT evidence, normalizes findings, optionally runs offline C2 analysis, agg
 and generates the UMAT report. A real RubyJumper LNK run completed this entire path in
 isolated/simulated mode with C2 enabled.
 
-The Android workload is also runtime-qualified using the default Android 11/API-30 x86_64 ReDroid
-profile. It provides a disposable writable guest, MobSF dynamic analysis, PCAP, optional offline
-C2 processing, adaptation, aggregation, and reporting. The AOSP x86_64 AVD is retained as a
-fallback profile. ARM/CPU-emulation profiles are intentionally out of scope and must not be
-implemented or enabled without an explicit future decision.
+The Android workload is runtime-qualified using the default Android 11/API-30 x86_64 ReDroid
+profile. SpyMax acceptance run `01a00541-5f6a-7c54-aa05-fb1a7b41bb64` completed with the pinned
+Frida 17.17.0 client/server pair, hook-readiness verification, 71 raw API-monitor rows, normalized
+access-event evidence, guest and gateway PCAPs, optional C2 processing, both adaptations,
+aggregation, and reporting. Android access/network matches remain weak temporal associations and
+never claim that an accessed item was transmitted. The AOSP x86_64 AVD remains a fallback;
+ARM/CPU-emulation profiles are intentionally out of scope.
 
 The web console now covers routine submission, rerun/retry, diagnosis, worker health, profile,
 Android interactive-session, evidence, and report operations. Native CAPE and raw UMAT APIs remain
@@ -46,18 +49,19 @@ engineering interfaces rather than requirements for routine operation.
 
 ## Verification evidence
 
-As of 2026-08-12:
+As of 2026-08-15:
 
 - Ruff passes for `src` and `tests`.
 - Strict mypy passes for the application source tree.
-- The default offline suite passes: **162 passed, 9 skipped**. The skipped tests require explicitly
+- The default offline suite passes: **204 passed, 10 skipped**. The skipped tests require explicitly
   configured disposable PostgreSQL integration/migration databases.
-- The CI-equivalent database-backed suite passes with **171 passed, 0 skipped** against disposable
+- The CI-equivalent database-backed suite passes with **214 passed, 0 skipped** against disposable
   PostgreSQL 18.4 databases, including migration downgrade/re-upgrade tests. CI also runs four
   Playwright workflow groups covering authentication, intake, duplicate confirmation,
   reruns, retries, cancellation, case editing, in-case submission, run diagnosis, worker inventory,
   report selection, exports, role restrictions, and automated accessibility.
-- JavaScript ESLint, Ruff, and strict mypy checks pass using committed dependency locks.
+- JavaScript ESLint, the 10 focused Node tests, Ruff, and strict mypy checks pass using committed
+  dependency locks.
 - CAPE, WinST/DT, Android, and C2 source/runtime revisions match the committed pins.
 - The pinned Android image digest matches its dependency lock.
 - CAPE task cancellation is enabled through its native task-status API.
@@ -129,7 +133,7 @@ controls are exposed with role-aware actions.
 
 ## Phase 6 hardening and operations
 
-Phase 6 is “Hardening and operations” in the implementation plan. The implemented controls are:
+Phase 6 covers hardening and operations. The implemented controls are:
 
 - Read-only, hash-inventoried offline input verification using an independently transported
   manifest digest.
@@ -210,12 +214,15 @@ The installation is resumable and follows this order:
    environment files.
 3. WinST/DT installs CAPE and builds the licensed Windows 10 baseline/snapshot from the supplied
    ISO; UMAT configures the CAPE integration and profile-management gateway.
-4. The pinned C2 runtime and Android/MobSF/ReDroid runtime are built and verified.
+4. The pinned C2 runtime and Android/MobSF/ReDroid runtime are built and verified, including the
+   digest-locked Android patch series and packaged Frida server.
 5. PostgreSQL starts, migrations are applied, the first administrator and default Android profiles
    are created.
-6. Hardened systemd services and the fail-closed guest firewall are installed.
+6. Hardened systemd services, Android worker relays/controller, and the fail-closed guest firewall
+   are installed.
 7. Windows, C2, and Android executors receive one-time enrollment credentials; no executor receives
-   the PostgreSQL credential.
+   the PostgreSQL credential. After disposable-worker cutover, the legacy host Android executor is
+   disabled to prevent competing claims.
 8. Status and harmless runtime acceptance gates verify services, revisions, images, Windows
    evidence handoff, and executor isolation.
 

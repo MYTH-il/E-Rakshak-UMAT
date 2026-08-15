@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -80,7 +81,13 @@ class MobSFClient:
         )
         if result.get("status") != "ok":
             raise RuntimeError(f"MobSF Frida instrumentation failed: {result.get('message')}")
-        return result
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            logs = self.frida_logs(scan_hash)
+            if "Loaded Frida Script - api_monitor" in json.dumps(logs, sort_keys=True):
+                return result | {"hook_ready": True, "hook": "api_monitor"}
+            time.sleep(0.5)
+        raise RuntimeError("MobSF reported Frida success but the API-monitor hook never loaded")
 
     def stop_dynamic(self, scan_hash: str) -> dict[str, Any]:
         return self._post("/api/v1/dynamic/stop_analysis", {"hash": scan_hash})
@@ -101,7 +108,25 @@ class MobSFClient:
         )
 
     def api_monitor(self, scan_hash: str) -> dict[str, Any]:
-        return self._post("/api/v1/frida/api_monitor", {"hash": scan_hash})
+        response = self.client.post("/api/v1/frida/api_monitor", data={"hash": scan_hash})
+        try:
+            value = response.json()
+        except ValueError as exc:
+            response.raise_for_status()
+            raise RuntimeError("MobSF returned invalid API-monitor JSON") from exc
+        if (
+            response.status_code == 500
+            and isinstance(value, dict)
+            and value.get("status") == "failed"
+            and value.get("message") == "Data does not exist."
+        ):
+            return {"status": "waiting", "data": []}
+        response.raise_for_status()
+        if not isinstance(value, dict):
+            raise RuntimeError("MobSF returned a non-object from /api/v1/frida/api_monitor")
+        if value.get("error"):
+            raise RuntimeError(f"MobSF /api/v1/frida/api_monitor failed: {value['error']}")
+        return cast(dict[str, Any], value)
 
     def frida_logs(self, scan_hash: str) -> dict[str, Any]:
         return self._post("/api/v1/frida/logs", {"hash": scan_hash})

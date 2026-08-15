@@ -83,6 +83,10 @@ _DATA_TYPE_PHRASES: dict[str, str] = {
     "microphone": "the microphone",
     "calendar": "calendar entries",
     "device_identity": "identifiers that uniquely identify the device",
+    "accounts": "accounts configured on the device",
+    "application_database": "information stored in the application's database",
+    "application_file": "files stored by the application",
+    "device_information": "information about the device and installed applications",
     "other": "other information",
 }
 
@@ -470,7 +474,12 @@ class CaseAggregator:
                 )
             if stage.state == StageState.FAILED and stage.stage_type == StageType.C2_ANALYSIS:
                 values.add("c2_analysis_failed")
-        if platform == Platform.ANDROID:
+        android_c2_modes = {
+            str(item.validation_summary.get("correlation_mode"))
+            for item in adaptations
+            if item.adapter_type == "c2"
+        }
+        if platform == Platform.ANDROID and "temporal" not in android_c2_modes:
             values.add("c2_network_only")
         return sorted(values)
 
@@ -574,10 +583,13 @@ class CaseAggregator:
                 )
                 if not credible_legacy_static_indicator(indicator_type, value, static_values):
                     continue
-            android_network_only = run.platform == Platform.ANDROID and c2_item.finding_kind in {
-                "correlation",
-                "exfil",
-            }
+            android_network_only = run.platform == Platform.ANDROID and (
+                c2_item.finding_kind == "exfil"
+                or (
+                    c2_item.finding_kind == "correlation"
+                    and c2_item.capped_by_caveat != "android_temporal_correlation_only"
+                )
+            )
             details = dict(c2_item.details)
             summary = c2_item.plain_language
             finding_kind = c2_item.finding_kind

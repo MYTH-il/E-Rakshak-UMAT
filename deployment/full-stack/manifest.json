@@ -51,9 +51,9 @@
       "repository": "https://github.com/d4ruvil/erakshak.git",
       "commit": "6462901d1aaa0b090b867934ea5a01a82d31bc03",
       "tree_sha256": "9c554d1e1e2c7c5e70cf3d5b6504a28bc37ed62b81ddc0b0f3007b4bec2c58fa",
-      "patch_series_sha256": "da607f7d284c2718c0cf8ef402836c82d0e9042ad149d0b99f7818af23b5de94",
+      "patch_series_sha256": "6e57ea8b369ce81265f43f5e1c0523d20c16ea9b2478bd841db7fcf58f9b14fd",
       "image": "umat-mobsf:6462901d",
-      "image_digest": "sha256:d194b0783bd6550d24248df0b22cef93a60946e37349649a9da2e3f4856b1212",
+      "image_digest": "sha256:9c2c0fe2763dfd1210833cf17e5e85eda27d874efcbf81bcce5862ae14b16315",
       "default_runtime": "redroid",
       "runtimes": {
         "redroid": {
@@ -63,8 +63,8 @@
           "guest_abi": "x86_64",
           "qualification": {
             "status": "qualified",
-            "validated_at": "2026-08-10",
-            "evidence_run_id": "019fec3b-c602-7b05-aa9d-b72ee7bc0d73"
+            "validated_at": "2026-08-15",
+            "evidence_run_id": "01a00541-5f6a-7c54-aa05-fb1a7b41bb64"
           }
         },
         "aosp_avd": {

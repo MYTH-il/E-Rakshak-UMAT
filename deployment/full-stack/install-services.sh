@@ -233,6 +233,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   sudo -n install -m 0755 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard-compat.sh" /usr/libexec/umat/umat-guest-guard-compat
   sudo -n install -m 0644 "$PROJECT_ROOT/deployment/full-stack/umat-guest-guard.service" "$UNIT_DIR/umat-guest-guard.service"
   sudo -n install -m 0644 "$PROJECT_ROOT/deployment/android-worker/umat-android-api-relay.service" "$UNIT_DIR/umat-android-api-relay.service"
+  sudo -n install -m 0644 "$PROJECT_ROOT/deployment/android-worker/umat-android-egress-relay.service" "$UNIT_DIR/umat-android-egress-relay.service"
   worker_controller="$(mktemp)"
   sed "s|PROJECT_ROOT_PLACEHOLDER|$PROJECT_ROOT|g" \
     "$PROJECT_ROOT/deployment/android-worker/umat-android-worker-controller.service" >"$worker_controller"
@@ -301,6 +302,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     'UMAT_ANDROID_EXECUTOR_NAME=android-executor' >"$android_env"
   printf '%s\n' \
     'UMAT_ANDROID_MITMPROXY_IMAGE=mitmproxy/mitmproxy@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f' \
+    'UMAT_ANDROID_EGRESS_GUEST_IP=10.68.0.10' \
     'UMAT_EGRESS_BROKER_URL=http://127.0.0.1:8092' \
     "UMAT_EGRESS_BROKER_TOKEN=$egress_token" >>"$android_env"
   sudo -n install -o root -g "$executor_group" -m 0640 "$c2_env" /etc/umat/c2-executor.env
@@ -320,19 +322,28 @@ if [[ "$EXECUTE" -eq 1 ]]; then
   core_units=(
     umat-guest-guard umat-egress-broker umat-api umat-scheduler
     umat-report-worker umat-adapter-worker umat-cape-gateway umat-android-api-relay
+    umat-android-egress-relay
   )
   # An installer rerun is also an application upgrade. Restart existing
   # processes so reporting, capture, and configuration-fallback changes do not
   # remain hidden behind stale in-memory code.
   sudo -n systemctl enable "${core_units[@]}"
   sudo -n systemctl restart "${core_units[@]}"
-  executor_units=(umat-windows-executor umat-c2-executor umat-android-executor)
+  executor_units=(umat-windows-executor umat-c2-executor)
+  android_worker_image=/var/lib/libvirt/images/umat-android-worker/umat-android-worker-golden.qcow2
+  if ! sudo -n test -f "$android_worker_image"; then
+    executor_units+=(umat-android-executor)
+  fi
   for executor_unit in "${executor_units[@]}"; do
     if sudo -n systemctl is-enabled --quiet "$executor_unit.service"; then
       sudo -n systemctl restart "$executor_unit.service"
     fi
   done
-  if sudo -n test -f /var/lib/libvirt/images/umat-android-worker/umat-android-worker-golden.qcow2; then
+  if sudo -n test -f "$android_worker_image"; then
+    # The disposable worker contains the only Android executor after cutover.
+    # Leaving the legacy host unit enabled creates a claim race which can run a
+    # privileged ReDroid container outside the KVM isolation boundary.
+    sudo -n systemctl disable --now umat-android-executor.service
     sudo -n systemctl enable --now umat-android-worker-controller.service
   fi
 else

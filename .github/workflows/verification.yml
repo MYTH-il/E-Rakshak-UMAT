@@ -79,6 +79,7 @@ jobs:
           uv run ruff check src tests
           uv run mypy src/umat
           npm run lint:js
+          npm run test:js
 
       - name: Python test suite
         run: |

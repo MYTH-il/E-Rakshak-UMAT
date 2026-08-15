@@ -109,7 +109,13 @@ class ResultBundleBuilder:
                 "ended_at": context.analysis_ended_at.isoformat(),
             },
             "guest_ip": context.guest_ip,
-            "correlation_mode": "host_network" if context.correlation_eligible else "network_only",
+            "correlation_mode": (
+                "temporal"
+                if context.platform == "android" and context.correlation_eligible
+                else "host_network"
+                if context.correlation_eligible
+                else "network_only"
+            ),
             "network_events": events,
             "artifacts": artifacts,
             "caveats": sorted(set(context.caveats)),
@@ -157,7 +163,7 @@ class ResultBundleBuilder:
                 native.get("destination_domain") or native.get("destination_ip") or "unknown"
             )
             data_type = native.get("data_type_accessed")
-            if context.platform == "android":
+            if context.platform == "android" and not context.correlation_eligible:
                 data_type = None
             kind = native.get("finding_kind") or ResultBundleBuilder._finding_kind(
                 native, bool(data_type)
@@ -183,7 +189,7 @@ class ResultBundleBuilder:
                 ),
                 "data_type_accessed": data_type,
                 "access_api_call": native.get("access_api_call")
-                if context.platform == "windows"
+                if context.platform == "windows" or context.correlation_eligible
                 else None,
                 "destination_ip": native.get("destination_ip"),
                 "destination_port": native.get("destination_port"),
@@ -204,7 +210,11 @@ class ResultBundleBuilder:
                 "finding_kind": kind,
                 "plain_language": str(plain),
                 "capped_by_caveat": native.get("capped_by_caveat")
-                or ("c2_network_only" if context.platform == "android" else None),
+                or (
+                    "c2_network_only"
+                    if context.platform == "android" and not context.correlation_eligible
+                    else None
+                ),
                 "evidence_refs": evidence_refs,
             }
             row["evidence_hash"] = hashlib.sha256(

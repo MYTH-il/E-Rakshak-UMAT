@@ -21,5 +21,8 @@ Windows imports wrap the authoritative WinST/DT handoff manifest. Android bundle
 the UMAT Android executor. Both produce a platform bundle before shared C2 processing. The C2
 runtime is identical across platforms and operates in a unique working directory per run.
 
-Android v1 C2 output is network-only and cannot assert item-level theft. Windows correlation is
-eligible only when normalized access events and acceptable clock-quality evidence are present.
+Android C2 output is network-only unless the executor supplies validated, timestamped Android
+access events with acceptable clock quality. Eligible Android events may produce weak temporal
+access/network associations, but cannot assert item-level theft or payload contents. Windows
+correlation remains eligible only when normalized ETL-derived access events and acceptable
+clock-quality evidence are present.

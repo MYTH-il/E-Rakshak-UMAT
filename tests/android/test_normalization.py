@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from umat.android.access_events import AndroidAccessEventCollector
 from umat.android.adapter import AndroidAdapter
 from umat.android.executor import AndroidExecutor
 from umat.db.models import AndroidCapability, AndroidFinding, StaticIOC
@@ -138,6 +140,75 @@ def test_dynamic_quality_accepts_api_monitor_events(tmp_path: Any) -> None:
     )
     assert quality["api_monitor_event_count"] == 1
     assert quality["runtime_behavior_observed"] is True
+
+
+def test_access_event_collector_normalizes_sensitive_frida_rows(tmp_path: Any) -> None:
+    collector = AndroidAccessEventCollector(
+        lambda: {
+            "data": [
+                {
+                    "name": "Device Data",
+                    "class": "android.content.ContentResolver",
+                    "method": "query",
+                    "arguments": ["content://com.android.contacts/contacts"],
+                    "calledFrom": "com.example.spy.Collector.run(Collector.java:42)",
+                },
+                {
+                    "name": "Crypto",
+                    "class": "javax.crypto.Cipher",
+                    "method": "doFinal",
+                    "arguments": [],
+                },
+            ]
+        },
+        package_name="com.example.spy",
+        process_ids=["1234"],
+        started_at=datetime.fromisoformat("2026-08-08T12:00:00+00:00"),
+        poll_interval_seconds=0.1,
+    )
+    collector.start()
+    destination = tmp_path / "access-events.json"
+    document = collector.stop(
+        destination, ended_at=datetime.fromisoformat("2026-08-08T12:05:00+00:00")
+    )
+    assert destination.is_file()
+    assert len(document["events"]) == 1
+    assert document["events"][0]["data_type"] == "contacts"
+    assert document["events"][0]["api_call"] == "android.content.ContentResolver.query"
+    assert document["events"][0]["process_ids"] == [1234]
+
+
+def test_access_event_collector_distinguishes_empty_monitor_from_failure(tmp_path: Any) -> None:
+    collector = AndroidAccessEventCollector(
+        lambda: {"status": "waiting", "data": []},
+        package_name="com.example.quiet",
+        process_ids=["42"],
+        started_at=datetime.fromisoformat("2026-08-08T12:00:00+00:00"),
+        poll_interval_seconds=0.1,
+    )
+    collector.start()
+    document = collector.stop(tmp_path / "access-events.json")
+
+    assert document["events"] == []
+    assert document["clock"]["quality_acceptable"] is True
+    assert document["sources"][0]["poll_errors"] == 0
+
+
+def test_dynamic_quality_accepts_ready_empty_api_monitor(tmp_path: Any) -> None:
+    monitor = tmp_path / "api.json"
+    monitor.write_text('{"status":"waiting","data":[]}')
+    quality = AndroidExecutor._dynamic_quality(  # noqa: SLF001
+        {"domains": {}},
+        {"api_monitor": monitor},
+        {
+            "frida": {"status": "ok", "hook_ready": True},
+            "stimulation": {"package_process_ids": ["123"]},
+        },
+    )
+
+    assert quality["api_monitor_available"] is True
+    assert quality["api_monitor_event_count"] == 0
+    assert quality["instrumentation_evidence_observed"] is True
 
 
 def test_network_summary_merges_proxy_checkpoint_when_final_report_is_empty(

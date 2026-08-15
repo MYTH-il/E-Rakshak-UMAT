@@ -111,6 +111,98 @@ def test_android_proxy_observations_are_available_to_c2(tmp_path: Path) -> None:
     assert events[0]["capped_by_caveat"] == "c2_network_only"
 
 
+def test_android_access_events_enable_review_grade_temporal_correlation(
+    tmp_path: Path,
+) -> None:
+    inputs = android_inputs(tmp_path)
+    access_document = {
+        "schema_version": "1.0",
+        "platform": "android",
+        "package_name": "com.example.spy",
+        "analysis_window": {
+            "started_at": "2026-08-08T12:00:00Z",
+            "ended_at": "2026-08-08T12:05:00Z",
+        },
+        "clock": {
+            "basis": "executor_utc_first_observation",
+            "quality_acceptable": True,
+            "maximum_uncertainty_ms": 1000,
+        },
+        "sources": [{"source": "frida_api_monitor"}],
+        "events": [
+            {
+                "event_id": "0198fd40-1111-7000-8000-000000000020",
+                "timestamp": "2026-08-08T12:01:00Z",
+                "timestamp_uncertainty_ms": 1000,
+                "source": "frida_api_monitor",
+                "package_name": "com.example.spy",
+                "process_ids": [1234],
+                "data_type": "contacts",
+                "api_call": "android.content.ContentResolver.query",
+                "operation": "query",
+                "object_reference": "content://com.android.contacts/contacts",
+                "called_from": "com.example.spy.Collector.run(Collector.java:42)",
+                "source_event_sha256": "d" * 64,
+            }
+        ],
+    }
+    inputs.append(
+        artifact(
+            tmp_path / "android-access-events.json",
+            "access_events",
+            json.dumps(access_document).encode(),
+        )
+    )
+    context = C2InputBuilder().build(
+        analysis_run_id=RUN_ID,
+        platform="android",
+        sample_sha256=SAMPLE_HASH,
+        artifacts=inputs,
+    )
+    assert context.correlation_eligible is True
+    assert context.access_events is not None
+    assert "c2_network_only" not in context.caveats
+    assert "android_temporal_correlation_only" in context.caveats
+    assert context.contract_document()["access_events"]["source"] == "android_telemetry"
+
+    network = {
+        "timestamp": "2026-08-08T12:01:02Z",
+        "destination_ip": "198.51.100.20",
+        "destination_port": 443,
+        "destination_domain": "spy.example",
+        "confidence_score": 0.8,
+        "confidence_tier": "strong",
+        "finding_kind": "beacon",
+        "evidence_refs": [{"source": "immutable_guest_pcap"}],
+    }
+    correlations = SubprocessC2Runtime._correlate_android_access(  # noqa: SLF001
+        context, [network]
+    )
+    assert len(correlations) == 1
+    correlation = correlations[0]
+    assert correlation["data_type_accessed"] == "contacts"
+    assert correlation["confidence_tier"] == "weak"
+    assert correlation["capped_by_caveat"] == "android_temporal_correlation_only"
+    assert correlation["evidence_refs"][-1]["package_name"] == "com.example.spy"
+
+    private = Ed25519PrivateKey.generate()
+    native = FixtureC2Runtime().run(context, tmp_path / "runtime")
+    native.events.extend(correlations)
+    built = ResultBundleBuilder(private, str(uuid4())).build(
+        context, native, tmp_path / "correlated-result"
+    )
+    manifest = verify_result_bundle(
+        safe_extract_bundle(built.archive_path, tmp_path / "correlated-extracted"),
+        private.public_key(),
+    )
+    assert manifest["correlation_mode"] == "temporal"
+    correlated = next(
+        event for event in manifest["network_events"] if event["finding_kind"] == "correlation"
+    )
+    assert correlated["data_type_accessed"] == "contacts"
+    assert correlated["access_api_call"] == "android.content.ContentResolver.query"
+
+
 def test_same_pcap_has_same_network_observation_across_platforms(tmp_path: Path) -> None:
     android_root = tmp_path / "android"
     windows_root = tmp_path / "windows"

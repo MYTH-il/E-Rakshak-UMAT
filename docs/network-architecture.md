@@ -44,11 +44,14 @@ It has no shared directories, clipboard, USB passthrough, host Docker socket, SS
 provisioning NIC. The browser continues to use the host UMAT API, which brokers the existing signed
 interactive command protocol to the executor inside the VM.
 
-The worker has two virtio NICs. `management0` is fixed at `10.67.0.10` and can initiate only UMAT
-API traffic to the restricted relay at `10.67.0.1:8443`. `malware0` is fixed at `10.68.0.10`, has
-no default route, and is reserved for a separate sacrificial gateway. The host firewall drops every
-other packet arriving from either worker bridge. ReDroid remains privileged inside the disposable
-VM, making the KVM boundary—not the container runtime—the containment boundary.
+The worker has two runtime virtio NICs. `management0` is fixed at `10.67.0.10` and can initiate only
+UMAT API traffic to `10.67.0.1:8443` and authenticated egress-broker traffic through the restricted
+relay at `10.67.0.1:8092`. `malware0` is fixed at `10.68.0.10`; its default route terminates at the
+host's fail-closed `br-umat-malware` boundary and cannot forward without a short-lived captured
+broker lease. The provisioning NIC exists only while building the golden image and is absent from
+run overlays. The host firewall drops every other packet arriving from either runtime bridge.
+ReDroid remains privileged inside the disposable VM, making the KVM boundary—not the container
+runtime—the containment boundary.
 
 ```text
                     management/control plane (loopback only)
@@ -75,8 +78,8 @@ instrumentation responses.
 
 ## Desired real-world connection architecture
 
-`real_world_egress` is an explicit operator opt-in and is not the current malware
-baseline. A production deployment should place it behind a separate sacrificial
+`real_world_egress` is an explicit operator opt-in and is not the default malware
+baseline. A production deployment places it behind a separate sacrificial
 egress tier—not behind the workstation's ordinary default route:
 
 ```text
@@ -132,12 +135,18 @@ every check passes. On execution it adds only the exact guest IP to a kernel-exp
 seconds; executor heartbeats refresh the entry. A worker crash, broker failure or missed heartbeat
 therefore removes egress without depending on application cleanup.
 
-The initial enforced policy permits only TCP 80/443 and DNS to the recording resolver, denies all
+The initial enforced policy permits TCP 80/443 and DNS to the recording resolver, denies all
 private, carrier-grade NAT, loopback, link-local, metadata, benchmark and multicast destinations,
 denies guest IPv6, rejects guest-to-host access, rate-limits new flows, and NATs only through
-`wg-umat-egress`. Windows uses `virbr-winstdt` and fixed guest `10.66.0.101`; Android uses the
-dedicated `br-umat-egress` bridge and `172.31.0.0/24`. Each lease starts a gateway PCAP before its
-firewall entry is added and revokes the entry before capture finalization.
+`wg-umat-egress`. Windows uses `virbr-winstdt` and fixed guest `10.66.0.101`; the disposable
+Android worker NATs its ReDroid network to fixed `10.68.0.10` on `br-umat-malware`. The broker
+leases and captures that post-NAT boundary address, while the in-guest PCAP retains ReDroid's
+original flow identity. Each lease starts a gateway PCAP before its
+firewall entry is added and revokes the entry before capture finalization. Android additionally
+permits only the qualified SpyMax tuple `10.68.0.10 -> 37.120.141.140:7775/TCP`: the broker adds
+the exact source/destination/port tuple after capture starts, refreshes it with the source lease,
+and removes the source authorization first on completion, cancellation, timeout, byte-limit
+revocation or broker shutdown. This does not open TCP 7775 to any other destination or platform.
 
 After provisioning the remote VPN/gateway, verify readiness without running malware:
 

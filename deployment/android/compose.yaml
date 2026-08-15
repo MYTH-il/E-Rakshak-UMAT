@@ -26,6 +26,12 @@ services:
     depends_on: [postgres]
     networks: [mobsf]
     extra_hosts: ["host.docker.internal:host-gateway"]
+    healthcheck:
+      test: ["CMD-SHELL", "grep -aq 'manage.py.qcluster' /proc/1/cmdline"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
 
   mobsf:
     image: ${MOBSF_IMAGE:-umat-mobsf:6462901d}
@@ -36,6 +42,12 @@ services:
     depends_on: [postgres, djangoq]
     networks: [mobsf]
     extra_hosts: ["host.docker.internal:host-gateway"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:8000/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
 networks:
   mobsf: {}

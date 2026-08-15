@@ -11,9 +11,9 @@
     "note": "The pinned repository provides native API handlers, not a JSON Schema; raw responses remain immutable artifacts."
   },
   "tree_sha256": "9c554d1e1e2c7c5e70cf3d5b6504a28bc37ed62b81ddc0b0f3007b4bec2c58fa",
-  "patch_series_sha256": "da607f7d284c2718c0cf8ef402836c82d0e9042ad149d0b99f7818af23b5de94",
+  "patch_series_sha256": "6e57ea8b369ce81265f43f5e1c0523d20c16ea9b2478bd841db7fcf58f9b14fd",
   "container_image": "umat-mobsf:6462901d",
-  "container_image_digest": "sha256:d194b0783bd6550d24248df0b22cef93a60946e37349649a9da2e3f4856b1212",
+  "container_image_digest": "sha256:9c2c0fe2763dfd1210833cf17e5e85eda27d874efcbf81bcce5862ae14b16315",
   "runtime_policy": {
     "default": "redroid",
     "required": ["redroid"],
@@ -21,6 +21,8 @@
   },
   "tool_versions": {
     "mobsf": "4.5.1",
+    "frida": "17.17.0",
+    "frida_server_x86_64_sha256": "5f0671fbeaee0b1ee66b1536c3eae966d58765b7e3954ea49932e5931e43bd6c",
     "poetry": "2.4.1",
     "jadx": "1.5.0",
     "android_api": 30,
@@ -35,8 +37,8 @@
   "validation": {
     "status": "qualified",
     "runtime": "redroid",
-    "validated_at": "2026-08-10",
-    "evidence_run_id": "019fec3b-c602-7b05-aa9d-b72ee7bc0d73",
-    "result": "IRATA completed end to end on ReDroid Android 11/API 30 with 626 persisted Frida API-monitor events, attributable runtime network traffic, rooted deterministic stimulation, PCAP capture, C2 analysis, adaptations, aggregation, and final report generation."
+    "validated_at": "2026-08-15",
+    "evidence_run_id": "01a00541-5f6a-7c54-aa05-fb1a7b41bb64",
+    "result": "SpyMax completed end to end on ReDroid Android 11/API 30 with a verified pinned Frida 17.17.0 server, API-monitor hook readiness, zero API-monitor polling errors, 71 raw monitor rows, persisted normalized access events, guest and gateway PCAP capture, C2 analysis, adaptations, aggregation, and final report generation."
   }
 }

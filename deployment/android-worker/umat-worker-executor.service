@@ -10,6 +10,9 @@ Group=umat-worker
 SupplementaryGroups=docker
 WorkingDirectory=/opt/umat
 EnvironmentFile=/etc/umat/android-executor.env
+Environment=UMAT_CONTRACT_ROOT=/opt/umat/contracts
+Environment=HOME=/var/lib/umat/android-work
+Environment=ANDROID_USER_HOME=/var/lib/umat/android-work/.android
 ExecStart=/opt/umat/.venv/bin/umat-android-executor run
 ExecStopPost=+/usr/bin/systemctl poweroff
 Restart=no

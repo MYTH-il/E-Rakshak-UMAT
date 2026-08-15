@@ -16,7 +16,7 @@
     "platform_manifest_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
     "analysis_window":{"type":"object","required":["started_at","ended_at"],"properties":{"started_at":{"type":"string","format":"date-time"},"ended_at":{"type":"string","format":"date-time"}},"additionalProperties":false},
     "guest_ip":{"type":["string","null"],"format":"ipvanyaddress"},
-    "correlation_mode":{"enum":["host_network","network_only"]},
+    "correlation_mode":{"enum":["host_network","temporal","network_only"]},
     "network_events":{"type":"array","items":{"$ref":"c2-event-v1.3.schema.json"}},
     "artifacts":{"type":"array","items":{"type":"object","required":["path","sha256","size_bytes"],"properties":{"path":{"type":"string"},"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"size_bytes":{"type":"integer","minimum":0}},"additionalProperties":false}},
     "caveats":{"type":"array","items":{"type":"string"},"uniqueItems":true},

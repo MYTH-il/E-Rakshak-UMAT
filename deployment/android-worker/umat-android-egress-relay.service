@@ -1,0 +1,23 @@
+[Unit]
+Description=UMAT Android worker restricted egress-broker relay
+After=network-online.target libvirtd.service umat-egress-broker.service
+Requires=umat-egress-broker.service
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+ExecStart=/usr/bin/socat TCP-LISTEN:8092,bind=10.67.0.1,reuseaddr,fork TCP:127.0.0.1:8092
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET
+
+[Install]
+WantedBy=multi-user.target

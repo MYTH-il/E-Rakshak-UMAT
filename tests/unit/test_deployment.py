@@ -237,7 +237,39 @@ def test_startup_command_orders_dependencies_before_executors(
         "health:MobSF",
         "systemctl:reset-failed:umat-windows-executor.service",
         "systemctl:start:umat-windows-executor.service",
+        "systemctl:reset-failed:umat-android-executor.service",
+        "systemctl:start:umat-android-executor.service",
     ]
+
+
+def test_startup_uses_only_disposable_android_executor_after_cutover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr("umat.deployment.startup.verify_installation", lambda: None)
+    monkeypatch.setattr(
+        "umat.deployment.startup.sudo_systemctl",
+        lambda action, units: events.append(f"systemctl:{action}:{':'.join(units)}"),
+    )
+    monkeypatch.setattr(
+        "umat.deployment.startup.reset_and_start_units",
+        lambda units: events.append(f"start:{':'.join(units)}"),
+    )
+    monkeypatch.setattr(
+        "umat.deployment.startup.compose_up",
+        lambda path: events.append(f"compose:{path.parent.name}"),
+    )
+    monkeypatch.setattr("umat.deployment.startup.wait_for_postgres", lambda timeout: None)
+    monkeypatch.setattr("umat.deployment.startup.wait_for_url", lambda *args: None)
+    monkeypatch.setattr("umat.deployment.startup.path_exists", lambda path: True)
+
+    result = CliRunner().invoke(main_app, ["start", "--skip-status"])
+
+    assert result.exit_code == 0
+    assert "compose:android" not in events
+    assert "systemctl:disable:--now:umat-android-executor.service" in events
+    assert "start:umat-android-worker-controller.service" in events
+    assert "start:umat-android-executor.service" not in events
 
 
 def test_root_owned_deployment_state_falls_back_to_sudo(
@@ -379,6 +411,23 @@ def test_android_runtime_installer_enforces_locked_emulator_and_license() -> Non
     assert "system-images\\;android-30\\;default\\;x86_64" in installer
 
 
+def test_android_frida_server_is_pinned_and_packaged_for_offline_runtime() -> None:
+    android = json.loads((ROOT / "dependency-locks/android-erakshak.json").read_text())
+    version = android["tool_versions"]["frida"]
+    digest = android["tool_versions"]["frida_server_x86_64_sha256"]
+    patch = (ROOT / "deployment/android/patches/0005-pinned-frida-readiness.patch").read_text()
+    overlay = (ROOT / "deployment/android/Dockerfile.frida-overlay").read_text()
+    bootstrap = (ROOT / "deployment/android/bootstrap.sh").read_text()
+
+    assert f"FRIDA_SERVER_VERSION={version}" in patch
+    assert f"FRIDA_SERVER_SHA256={digest}" in patch
+    assert f"FRIDA_SERVER_VERSION={version}" in overlay
+    assert f"FRIDA_SERVER_SHA256={digest}" in overlay
+    assert "/opt/frida-server" in patch
+    assert "Pinned Frida server did not become ready" in patch
+    assert "0005-pinned-frida-readiness.patch" in bootstrap
+
+
 def test_all_executor_units_use_isolated_environment_files() -> None:
     installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
     assert "umat-windows-executor.service" in installer
@@ -410,12 +459,22 @@ def test_guest_firewall_is_installed_and_fail_closed() -> None:
     assert 'iifname { "virbr-winstdt", "br-umat-android" } drop' in rules
     assert 'ip daddr 172.30.0.3 tcp dport 8080 accept' in rules
     assert 'iifname "virbr-umat-mgmt" ip saddr 10.67.0.10 ct state established,related accept' in rules
+    assert 'tcp dport { 8092, 8443 } accept' in rules
     assert 'iifname { "virbr-umat-mgmt", "br-umat-malware" } drop' in rules
     assert "set windows_egress_v4" in rules
     assert "set android_egress_v4" in rules
+    assert "set android_scoped_tcp_v4" in rules
+    assert "ip saddr . ip daddr . tcp dport @android_scoped_tcp_v4" in rules
     assert 'oifname "wg-umat-egress" tcp dport { 80, 443 }' in rules
     assert "169.254.0.0/16" in rules
     assert "table ip6 umat_guest_guard6" in rules
+
+    gateway_rules = (ROOT / "deployment/full-stack/umat-aws-egress.nft").read_text()
+    assert (
+        'ip saddr 10.77.0.2 ip daddr 37.120.141.140 tcp dport 7775 ct state new'
+        in gateway_rules
+    )
+    assert 'ip saddr 10.77.0.2 tcp dport { 80, 443 }' in gateway_rules
     assert "umat-egress-broker" in installer
     assert "UMAT_EGRESS_MAX_BYTES=1073741824" in installer
     assert "Before=umat-android-executor.service umat-windows-executor.service" in unit
@@ -424,13 +483,36 @@ def test_guest_firewall_is_installed_and_fail_closed() -> None:
 def test_android_worker_is_disposable_and_separates_proxy_entrypoint() -> None:
     reset = (ROOT / "deployment/android-worker/reset-worker.sh").read_text()
     controller = (ROOT / "deployment/android-worker/worker-controller.sh").read_text()
+    mobsf_unit = (ROOT / "deployment/android-worker/umat-worker-mobsf.service").read_text()
+    executor_unit = (ROOT / "deployment/android-worker/umat-worker-executor.service").read_text()
     source = (ROOT / "src/umat/android/redroid.py").read_text()
     redroid_launch, proxy_launch = source.split("def enable_analysis_proxy", 1)
     assert 'rm -f -- "$OVERLAY"' in reset
     assert "network=default" not in reset
+    assert "UMAT_ANDROID_EGRESS_GUEST_IP=10.68.0.10" in reset
+    assert "ip route replace default via 10.68.0.1 dev malware0" in reset
     assert "failures > 3" in controller
+    assert "--wait --wait-timeout 300" in mobsf_unit
+    assert "UMAT_CONTRACT_ROOT=/opt/umat/contracts" in executor_unit
     assert "/usr/local/bin/mitmdump" not in redroid_launch
     assert "/usr/local/bin/mitmdump" in proxy_launch
+
+
+def test_android_worker_cutover_disables_host_executor_and_has_local_healthchecks() -> None:
+    installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
+    startup = (ROOT / "src/umat/deployment/startup.py").read_text()
+    deployment_cli = (ROOT / "src/umat/deployment/cli.py").read_text()
+    compose = (ROOT / "deployment/android/compose.yaml").read_text()
+    assert "systemctl disable --now umat-android-executor.service" in installer
+    assert "umat-android-egress-relay.service" in installer
+    assert '"umat-android-egress-relay.service"' in startup
+    assert '"umat-android-egress-relay.service"' in deployment_cli
+    assert 'HOST_ANDROID_EXECUTOR_UNIT = "umat-android-executor.service"' in startup
+    assert '"disable legacy host Android executor"' in startup
+    assert 'services.append("umat-android-worker-controller.service")' in deployment_cli
+    assert "http://127.0.0.1:8000/" in compose
+    assert "manage.py.qcluster" in compose
+    assert "host.docker.internal:8000" not in compose
 
 
 def test_executor_enrollment_can_exit_without_claiming_work() -> None:

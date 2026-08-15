@@ -1,0 +1,17 @@
+ARG MOBSF_BASE_IMAGE=umat-mobsf:6462901d
+FROM ${MOBSF_BASE_IMAGE}
+
+USER root
+
+ARG FRIDA_SERVER_VERSION=17.17.0
+ARG FRIDA_SERVER_SHA256=5f0671fbeaee0b1ee66b1536c3eae966d58765b7e3954ea49932e5931e43bd6c
+COPY frida-server-${FRIDA_SERVER_VERSION}-android-x86_64.xz /tmp/frida-server.xz
+COPY frida_core.py /home/mobsf/Mobile-Security-Framework-MobSF/mobsf/DynamicAnalyzer/views/android/frida_core.py
+RUN echo "${FRIDA_SERVER_SHA256}  /tmp/frida-server.xz" | sha256sum -c - && \
+    mkdir -p /opt/frida-server && \
+    python -c "import lzma,pathlib; pathlib.Path('/opt/frida-server/frida-server-${FRIDA_SERVER_VERSION}-android-x86_64').write_bytes(lzma.decompress(pathlib.Path('/tmp/frida-server.xz').read_bytes()))" && \
+    chmod 0755 "/opt/frida-server/frida-server-${FRIDA_SERVER_VERSION}-android-x86_64" && \
+    chown mobsf:mobsf /home/mobsf/Mobile-Security-Framework-MobSF/mobsf/DynamicAnalyzer/views/android/frida_core.py && \
+    rm -f /tmp/frida-server.xz
+
+USER mobsf

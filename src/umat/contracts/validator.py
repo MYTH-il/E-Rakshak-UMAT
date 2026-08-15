@@ -2,29 +2,39 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
-CONTRACT_ROOT = Path(__file__).parents[3] / "contracts"
-
 
 class ContractError(ValueError):
     pass
 
 
+def contract_root() -> Path:
+    configured = os.getenv("UMAT_CONTRACT_ROOT")
+    candidates = [Path(configured)] if configured else []
+    candidates.extend((Path.cwd() / "contracts", Path(__file__).parents[3] / "contracts"))
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate.resolve()
+    raise ContractError("contract root is unavailable")
+
+
 def load_schema(relative_path: str) -> dict[str, Any]:
-    path = (CONTRACT_ROOT / relative_path).resolve()
-    if CONTRACT_ROOT.resolve() not in path.parents:
+    root = contract_root()
+    path = (root / relative_path).resolve()
+    if root not in path.parents:
         raise ContractError("contract path escapes the contract root")
     return cast(dict[str, Any], json.loads(path.read_text()))
 
 
 def schema_registry() -> Registry:
     resources: list[tuple[str, Resource]] = []
-    for path in CONTRACT_ROOT.rglob("*.schema.json"):
+    for path in contract_root().rglob("*.schema.json"):
         schema = json.loads(path.read_text())
         if schema_id := schema.get("$id"):
             resources.append((schema_id, Resource.from_contents(schema)))
@@ -58,10 +68,26 @@ def _validate_c2_identity(document: dict[str, Any]) -> None:
             raise ContractError(f"C2 event {index} sample_id does not equal sample_sha256")
         if event["platform"] != platform:
             raise ContractError(f"C2 event {index} platform does not equal result platform")
-        if platform == "android" and event.get("data_type_accessed") is not None:
-            raise ContractError(
-                "Android network-only C2 events cannot assert an accessed data item"
-            )
+        if platform == "android" and (
+            event.get("data_type_accessed") is not None
+            or event.get("access_api_call") is not None
+        ):
+            host_refs = [
+                ref
+                for ref in event.get("evidence_refs") or []
+                if isinstance(ref, dict)
+                and ref.get("type") == "host_access"
+                and ref.get("source") == "android_telemetry"
+            ]
+            if (
+                document.get("correlation_mode") != "temporal"
+                or event.get("finding_kind") != "correlation"
+                or event.get("capped_by_caveat") != "android_temporal_correlation_only"
+                or not host_refs
+            ):
+                raise ContractError(
+                    "Android data-access events require validated temporal correlation evidence"
+                )
 
 
 def validate_pinned_native_schema(

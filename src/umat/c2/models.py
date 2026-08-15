@@ -36,6 +36,9 @@ class C2AnalysisContext(BaseModel):
     caveats: list[str] = Field(default_factory=list)
 
     def contract_document(self) -> dict[str, Any]:
+        access_source = "unavailable"
+        if self.access_events:
+            access_source = "android_telemetry" if self.platform == "android" else "etl_derived"
         return {
             "schema_version": self.schema_version,
             "analysis_run_id": str(self.analysis_run_id),
@@ -52,7 +55,7 @@ class C2AnalysisContext(BaseModel):
             "guest_ip": self.guest_ip,
             "access_events": {
                 "artifact_id": str(self.access_events.artifact_id) if self.access_events else None,
-                "source": "etl_derived" if self.access_events else "unavailable",
+                "source": access_source,
                 "correlation_eligible": self.correlation_eligible,
             },
             "etw_events": {

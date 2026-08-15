@@ -2,9 +2,12 @@
 
 import { configureApi, api } from "./api.js";
 import { createUser, deleteUser, loadUsers, loadWorkers, revokeUserSessions, updateAndroidProfile, updateUser, updateWindowsProfile } from "./administration.js";
+import { androidComponentItems, readableAndroidFinding } from "./android-components.js";
+import { androidScanLogRows } from "./android-scan-logs.js";
 import { loadAndroidCommand, loadAndroidWorkflow, submitAndroidCommand } from "./android.js";
 import { addCaseSubmission, queryRecentRuns, retryAnalysisRun, updateCaseMetadata } from "./cases.js";
 import { createReportExport, loadRunReport } from "./reports.js";
+import { runtimeObservationRows } from "./runtime-observations.js";
 import { configureRouter, go, navigateEvent, state } from "./state-router.js";
 
 // Officer-facing caveat text. Mirrors contracts/vocabularies/caveats.json
@@ -16,6 +19,7 @@ const CAVEAT_TEXT = {
   android_dynamic_stop_failed: "The device did not shut down cleanly after the test, so the final part of the recording may be incomplete.",
   android_package_process_not_observed: "The application package was installed, but its process was not running when activation was checked. Runtime conclusions are incomplete.",
   android_runtime_behavior_not_observed: "The application ran, but no package-attributable API activity, data access, or destination was recorded. This is an inconclusive dynamic result, not a clean result.",
+  android_temporal_correlation_only: "Android API access and network traffic occurred close together in time. This association is useful for review but does not prove that the accessed information was transmitted.",
   android_network_checkpoint_invalid: "Saved Android proxy checkpoints could not be read. Direct PCAP evidence remains available, but tunneled HTTPS destinations may be missing.",
   explicit_activity_launch_failed: "An optional request to launch a specific activity failed. The application may still have launched through its normal entry point.",
   application_data_collection_failed: "The application ran, but its private files could not be archived at the end of the session.",
@@ -104,7 +108,7 @@ function human(value) {
 function toast(message, error = false) {
   const existing = document.querySelector(".toast");
   if (existing) existing.remove();
-  const item = node("aside", `toast${error ? " notice-error" : ""}`, message);
+  const item = node("aside", `toast${error ? " error" : ""}`, message);
   item.setAttribute("aria-label", error ? "Error notification" : "Notification");
   item.setAttribute("aria-live", error ? "assertive" : "polite");
   document.body.append(item);
@@ -112,51 +116,70 @@ function toast(message, error = false) {
 }
 
 function badge(value) {
-  return node("span", `badge badge-${String(value || "unknown").toLowerCase()}`, human(value));
+  return node("span", `chip chip-${String(value || "unknown").toLowerCase().replaceAll(" ", "-")}`, human(value));
 }
 
 function navItem(label, href, active) {
-  return link(label, href, `nav-link${active ? " active" : ""}`);
+  return link(label, href, `rail-link${active ? " active" : ""}`);
 }
 
 function shell(title, content) {
   const path = location.pathname;
   const root = node("div", "shell");
-  const sidebar = node("aside", "sidebar");
-  sidebar.id = "sidebar";
-  const brand = link("", "/cases", "brand");
-  append(brand, node("span", "brand-mark", "U"));
-  const brandCopy = node("span");
-  append(brandCopy, node("strong", "", "UMAT"), node("small", "", "Analysis console"));
+  const sidebar = node("aside", "rail");
+  sidebar.id = "rail";
+  const brand = link("", "/cases", "rail-brand");
+  append(brand, node("span", "rail-mark", "U"));
+  const brandCopy = node("span", "rail-brand-copy");
+  append(brandCopy, node("span", "eyebrow on-accent", "E-Rakshak"), node("strong", "", "UMAT Console"));
   brand.append(brandCopy);
-  sidebar.append(brand, node("div", "nav-label", "Workspace"));
-  sidebar.append(navItem("Case queue", "/cases", path === "/cases" || path.startsWith("/cases/")));
-  sidebar.append(navItem("Recent runs", "/runs", path === "/runs"));
-  if (canSubmit()) sidebar.append(navItem("New analysis", "/submit", path === "/submit"));
+  sidebar.append(brand, node("div", "rail-section", "Workspace"));
+  const workspaceNav = node("nav", "rail-nav");
+  workspaceNav.setAttribute("aria-label", "Workspace");
+  workspaceNav.append(navItem("Case queue", "/cases", path === "/cases" || path.startsWith("/cases/")));
+  workspaceNav.append(navItem("Recent runs", "/runs", path === "/runs"));
+  if (canSubmit()) workspaceNav.append(navItem("New analysis", "/submit", path === "/submit"));
+  sidebar.append(workspaceNav);
   if (state.session.roles.includes("administrator")) {
-    sidebar.append(node("div", "nav-label", "Administration"));
-    sidebar.append(navItem("Users & roles", "/admin/users", path === "/admin/users"));
-    sidebar.append(navItem("Windows profiles", "/admin/windows", path === "/admin/windows"));
-    sidebar.append(navItem("Android profiles", "/admin/android", path === "/admin/android"));
-    sidebar.append(navItem("Workers", "/admin/workers", path === "/admin/workers"));
+    sidebar.append(node("div", "rail-section", "Administration"));
+    const administrationNav = node("nav", "rail-nav");
+    administrationNav.setAttribute("aria-label", "Administration");
+    administrationNav.append(navItem("Users & roles", "/admin/users", path === "/admin/users"));
+    administrationNav.append(navItem("Windows profiles", "/admin/windows", path === "/admin/windows"));
+    administrationNav.append(navItem("Android profiles", "/admin/android", path === "/admin/android"));
+    administrationNav.append(navItem("Workers", "/admin/workers", path === "/admin/workers"));
+    sidebar.append(administrationNav);
   }
-  const foot = node("div", "sidebar-foot");
-  const user = node("div", "user-chip");
-  append(user, node("strong", "", state.session.username), node("small", "", state.session.roles.join(" · ")));
-  const logout = button("Sign out", "btn btn-ghost btn-small");
+  const foot = node("div", "rail-foot");
+  const user = node("div", "rail-user");
+  const initials = state.session.username.slice(0, 2).toUpperCase();
+  const userCopy = node("span", "rail-user-copy");
+  append(userCopy, node("strong", "", state.session.username), node("small", "", state.session.roles.join(" · ")));
+  append(user, node("span", "rail-avatar", initials), userCopy);
+  const logout = button("Sign out", "btn btn-ghost btn-small rail-signout");
   logout.addEventListener("click", async () => {
     try { await api("/api/v1/auth/logout", { method: "POST" }); } finally { state.session = null; go("/login"); }
   });
-  append(user, logout); foot.append(user); sidebar.append(foot);
+  foot.append(user, logout); sidebar.append(foot);
 
-  const column = node("div", "main-column");
+  const column = node("div", "main");
   const topbar = node("header", "topbar");
-  const menu = button("Menu", "btn btn-ghost mobile-menu");
-  menu.addEventListener("click", () => sidebar.classList.toggle("open"));
+  const menu = button("Menu", "btn btn-ghost btn-small rail-toggle");
+  menu.setAttribute("aria-controls", "rail");
+  menu.setAttribute("aria-expanded", "false");
+  menu.addEventListener("click", () => {
+    const open = sidebar.classList.toggle("open");
+    menu.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  const crumb = node("div", "topbar-crumb");
+  append(crumb, menu, node("span", "", "UMAT"), node("span", "sep", "/"), node("strong", "", title));
+  topbar.append(node("h1", "sr-only", title));
+  const topbarActions = node("div", "topbar-actions");
+  if (canSubmit()) topbarActions.append(link("New analysis", "/submit", "btn btn-primary btn-small"));
   append(
     topbar,
-    append(node("div", "top-actions"), menu, node("h1", "", title)),
-    canSubmit() ? link("New analysis", "/submit", "btn btn-primary") : null,
+    crumb,
+    topbarActions,
   );
   const main = node("main", "content"); main.id = "main"; main.tabIndex = -1; main.append(content);
   column.append(topbar, main); root.append(sidebar, column);
@@ -173,16 +196,32 @@ function pageHead(eyebrow, title, description, action) {
 
 async function renderLogin() {
   if (state.session) { go("/cases"); return; }
-  const page = node("main", "login-page"); page.id = "main"; page.tabIndex = -1;
-  const wrapper = node("div", "login-card");
-  const identity = node("div", "login-brand");
-  append(identity, node("span", "brand-mark", "U"), node("h1", "", "UMAT"), node("p", "", "Unified malware analysis and triage"));
-  const card = node("section", "card card-body");
-  const form = node("form");
+  const page = node("div", "login-page");
+  const identity = node("section", "login-side");
+  identity.setAttribute("aria-hidden", "true");
+  const identityHead = node("div", "login-side-head");
+  const identityCopy = node("div");
+  append(identityCopy, node("span", "eyebrow on-accent", "E-Rakshak Programme"), node("h3", "", "UMAT Console"));
+  append(identityHead, node("span", "rail-mark", "U"), identityCopy);
+  const quote = node("div", "login-quote");
+  append(quote,
+    node("span", "eyebrow", "Unified Malware Analysis & Triage"),
+    node("h1", "", "Evidence-led malware analysis across Windows and Android."),
+    node("p", "", "One controlled workspace for intake, runtime observation, network correlation, immutable reports, and audited administration."));
+  const stats = node("div", "login-stat-row");
+  [["2", "Analysis backends"], ["6", "Pipeline stages"], ["100%", "Actions audited"]].forEach(([value, label]) => {
+    const stat = node("div", "login-stat");
+    append(stat, node("strong", "", value), node("small", "", label)); stats.append(stat);
+  });
+  append(identity, identityHead, quote, stats);
+  const formWrap = node("main", "login-form-wrap"); formWrap.id = "main"; formWrap.tabIndex = -1;
+  const card = node("section", "login-card");
+  append(card, node("span", "eyebrow", "Authenticate"), node("h1", "", "Sign in to UMAT"), node("p", "", "Use your assigned operational account."));
+  const form = node("form", "login-form");
   const username = field("Username", "text", "username", true);
   const password = field("Password", "password", "password", true);
   const error = node("div");
-  const submit = button("Authenticate", "btn btn-primary"); submit.type = "submit";
+  const submit = button("Authenticate", "btn btn-primary btn-block"); submit.type = "submit";
   append(form, username.wrap, password.wrap, error, submit);
   form.addEventListener("submit", async (event) => {
     event.preventDefault(); error.replaceChildren(); submit.disabled = true;
@@ -193,7 +232,8 @@ async function renderLogin() {
       error.append(node("div", "notice notice-error", failure.message));
     } finally { submit.disabled = false; }
   });
-  card.append(form); wrapper.append(identity, card); page.append(wrapper); app.replaceChildren(page);
+  card.append(form, node("p", "login-foot", "Access and role changes are managed by UMAT administrators."));
+  formWrap.append(card); page.append(identity, formWrap); app.replaceChildren(page);
 }
 
 function field(label, type, name, required = false) {
@@ -256,7 +296,7 @@ async function renderCases() {
   content.append(filters);
 
   const heading = node("h3", "section-title", "Cases");
-  const list = node("div", "case-list");
+  const list = node("div", "row-list");
   content.append(heading, list);
 
   function paint() {
@@ -578,8 +618,19 @@ async function renderCase(caseId, preserveTab = false) {
     content.append(warning);
   }
 
-  const hero = node("section", "card verdict-hero");
-  const heroCopy = node("div");
+  const hero = node("section", "card verdict-block");
+  const verdict = report?.verdict || run?.status || "pending";
+  const tone = ["malicious", "failed"].includes(verdict)
+    ? "tone-bad"
+    : ["suspicious", "inconclusive", "partial"].includes(verdict)
+      ? "tone-warn"
+      : ["clean", "completed", "no_malicious_activity_observed", "terminal"].includes(verdict)
+        ? "tone-good"
+        : "tone-pending";
+  const seal = node("div", `seal ${tone}`);
+  seal.setAttribute("aria-hidden", "true");
+  seal.append(node("span", "seal-glyph", report ? report.verdict.slice(0, 1).toUpperCase() : "…"));
+  const heroCopy = node("div", "verdict-copy");
   append(heroCopy,
     node("div", "eyebrow", report ? "Unified verdict" : "Analysis status"),
     node("h2", "", report ? human(report.verdict) : human(run?.status || "pending")),
@@ -607,7 +658,9 @@ async function renderCase(caseId, preserveTab = false) {
     actions.append(cancel);
   }
   heroCopy.append(actions);
-  append(hero, heroCopy, node("div", "verdict-orb", report ? report.verdict.slice(0, 1).toUpperCase() : "…"));
+  const meta = node("div", "verdict-meta");
+  append(meta, run ? badge(run.status) : null, run?.id ? node("span", "id", run.id) : null);
+  append(hero, seal, heroCopy, meta);
   content.append(hero);
 
   const selector = runSelector(caseData, run, (id) => { state.activeRunId = id; renderCase(caseId, true); });
@@ -720,6 +773,31 @@ function listCard(title, items, mapper) {
   card.append(list); return card;
 }
 
+function androidComponentCard(title, values) {
+  const allItems = androidComponentItems(values);
+  const items = allItems.slice(0, 100);
+  const card = node("section", "card card-body");
+  card.append(node("h3", "card-title", `${title} (${allItems.length})`));
+  const list = node("ul", "data-list component-list");
+  if (!items.length) list.append(node("li", "empty", "No components declared."));
+  items.forEach((item) => {
+    const row = node("li", "data-item component-item");
+    const copy = node("div", "component-copy");
+    copy.append(node("strong", "mono component-name", item.display));
+    if (item.obfuscated) {
+      copy.append(node("small", "", "Obfuscated Unicode identifier"));
+      const disclosure = node("details", "component-raw");
+      disclosure.append(
+        node("summary", "", `Show raw identifier (${item.raw_character_count} characters)`),
+        node("code", "mono", item.raw),
+      );
+      copy.append(disclosure);
+    }
+    row.append(copy); list.append(row);
+  });
+  card.append(list); return card;
+}
+
 // --- platform evidence panel -------------------------------------------
 // Rendered identically for Windows and Android. The tool analyses both, so the
 // analyst view must not privilege one backend's vocabulary over the other.
@@ -738,7 +816,7 @@ const PLATFORM_FIELDS = {
 };
 
 function severityBadge(label, count) {
-  return node("span", `badge badge-sev-${label}`, `${count} ${label}`);
+  return node("span", `sev sev-${label}`, `${count} ${label}`);
 }
 
 function platformPanel(details, platform) {
@@ -778,8 +856,8 @@ function platformPanel(details, platform) {
     card.append(node("h4", "card-title", `Evidence collected (${summary.total_findings} findings)`));
     const sev = node("div", "actions-row");
     Object.entries(summary.by_severity || {}).forEach(([label, count]) => sev.append(severityBadge(label, count)));
-    if (summary.mitre_technique_count) sev.append(node("span", "badge", `${summary.mitre_technique_count} ATT&CK techniques`));
-    Object.entries(summary.by_source || {}).forEach(([src, count]) => sev.append(node("span", "badge", `${count} from ${human(src)}`)));
+    if (summary.mitre_technique_count) sev.append(node("span", "chip chip-neutral", `${summary.mitre_technique_count} ATT&CK techniques`));
+    Object.entries(summary.by_source || {}).forEach(([src, count]) => sev.append(node("span", "chip chip-neutral", `${count} from ${human(src)}`)));
     card.append(sev);
     const cats = Object.entries(summary.by_category || {});
     if (cats.length) {
@@ -914,24 +992,26 @@ function confidenceRank(value) {
 }
 
 function table(headers, rows, mapper) {
-  const wrap = node("div", "table-wrap"); const element = node("table", "data-table"); const head = node("thead"); const headRow = node("tr"); headers.forEach((item) => headRow.append(node("th", "", item))); head.append(headRow); const body = node("tbody");
+  const wrap = node("div", "table-wrap"); wrap.tabIndex = 0; wrap.setAttribute("role", "region"); wrap.setAttribute("aria-label", `${headers.join(", ")} table`); const element = node("table", "data-table"); const head = node("thead"); const headRow = node("tr"); headers.forEach((item) => headRow.append(node("th", "", item))); head.append(headRow); const body = node("tbody");
   if (!rows?.length) { const row = node("tr"); const cell = node("td", "empty", "No records available."); cell.colSpan = headers.length; row.append(cell); body.append(row); }
-  (rows || []).forEach((item) => { const row = node("tr"); mapper(item).forEach((value) => row.append(node("td", "", value ?? "—"))); body.append(row); });
+  (rows || []).forEach((item) => { const row = node("tr"); mapper(item).forEach((value) => { const cell = node("td"); if (value instanceof Node) cell.append(value); else cell.textContent = String(value ?? "—"); row.append(cell); }); body.append(row); });
   element.append(head, body); wrap.append(element); return wrap;
 }
 
 function dataExplorer(headers, rows, mapper, placeholder = "Search records", pageSize = 25) {
   const source = rows || [];
   const explorer = node("section", "data-explorer");
-  const toolbar = node("div", "data-toolbar");
-  const search = node("input", "data-search");
+  const toolbar = node("div", "explorer-toolbar");
+  const searchWrap = node("div", "explorer-search");
+  const search = node("input");
   search.type = "search";
   search.placeholder = placeholder;
   search.setAttribute("aria-label", placeholder);
-  const count = node("span", "mono muted");
-  toolbar.append(search, count);
+  searchWrap.append(search);
+  const count = node("span", "explorer-count");
+  toolbar.append(searchWrap, count);
   const viewport = node("div");
-  const pagination = node("div", "data-pagination");
+  const pagination = node("div", "explorer-pagination");
   let page = 1;
 
   function paint() {
@@ -946,7 +1026,7 @@ function dataExplorer(headers, rows, mapper, placeholder = "Search records", pag
     count.textContent = `${filtered.length.toLocaleString()} of ${source.length.toLocaleString()} records`;
     pagination.replaceChildren();
     const previous = button("Previous", "btn btn-small");
-    const position = node("span", "mono muted", `Page ${page} of ${pages}`);
+    const position = node("span", "pos", `Page ${page} of ${pages}`);
     const next = button("Next", "btn btn-small");
     previous.disabled = page <= 1;
     next.disabled = page >= pages;
@@ -1033,9 +1113,10 @@ function renderProgress(content, runs, caseId) {
     const track = node("div", "stage-track stage-track-spaced");
     order.forEach((kind) => {
       const stageData = run.stages.find((item) => item.stage_type === kind);
-      const stage = node("div", "stage");
+      const stateName = stageData?.state || "waiting";
+      const stage = node("div", `stage st-${stateName}`);
       append(stage, node("strong", "", human(kind)),
-        node("span", `badge-${stageData?.state || "waiting"}`, human(stageData?.state || "waiting")));
+        node("span", "st-label", human(stateName)));
       track.append(stage);
     });
     card.append(track);
@@ -1080,16 +1161,21 @@ function valueItems(value) {
   return [];
 }
 
-function componentNames(value) {
-  if (Array.isArray(value)) return value.map((item) => typeof item === "string" ? item : item.name || item.value || JSON.stringify(item));
-  if (value && typeof value === "object") return Object.keys(value);
-  return [];
-}
-
 function compactJson(value) {
   if (value === null || value === undefined) return "—";
   if (typeof value === "string") return value;
   return JSON.stringify(value);
+}
+
+function androidFindingCell(item) {
+  const finding = readableAndroidFinding(item.summary);
+  if (!finding.changed) return finding.display;
+  const copy = node("div", "finding-copy");
+  copy.append(node("span", "", finding.display));
+  const disclosure = node("details", "component-raw");
+  disclosure.append(node("summary", "", "Show raw finding"), node("code", "mono", finding.raw));
+  copy.append(disclosure);
+  return copy;
 }
 
 async function renderAndroidWorkflow(runId, quiet = false) {
@@ -1117,7 +1203,7 @@ async function renderAndroidWorkflow(runId, quiet = false) {
   append(summary, copy, metrics); content.append(summary);
 
   const track = node("div", "stage-track stage-track-spaced");
-  ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"].filter((kind) => run.c2_analysis_enabled || !kind.startsWith("c2_")).forEach((kind) => { const stageData = run.stages.find((item) => item.stage_type === kind); const stage = node("div", "stage"); append(stage, node("strong", "", human(kind)), node("span", `badge-${stageData?.state || "waiting"}`, human(stageData?.state || "waiting"))); track.append(stage); });
+  ["platform_analysis", "c2_analysis", "platform_adaptation", "c2_adaptation", "case_aggregation", "report_generation"].filter((kind) => run.c2_analysis_enabled || !kind.startsWith("c2_")).forEach((kind) => { const stageData = run.stages.find((item) => item.stage_type === kind); const stateName = stageData?.state || "waiting"; const stage = node("div", `stage st-${stateName}`); append(stage, node("strong", "", human(kind)), node("span", "st-label", human(stateName))); track.append(stage); });
   content.append(track);
 
   const tabs = node("div", "tabs");
@@ -1139,13 +1225,17 @@ function renderAndroidStatic(content, workflow, report) {
   content.append(node("h3", "section-title", "Normalized capabilities"));
   content.append(table(["Data type", "Evidence", "Confidence", "Source"], workflow.capabilities, (item) => [human(item.data_type), human(item.evidence_level), human(item.confidence), item.source]));
   const components = node("div", "grid grid-2");
-  [["Activities", report.activities], ["Services", report.services], ["Receivers", report.receivers], ["Providers", report.providers]].forEach(([label, values]) => { const names = componentNames(values); components.append(listCard(`${label} (${names.length})`, names.slice(0, 100).map((name) => ({ name })), (item) => [item.name, null])); });
+  [["Activities", report.activities], ["Services", report.services], ["Receivers", report.receivers], ["Providers", report.providers]].forEach(([label, values]) => components.append(androidComponentCard(label, values)));
   content.append(node("h3", "section-title", "Application components"), components, node("h3", "section-title", "Security findings"));
-  content.append(table(["Finding", "Phase", "Category", "Severity", "Evidence"], workflow.findings, (item) => [item.summary, item.phase, human(item.category), human(item.severity || "unrated"), human(item.evidence_level)]));
+  content.append(dataExplorer(["Finding", "Phase", "Category", "Severity", "Evidence"], workflow.findings, (item) => [androidFindingCell(item), item.phase, human(item.category), human(item.severity || "unrated"), human(item.evidence_level)], "Search Android security findings"));
   content.append(node("h3", "section-title", "Static indicators"));
   content.append(table(["Type", "Value", "Confidence", "Traffic"], workflow.iocs, (item) => [item.type, item.value, human(item.confidence), item.seen_in_traffic ? "Observed" : "Not observed"]));
   const scanLogs = workflow.mobsf?.scan_logs;
-  if (scanLogs) { content.append(node("h3", "section-title", "Static scan log")); content.append(table(["Stage", "Status"], valueItems(scanLogs), (item) => [item.name || human(item), compactJson(item.details || item)])); }
+  if (scanLogs) {
+    const scanRows = androidScanLogRows(scanLogs);
+    content.append(node("h3", "section-title", "Static scan log"));
+    content.append(dataExplorer(["Time", "Stage", "Status", "Error"], scanRows, (item) => [item.timestamp || "—", human(item.stage), item.status, item.exception], "Search static scan events"));
+  }
 }
 
 function renderAndroidDynamic(content, workflow, report) {
@@ -1180,9 +1270,13 @@ function renderAndroidDynamic(content, workflow, report) {
   if (analystCommands.length) content.append(table(["Time", "Operation", "State", "Captured result"], analystCommands, (item) => [formatDate(item.completed_at || item.created_at), human(item.type), human(item.state), compactJson(item.result || {}).slice(0, 4000)]));
   else content.append(node("div", "notice", terminal ? "No analyst-triggered operations were recorded for this run." : "Analyst operations will appear here as they complete."));
   content.append(node("h3", "section-title", "Runtime observations"));
-  const runtimeRows = [];
-  Object.entries(report).forEach(([name, value]) => { if (["domains", "urls", "traffic", "http_tools", "screenshots"].includes(name) || Array.isArray(value)) runtimeRows.push({ name, value }); });
-  content.append(table(["Section", "Captured data"], runtimeRows.slice(0, 100), (item) => [human(item.name), compactJson(item.value).slice(0, 4000)]));
+  const runtimeRows = runtimeObservationRows(report);
+  content.append(dataExplorer(
+    ["Section", "Observation", "Details"],
+    runtimeRows,
+    (item) => [human(item.section), item.observation, item.details.slice(0, 4000)],
+    "Search runtime observations",
+  ));
   if (session?.state !== "ready") { const controls = node("div", "notice", session ? `Interactive session is ${human(session.state)}. Controls are unavailable after cleanup begins.` : "This run did not request an interactive session. The ReDroid guest was destroyed after evidence collection."); content.append(controls); }
   const links = node("div", "actions-row");
   if (workflow.inline_evidence.logcat) { const item = link("Open logcat", workflow.inline_evidence.logcat, "btn btn-small"); item.removeEventListener("click", navigateEvent); item.target = "_blank"; links.append(item); }
@@ -1206,7 +1300,7 @@ async function androidCommand(runId, type, payload = {}, timeoutMs = 120000) {
 
 function renderLiveAndroidSession(content, workflow) {
   const runId = workflow.run.id; const session = workflow.interactive_session;
-  const toolbar = node("div", "android-dynamic-toolbar");
+  const toolbar = node("div", "dynamic-toolbar");
   const toolDefinitions = [
     ["Stop screen", "screen-toggle"], ["Remove root CA", "remove-ca"],
     ["Unset HTTP(S) proxy", "unset-proxy"], ["TLS/SSL security tester", "tls"],
@@ -1214,8 +1308,8 @@ function renderLiveAndroidSession(content, workflow) {
     ["Get dependencies", "dependencies"], ["Take screenshot", "screenshot"],
     ["Logcat stream", "logcat-toggle"], ["Generate report", "finalize"],
   ];
-  const workspace = node("div", "android-dynamic-workspace");
-  const navigation = node("nav", "card android-dynamic-nav");
+  const workspace = node("div", "dynamic-workspace");
+  const navigation = node("nav", "card dynamic-nav");
   navigation.append(node("h3", "", "Dynamic Analyzer"));
   const sections = [
     ["device", "Live device"], ["frida", "Frida instrumentation"],
@@ -1223,36 +1317,36 @@ function renderLiveAndroidSession(content, workflow) {
     ["activities", "Activity tester"], ["dependencies", "Runtime dependencies"],
     ["files", "Application files"], ["logs", "Live logs"],
   ];
-  sections.forEach(([target, label]) => { const item = button(label, "android-dynamic-nav-item"); item.addEventListener("click", () => document.querySelector(`[data-android-section='${target}']`)?.scrollIntoView({ behavior: "smooth", block: "start" })); navigation.append(item); });
-  const device = node("section", "card card-body android-device-panel");
+  sections.forEach(([target, label]) => { const item = button(label, "dynamic-nav-item"); item.addEventListener("click", () => document.querySelector(`[data-android-section='${target}']`)?.scrollIntoView({ behavior: "smooth", block: "start" })); navigation.append(item); });
+  const device = node("section", "card card-body device-panel");
   device.dataset.androidSection = "device";
-  const deviceHead = node("div", "android-panel-head"); append(deviceHead, node("div", ""), node("h3", "card-title", "Live ReDroid device"), badge(session.state), node("span", "mono muted", `Expires ${formatDate(session.expires_at)}`)); device.append(deviceHead);
-  const screenWrap = node("div", "android-live-screen-wrap"); const screen = node("img", "android-live-screen"); screen.alt = "Live Android guest screen"; screen.draggable = false; screenWrap.append(screen); device.append(screenWrap);
-  const keys = node("div", "actions-row android-device-keys");
+  const deviceHead = node("div", "device-panel-head"); append(deviceHead, node("h3", "card-title", "Live ReDroid device"), badge(session.state), node("span", "mono muted", `Expires ${formatDate(session.expires_at)}`)); device.append(deviceHead);
+  const screenWrap = node("div", "device-screen-wrap"); const screen = node("img", "android-live-screen"); screen.alt = "Live Android guest screen"; screen.draggable = false; screenWrap.append(screen); device.append(screenWrap);
+  const keys = node("div", "actions-row device-keys");
   [["Back", 4], ["Home", 3], ["Overview", 187], ["Power", 26]].forEach(([label, keycode]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", () => perform("key", { keycode })); keys.append(item); });
-  const textInput = node("input", "android-inline-input"); textInput.placeholder = "Type into focused field"; const sendText = button("Send text", "btn btn-small"); sendText.addEventListener("click", () => perform("text", { text: textInput.value })); append(keys, textInput, sendText); device.append(keys);
-  const statusLine = node("div", "mono android-live-status", "Connecting to guest…"); device.append(statusLine);
+  const textInput = node("input", "device-inline-input"); textInput.placeholder = "Type into focused field"; const sendText = button("Send text", "btn btn-small"); sendText.addEventListener("click", () => perform("text", { text: textInput.value })); append(keys, textInput, sendText); device.append(keys);
+  const statusLine = node("div", "mono device-status", "Connecting to guest…"); device.append(statusLine);
 
-  const tools = node("div", "android-analysis-column");
-  function panel(section, title, description = "") { const value = node("section", "card card-body android-analysis-panel"); value.dataset.androidSection = section; append(value, node("h3", "card-title", title), description ? node("p", "muted", description) : null); tools.append(value); return value; }
+  const tools = node("div", "analysis-column");
+  function panel(section, title, description = "") { const value = node("section", "card card-body analysis-panel"); value.dataset.androidSection = section; append(value, node("h3", "card-title", title), description ? node("p", "muted", description) : null); tools.append(value); return value; }
   const live = panel("logs", "Live runtime output", "Logcat and Frida/API-monitor output remain visible throughout the session and update while the guest runs.");
   const liveTabs = node("div", "tabs android-console-tabs"); const logcatTab = button("Logcat", "tab active"); const fridaTab = button("Frida / API monitor", "tab"); liveTabs.append(logcatTab, fridaTab);
-  const logcatOutput = node("pre", "android-command-output android-live-console", "Waiting for Logcat…"); const fridaOutput = node("pre", "android-command-output android-live-console hidden", "Waiting for Frida output…");
+  const logcatOutput = node("pre", "console-out android-live-console", "Waiting for Logcat…"); const fridaOutput = node("pre", "console-out android-live-console hidden", "Waiting for Frida output…");
   function showConsole(which) { const logs = which === "logcat"; logcatTab.classList.toggle("active", logs); fridaTab.classList.toggle("active", !logs); logcatOutput.classList.toggle("hidden", !logs); fridaOutput.classList.toggle("hidden", logs); }
   logcatTab.addEventListener("click", () => showConsole("logcat")); fridaTab.addEventListener("click", () => showConsole("frida")); append(live, liveTabs, logcatOutput, fridaOutput);
   const operation = panel("operation", "Latest operation result", "Every analyst action reports its outcome here instead of silently updating a distant panel.");
-  const operationTitle = node("strong", "mono", "No manual operation has run yet."); const operationOutput = node("pre", "android-command-output", "Select a tool to see its result."); append(operation, operationTitle, operationOutput);
+  const operationTitle = node("strong", "mono", "No manual operation has run yet."); const operationOutput = node("pre", "console-out", "Select a tool to see its result."); append(operation, operationTitle, operationOutput);
 
-  const frida = panel("frida", "Frida instrumentation", "Choose hooks, then attach them to the running malware process. Spawn is available when the application is not already running."); const hooks = node("div", "android-hook-grid"); const hookValues = {}; [["API monitor", "api_monitor"], ["SSL pinning bypass", "ssl_pinning_bypass"], ["Root detection bypass", "root_bypass"], ["Debugger check bypass", "debugger_check_bypass"], ["Clipboard monitor", "dump_clipboard"]].forEach(([label, value]) => { const wrap = node("label", "checkbox-field compact"); const input = node("input"); input.type = "checkbox"; input.checked = ["api_monitor", "ssl_pinning_bypass", "root_bypass", "debugger_check_bypass"].includes(value); hookValues[value] = input; append(wrap, input, node("span", "", label)); hooks.append(wrap); }); frida.append(node("h4", "", "Default hooks"), hooks); const auxiliary = node("div", "android-hook-grid"); const auxiliaryValues = {}; [["Enumerate loaded classes", "enum_class"], ["Enumerate methods", "enum_methods"], ["Search classes", "search_class"], ["Trace class", "trace_class"], ["Catch strings", "string_catch"], ["Compare strings", "string_compare"], ["Runtime dependencies", "get_dependencies"]].forEach(([label, value]) => { const wrap = node("label", "checkbox-field compact"); const input = node("input"); input.type = "checkbox"; auxiliaryValues[value] = input; append(wrap, input, node("span", "", label)); auxiliary.append(wrap); }); frida.append(node("h4", "", "Auxiliary hooks"), auxiliary); const className = node("input"); className.placeholder = "Class name (required for method enumeration)"; const classSearch = node("input"); classSearch.placeholder = "Class search pattern"; const classTrace = node("input"); classTrace.placeholder = "Class trace pattern"; append(frida, className, classSearch, classTrace); const editor = node("textarea", "frida-editor"); editor.rows = 8; editor.placeholder = "Java.perform(function () {\n  // optional analyst Frida code\n});"; frida.append(node("h4", "", "Custom Frida script"), editor); const fridaButtons = node("div", "actions-row"); [["Attach selected hooks", "session", "btn btn-primary"], ["Spawn with selected hooks", "spawn", "btn"], ["List processes", "ps", "btn"], ["Preview injected code", "get", "btn"]].forEach(([label, action, style]) => { const item = button(label, `${style} btn-small`); item.addEventListener("click", () => perform("frida", { action, default_hooks: Object.entries(hookValues).filter(([, input]) => input.checked).map(([value]) => value).join(","), auxiliary_hooks: Object.entries(auxiliaryValues).filter(([, input]) => input.checked).map(([value]) => value).join(","), class_name: className.value, class_search: classSearch.value, class_trace: classTrace.value, frida_code: editor.value }, true, 180000)); fridaButtons.append(item); }); frida.append(fridaButtons, node("small", "muted", "Hook selections, custom code, target PID, and MobSF result are retained in the analyst operation journal."));
+  const frida = panel("frida", "Frida instrumentation", "Choose hooks, then attach them to the running malware process. Spawn is available when the application is not already running."); const hooks = node("div", "hook-grid"); const hookValues = {}; [["API monitor", "api_monitor"], ["SSL pinning bypass", "ssl_pinning_bypass"], ["Root detection bypass", "root_bypass"], ["Debugger check bypass", "debugger_check_bypass"], ["Clipboard monitor", "dump_clipboard"]].forEach(([label, value]) => { const wrap = node("label", "checkbox-field compact"); const input = node("input"); input.type = "checkbox"; input.checked = ["api_monitor", "ssl_pinning_bypass", "root_bypass", "debugger_check_bypass"].includes(value); hookValues[value] = input; append(wrap, input, node("span", "", label)); hooks.append(wrap); }); frida.append(node("h4", "", "Default hooks"), hooks); const auxiliary = node("div", "hook-grid"); const auxiliaryValues = {}; [["Enumerate loaded classes", "enum_class"], ["Enumerate methods", "enum_methods"], ["Search classes", "search_class"], ["Trace class", "trace_class"], ["Catch strings", "string_catch"], ["Compare strings", "string_compare"], ["Runtime dependencies", "get_dependencies"]].forEach(([label, value]) => { const wrap = node("label", "checkbox-field compact"); const input = node("input"); input.type = "checkbox"; auxiliaryValues[value] = input; append(wrap, input, node("span", "", label)); auxiliary.append(wrap); }); frida.append(node("h4", "", "Auxiliary hooks"), auxiliary); const className = node("input"); className.placeholder = "Class name (required for method enumeration)"; const classSearch = node("input"); classSearch.placeholder = "Class search pattern"; const classTrace = node("input"); classTrace.placeholder = "Class trace pattern"; append(frida, className, classSearch, classTrace); const editor = node("textarea", "frida-editor"); editor.rows = 8; editor.placeholder = "Java.perform(function () {\n  // optional analyst Frida code\n});"; frida.append(node("h4", "", "Custom Frida script"), editor); const fridaButtons = node("div", "actions-row"); [["Attach selected hooks", "session", "btn btn-primary"], ["Spawn with selected hooks", "spawn", "btn"], ["List processes", "ps", "btn"], ["Preview injected code", "get", "btn"]].forEach(([label, action, style]) => { const item = button(label, `${style} btn-small`); item.addEventListener("click", () => perform("frida", { action, default_hooks: Object.entries(hookValues).filter(([, input]) => input.checked).map(([value]) => value).join(","), auxiliary_hooks: Object.entries(auxiliaryValues).filter(([, input]) => input.checked).map(([value]) => value).join(","), class_name: className.value, class_search: classSearch.value, class_trace: classTrace.value, frida_code: editor.value }, true, 180000)); fridaButtons.append(item); }); frida.append(fridaButtons, node("small", "muted", "Hook selections, custom code, target PID, and MobSF result are retained in the analyst operation journal."));
 
-  const tls = panel("tls", "TLS/SSL security tester", "Run MobSF TLS misconfiguration, pinning/certificate-transparency, and transport-security checks against the live app."); const tlsResult = node("pre", "android-command-output", "No TLS test has run yet."); const runTls = button("Run TLS/SSL tests", "btn btn-primary"); runTls.addEventListener("click", async () => { const result = await perform("tls_test", {}, false, 180000); if (result) tlsResult.textContent = JSON.stringify(result, null, 2); }); append(tls, runTls, tlsResult);
+  const tls = panel("tls", "TLS/SSL security tester", "Run MobSF TLS misconfiguration, pinning/certificate-transparency, and transport-security checks against the live app."); const tlsResult = node("pre", "console-out", "No TLS test has run yet."); const runTls = button("Run TLS/SSL tests", "btn btn-primary"); runTls.addEventListener("click", async () => { const result = await perform("tls_test", {}, false, 180000); if (result) tlsResult.textContent = JSON.stringify(result, null, 2); }); append(tls, runTls, tlsResult);
 
-  const proxy = panel("proxy", "HTTPS proxy and trusted root CA", "Control MobSF interception explicitly. These controls affect only the disposable Android guest."); const proxyState = node("div", "android-state-strip"); const proxyBadge = badge("proxy unknown"); const caBadge = badge("CA unknown"); append(proxyState, proxyBadge, caBadge); const proxyActions = node("div", "actions-row"); [["Set HTTP(S) proxy", "proxy", { action: "set" }], ["Unset HTTP(S) proxy", "proxy", { action: "unset" }], ["Install MobSF root CA", "root_ca", { action: "install" }], ["Remove root CA", "root_ca", { action: "remove" }]].forEach(([label, type, payload]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", async () => { const result = await perform(type, payload, true); if (result) (type === "proxy" ? proxyBadge : caBadge).textContent = `${human(type)} ${payload.action}`; }); proxyActions.append(item); }); append(proxy, proxyState, proxyActions);
+  const proxy = panel("proxy", "HTTPS proxy and trusted root CA", "Control MobSF interception explicitly. These controls affect only the disposable Android guest."); const proxyState = node("div", "state-strip"); const proxyBadge = badge("proxy unknown"); const caBadge = badge("CA unknown"); append(proxyState, proxyBadge, caBadge); const proxyActions = node("div", "actions-row"); [["Set HTTP(S) proxy", "proxy", { action: "set" }], ["Unset HTTP(S) proxy", "proxy", { action: "unset" }], ["Install MobSF root CA", "root_ca", { action: "install" }], ["Remove root CA", "root_ca", { action: "remove" }]].forEach(([label, type, payload]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", async () => { const result = await perform(type, payload, true); if (result) (type === "proxy" ? proxyBadge : caBadge).textContent = `${human(type)} ${payload.action}`; }); proxyActions.append(item); }); append(proxy, proxyState, proxyActions);
 
-  const activity = panel("activities", "Activity and deep-link tester"); const activityInput = node("input"); activityInput.placeholder = session.main_activity || "package/.Activity"; const launch = button("Start activity", "btn btn-small"); launch.addEventListener("click", () => perform("start_activity", { activity: activityInput.value || session.main_activity }, true)); const deepLink = node("input"); deepLink.placeholder = "Application deep link or custom URI scheme"; const launchLink = button("Open deep link", "btn btn-small"); launchLink.addEventListener("click", () => perform("deeplink", { url: deepLink.value }, true)); const activityButtons = node("div", "actions-row"); const activityResult = node("pre", "android-command-output", "No activity test has run yet."); [["Test exported activities", "exported"], ["Test all activities", "all_activities"]].forEach(([label, test]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", async () => { const result = await perform("activity_test", { test }, false, 180000); activityResult.textContent = result ? resultText(result) : "Activity test failed; see the status message above."; }); activityButtons.append(item); }); append(activity, activityInput, launch, deepLink, launchLink, activityButtons, activityResult);
-  const dependencies = panel("dependencies", "Runtime dependencies"); const dependencyResult = node("pre", "android-command-output", "No dependency scan has run yet."); const getDependencies = button("Get dependencies", "btn"); getDependencies.addEventListener("click", async () => { const result = await perform("dependencies", {}, false); if (result) dependencyResult.textContent = JSON.stringify(result, null, 2); }); append(dependencies, getDependencies, dependencyResult);
+  const activity = panel("activities", "Activity and deep-link tester"); const activityInput = node("input"); activityInput.placeholder = session.main_activity || "package/.Activity"; const launch = button("Start activity", "btn btn-small"); launch.addEventListener("click", () => perform("start_activity", { activity: activityInput.value || session.main_activity }, true)); const deepLink = node("input"); deepLink.placeholder = "Application deep link or custom URI scheme"; const launchLink = button("Open deep link", "btn btn-small"); launchLink.addEventListener("click", () => perform("deeplink", { url: deepLink.value }, true)); const activityButtons = node("div", "actions-row"); const activityResult = node("pre", "console-out", "No activity test has run yet."); [["Test exported activities", "exported"], ["Test all activities", "all_activities"]].forEach(([label, test]) => { const item = button(label, "btn btn-small"); item.addEventListener("click", async () => { const result = await perform("activity_test", { test }, false, 180000); activityResult.textContent = result ? resultText(result) : "Activity test failed; see the status message above."; }); activityButtons.append(item); }); append(activity, activityInput, launch, deepLink, launchLink, activityButtons, activityResult);
+  const dependencies = panel("dependencies", "Runtime dependencies"); const dependencyResult = node("pre", "console-out", "No dependency scan has run yet."); const getDependencies = button("Get dependencies", "btn"); getDependencies.addEventListener("click", async () => { const result = await perform("dependencies", {}, false); if (result) dependencyResult.textContent = JSON.stringify(result, null, 2); }); append(dependencies, getDependencies, dependencyResult);
   const files = panel("files", "Application data browser"); const filePath = node("input"); filePath.value = `/data/data/${session.package_name || ""}`; const listFiles = button("List files", "btn btn-small"); listFiles.addEventListener("click", () => perform("list_files", { path: filePath.value }, true)); append(files, filePath, listFiles);
-  const output = node("pre", "android-command-output", "Operation results appear here."); files.append(output);
+  const output = node("pre", "console-out", "Operation results appear here."); files.append(output);
   const sessionActions = node("div", "actions-row"); const extend = button("Extend 5 minutes", "btn"); extend.addEventListener("click", async () => { try { await api(`/api/v1/analysis-runs/${runId}/android-commands`, { method: "POST", body: { command_type: "extend", payload: {} } }); toast("Session extended within the 30-minute hard limit."); renderAndroidWorkflow(runId, true); } catch (failure) { toast(failure.message, true); } }); const finish = button("Finalize and generate report", "btn btn-danger"); finish.addEventListener("click", async () => { if (!window.confirm("Finalize this session and destroy the Android guest?")) return; await perform("finalize", {}, false); renderAndroidWorkflow(runId, true); }); append(sessionActions, extend, finish); tools.append(sessionActions);
   workspace.append(navigation, device, tools); content.append(toolbar, workspace);
 

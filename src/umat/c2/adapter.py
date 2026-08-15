@@ -157,11 +157,28 @@ class C2Adapter:
             raise C2AdaptationError("C2 result platform identity mismatch")
         if manifest["signature"].get("key_id") != str(executor.id):
             raise C2AdaptationError("C2 result signing-key identity mismatch")
-        if run.platform == Platform.ANDROID and any(
-            event.get("data_type_accessed") or event.get("access_api_call")
-            for event in manifest["network_events"]
-        ):
-            raise C2AdaptationError("Android C2 results must remain network-only")
+        if run.platform == Platform.ANDROID:
+            correlated = [
+                event
+                for event in manifest["network_events"]
+                if event.get("data_type_accessed") or event.get("access_api_call")
+            ]
+            if correlated and manifest["correlation_mode"] != "temporal":
+                raise C2AdaptationError("Android data-access claims require correlation mode")
+            for event in correlated:
+                host_refs = [
+                    ref
+                    for ref in event.get("evidence_refs") or []
+                    if isinstance(ref, dict)
+                    and ref.get("type") == "host_access"
+                    and ref.get("source") == "android_telemetry"
+                ]
+                if (
+                    event.get("finding_kind") != "correlation"
+                    or event.get("capped_by_caveat") != "android_temporal_correlation_only"
+                    or not host_refs
+                ):
+                    raise C2AdaptationError("Android correlation evidence is incomplete")
 
     async def _persist(
         self,

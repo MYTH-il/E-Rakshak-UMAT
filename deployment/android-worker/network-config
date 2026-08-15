@@ -11,7 +11,9 @@ ethernets:
       macaddress: "52:54:00:68:00:10"
     set-name: malware0
     addresses: [10.68.0.10/24]
-    routes: []
+    routes:
+      - to: default
+        via: 10.68.0.1
     optional: true
   provisioning:
     match:

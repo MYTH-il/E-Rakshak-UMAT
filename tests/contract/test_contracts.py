@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from umat.contracts import ContractError, validate_contract
+from umat.contracts.validator import contract_root
 
 ROOT = Path(__file__).parents[2]
 PAIRS = [
@@ -13,6 +14,14 @@ PAIRS = [
     ("c2/c2-input.schema.json", "c2-input.json"),
     ("c2/c2-result.schema.json", "c2-result.json"),
 ]
+
+
+def test_contract_root_can_be_explicit_for_installed_workers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("UMAT_CONTRACT_ROOT", str(ROOT / "contracts"))
+    assert contract_root() == (ROOT / "contracts").resolve()
 
 
 @pytest.mark.parametrize(("schema_name", "fixture_name"), PAIRS)

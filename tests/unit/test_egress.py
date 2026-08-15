@@ -4,10 +4,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
-from umat.egress.manager import EgressManager
+from umat.egress.client import EgressClient
+from umat.egress.manager import ANDROID_SCOPED_TCP_SET, EgressManager
 from umat.egress.schemas import LeaseRequest, Readiness
 
 
@@ -110,6 +112,45 @@ def test_lease_heartbeat_refreshes_fail_closed(
     assert operations == ["add", "delete", "add", "delete"]
 
 
+def test_android_scoped_c2_tuple_is_installed_last_and_revoked_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = EgressManager("wg-umat-egress", "10.77.0.53", tmp_path)
+    commands: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(
+        manager,
+        "_nft",
+        lambda *args, **kwargs: (
+            commands.append((args, kwargs)) or subprocess.CompletedProcess([], 0, b"", b"")
+        ),
+    )
+    request = LeaseRequest(
+        analysis_run_id="0198fd40-1111-7000-8000-000000000007",
+        platform="android",
+        guest_ip="10.68.0.10",
+    )
+
+    manager._authorize_lease(request, 90)
+    manager._deauthorize_lease(request)
+
+    assert commands[0][0] == (
+        "add",
+        "element",
+        "ip",
+        "umat_guest_guard",
+        ANDROID_SCOPED_TCP_SET,
+        "{ 10.68.0.10 . 37.120.141.140 . 7775 timeout 90s }",
+    )
+    assert commands[1][0][4:] == ("android_egress_v4", "{ 10.68.0.10 timeout 90s }")
+    assert commands[2][0][4:] == ("android_egress_v4", "{ 10.68.0.10 }")
+    assert commands[2][1] == {"check": False}
+    assert commands[3][0][4:] == (
+        ANDROID_SCOPED_TCP_SET,
+        "{ 10.68.0.10 . 37.120.141.140 . 7775 }",
+    )
+    assert commands[3][1] == {"check": False}
+
+
 def test_capture_is_not_authorized_until_tcpdump_opens_valid_pcap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -153,7 +194,7 @@ def test_capture_is_not_authorized_until_tcpdump_opens_valid_pcap(
     request = LeaseRequest(
         analysis_run_id="0198fd40-1111-7000-8000-000000000005",
         platform="android",
-        guest_ip="172.31.0.2",
+        guest_ip="10.68.0.10",
     )
     with pytest.raises(RuntimeError, match="permission denied"):
         manager.acquire(request)
@@ -165,3 +206,33 @@ def test_header_only_capture_is_rejected_as_missing_packet_evidence(tmp_path: Pa
     capture.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\0" * 20)
     with pytest.raises(RuntimeError, match="no complete packets"):
         EgressManager._finalize_capture(capture)
+
+
+def test_completed_capture_can_be_resolved_for_authenticated_download(tmp_path: Path) -> None:
+    manager = EgressManager("wg-umat-egress", "10.77.0.53", tmp_path)
+    run_id = "0198fd40-1111-7000-8000-000000000006"
+    capture = tmp_path / f"{run_id}.pcap"
+    capture.write_bytes(
+        b"\xd4\xc3\xb2\xa1" + b"\0" * 20 + b"\0" * 8 + b"\x01\0\0\0" * 2 + b"x"
+    )
+    assert manager.capture_path(run_id) == capture
+
+
+def test_remote_executor_downloads_finalized_capture(tmp_path: Path) -> None:
+    payload = b"\xd4\xc3\xb2\xa1" + b"\0" * 20 + b"\0" * 8 + b"\x01\0\0\0" * 2 + b"x"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(204, headers={"X-UMAT-Capture-Path": "/host/capture.pcap"})
+        return httpx.Response(200, content=payload)
+
+    client = EgressClient("http://broker", "x" * 32)
+    client.client.close()
+    client.client = httpx.Client(
+        base_url="http://broker",
+        headers={"Authorization": f"Bearer {'x' * 32}"},
+        transport=httpx.MockTransport(handler),
+    )
+    destination = tmp_path / "downloaded.pcap"
+    assert client.revoke("0198fd40-1111-7000-8000-000000000006", destination) == destination
+    assert destination.read_bytes() == payload

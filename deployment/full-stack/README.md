@@ -64,12 +64,14 @@ check succeed. `--skip-runtime-acceptance`, `--skip-executor-enrollment`, and
    verify revisions and patch-series digests.
 4. Delegate Windows baseline creation to WinST/DT/VMCloak using the supplied ISO; seal the CAPE
    snapshot and configure format-aware submission and evidence handoff.
-5. Install the C2 runtime, build MobSF, install Binder/ReDroid support, and retain the API-30 AOSP
-   x86_64 Android fallback profile.
+5. Install the C2 runtime, apply the digest-locked Android patch series, build the pinned MobSF
+   image with its checksum-verified Frida server, install Binder/ReDroid support, and retain the
+   API-30 AOSP x86_64 fallback profile.
 6. Generate restricted environments, start PostgreSQL 18.4, apply migrations, create the first
    administrator, and seed Android profiles.
-7. Install the API, scheduler, report/adapter workers, CAPE gateway, three executors, and the
-   `umat-guest-guard` nftables service.
+7. Install the API, scheduler, report/adapter workers, CAPE gateway, executor services,
+   Android management/egress relays, disposable-worker controller, and the `umat-guest-guard`
+   nftables service.
 8. Consume one-time executor enrollment tokens and verify that executor environments contain no
    database credential.
 9. Run status and harmless acceptance gates. A partial installation remains resumable and is not
@@ -81,17 +83,23 @@ and configuration-fallback code is loaded immediately. The services component in
 executable. CAPE integration verifies the tracked guest-retry patch digest before applying it and
 restarts CAPE's core, web, and processor services after configuration.
 
+When a sealed Android worker image exists, service installation disables the legacy host Android
+executor before enabling the worker controller. This leaves exactly one Android claimant and keeps
+privileged ReDroid execution behind the KVM boundary. The installer installs both relay units,
+preserves or explicitly rotates the egress-broker token, injects the worker's restricted broker
+route at reset, and validates the Android image and ReDroid identity inside the worker through the
+guest agent. Before worker cutover, the host Android executor remains the supported fallback.
+
 The installer downloads three explicitly pinned source checkouts under `/opt/umat/upstreams`:
 WinST/DT, Android/MobSF, and C2. WinST/DT's own verified scripts remain responsible for CAPE,
 VMCloak, the licensed Windows baseline, snapshot creation, and the effective C2 compatibility
 runtime. UMAT configures their HTTP/evidence boundaries and does not fork their internal UI or VM
 implementation. Operators use UMAT's unified UI; native interfaces remain diagnostic tools.
 
-The Windows/CAPE worker, evidence adapter, optional offline C2 path, aggregation, and report path
-have been validated end to end. The current browser does not yet expose all backend parameters,
-case/run relationships, worker inventory, or profile management. Use the API and CAPE native
-interface for missing operations and diagnostics; see the root README's
-[current UI limitations](../../README.md#current-ui-limitations).
+The Windows/CAPE and Android/MobSF workers, evidence adapters, optional C2 path, aggregation, and
+report path have been validated end to end. The browser exposes case/run relationships, worker
+inventory, profile administration, diagnostic progress, runtime observations, Android scan logs,
+and evidence navigation. Native CAPE and MobSF interfaces remain engineering diagnostics.
 
 The Windows/C2 source flag records the operator's local authorization; it does not grant
 redistribution rights. A licensed ISO is required to build the first baseline guest. Existing

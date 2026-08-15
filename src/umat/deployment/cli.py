@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import getpass
 import hashlib
 import json
@@ -10,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -63,6 +65,61 @@ def command(name: str) -> str:
     if not resolved:
         raise DeploymentError(f"required command is unavailable: {name}")
     return resolved
+
+
+def _android_worker_shell(command_line: str, timeout_seconds: float = 60) -> tuple[int, str, str]:
+    """Run a bounded read-only inspection command through the worker guest agent."""
+    virsh = command("virsh")
+    domain = "umat-android-worker"
+    request = json.dumps(
+        {
+            "execute": "guest-exec",
+            "arguments": {
+                "path": "/bin/sh",
+                "arg": ["-c", command_line],
+                "capture-output": True,
+            },
+        }
+    )
+    launched = subprocess.run(  # noqa: S603
+        [virsh, "-c", "qemu:///system", "qemu-agent-command", domain, request],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if launched.returncode != 0:
+        return launched.returncode, "", launched.stderr
+    try:
+        pid = int(json.loads(launched.stdout)["return"]["pid"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return 1, "", f"invalid guest-agent launch response: {exc}"
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        status_request = json.dumps(
+            {"execute": "guest-exec-status", "arguments": {"pid": pid}}
+        )
+        observed = subprocess.run(  # noqa: S603
+            [virsh, "-c", "qemu:///system", "qemu-agent-command", domain, status_request],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if observed.returncode != 0:
+            return observed.returncode, "", observed.stderr
+        try:
+            result = json.loads(observed.stdout)["return"]
+            if result.get("exited"):
+                stdout = base64.b64decode(result.get("out-data", "")).decode(
+                    errors="replace"
+                )
+                stderr = base64.b64decode(result.get("err-data", "")).decode(
+                    errors="replace"
+                )
+                return int(result.get("exitcode", 1)), stdout, stderr
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            return 1, "", f"invalid guest-agent status response: {exc}"
+        time.sleep(0.25)
+    return 124, "", "Android worker guest-agent command timed out"
 
 
 def preflight_checks(windows_iso: Path | None = None) -> list[dict[str, Any]]:
@@ -710,7 +767,12 @@ def status() -> None:
         ).stdout.strip()
         expected = manifest["components"][component_key]["commit"]
         check(name, observed == expected, {"expected": expected, "observed": observed})
-    for service in (
+    android_worker_image = Path(
+        "/var/lib/libvirt/images/umat-android-worker/umat-android-worker-golden.qcow2"
+    )
+    services = [
+        "umat-guest-guard.service",
+        "umat-egress-broker.service",
         "cape.service",
         "cape-processor.service",
         "cape-web.service",
@@ -719,10 +781,16 @@ def status() -> None:
         "umat-report-worker.service",
         "umat-adapter-worker.service",
         "umat-cape-gateway.service",
+        "umat-android-api-relay.service",
+        "umat-android-egress-relay.service",
         "umat-windows-executor.service",
         "umat-c2-executor.service",
-        "umat-android-executor.service",
-    ):
+    ]
+    if path_exists(android_worker_image):
+        services.append("umat-android-worker-controller.service")
+    else:
+        services.append("umat-android-executor.service")
+    for service in services:
         active = (
             subprocess.run(  # noqa: S603
                 [command("systemctl"), "is-active", "--quiet", service], check=False
@@ -752,21 +820,27 @@ def status() -> None:
     check("windows_baseline_snapshot", snapshot_present, snapshot)
     android = manifest["components"]["android"]
     image = android["image"]
-    image_id = subprocess.run(  # noqa: S603
-        [
-            command("sudo"),
-            "-n",
-            command("docker"),
-            "image",
-            "inspect",
-            image,
-            "--format",
-            "{{.Id}}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    if path_exists(android_worker_image):
+        image_status, image_stdout, image_stderr = _android_worker_shell(
+            f"docker image inspect {shlex.quote(image)} --format '{{{{.Id}}}}'"
+        )
+        image_id = image_stdout.strip() if image_status == 0 else image_stderr.strip()
+    else:
+        image_id = subprocess.run(  # noqa: S603
+            [
+                command("sudo"),
+                "-n",
+                command("docker"),
+                "image",
+                "inspect",
+                image,
+                "--format",
+                "{{.Id}}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
     check(
         "android_image",
         image_id == android["image_digest"],
@@ -774,25 +848,35 @@ def status() -> None:
     )
 
     redroid = android["runtimes"]["redroid"]
-    redroid_inspection = subprocess.run(  # noqa: S603
-        [
-            command("sudo"),
-            "-n",
-            command("docker"),
-            "image",
-            "inspect",
-            redroid["image"],
-            "--format",
-            "{{json .RepoDigests}}|{{.Architecture}}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    redroid_observed = redroid_inspection.stdout.strip()
+    if path_exists(android_worker_image):
+        redroid_status, redroid_stdout, redroid_stderr = _android_worker_shell(
+            "docker image inspect "
+            f"{shlex.quote(redroid['image'])} "
+            "--format '{{json .RepoDigests}}|{{.Architecture}}'"
+        )
+    else:
+        redroid_inspection = subprocess.run(  # noqa: S603
+            [
+                command("sudo"),
+                "-n",
+                command("docker"),
+                "image",
+                "inspect",
+                redroid["image"],
+                "--format",
+                "{{json .RepoDigests}}|{{.Architecture}}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        redroid_status = redroid_inspection.returncode
+        redroid_stdout = redroid_inspection.stdout
+        redroid_stderr = redroid_inspection.stderr
+    redroid_observed = redroid_stdout.strip()
     expected_repo_digest = redroid["image"].removeprefix("docker.io/")
     redroid_present = (
-        redroid_inspection.returncode == 0
+        redroid_status == 0
         and expected_repo_digest in redroid_observed
         and redroid_observed.endswith(f"|{redroid['architecture']}")
     )
@@ -802,7 +886,7 @@ def status() -> None:
         {
             "expected_image": redroid["image"],
             "expected_architecture": redroid["architecture"],
-            "observed": redroid_observed or redroid_inspection.stderr.strip()[:500],
+            "observed": redroid_observed or redroid_stderr.strip()[:500],
             "qualification": redroid["qualification"],
         },
         required=bool(redroid["required"]),

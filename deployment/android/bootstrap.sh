@@ -9,6 +9,7 @@ readonly PATCH="$PROJECT_ROOT/deployment/android/patches/0001-reproducible-compl
 readonly API30_PATCH="$PROJECT_ROOT/deployment/android/patches/0002-api30-data-runtime.patch"
 readonly REDROID_PATCH="$PROJECT_ROOT/deployment/android/patches/0003-redroid-su-root.patch"
 readonly REDROID_CA_PATCH="$PROJECT_ROOT/deployment/android/patches/0004-redroid-system-ca.patch"
+readonly FRIDA_READINESS_PATCH="$PROJECT_ROOT/deployment/android/patches/0005-pinned-frida-readiness.patch"
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 /absolute/path/to/android-upstream" >&2
@@ -35,5 +36,6 @@ patch --batch --forward -d "$BUILD_ROOT" -p1 <"$PATCH"
 patch --batch --forward -d "$BUILD_ROOT" -p1 <"$API30_PATCH"
 patch --batch --forward -d "$BUILD_ROOT" -p1 <"$REDROID_PATCH"
 patch --batch --forward -d "$BUILD_ROOT" -p1 <"$REDROID_CA_PATCH"
+patch --batch --forward -d "$BUILD_ROOT" -p1 <"$FRIDA_READINESS_PATCH"
 docker build --pull --tag umat-mobsf:6462901d "$BUILD_ROOT"
 echo "Built umat-mobsf:6462901d from verified commit $COMMIT"

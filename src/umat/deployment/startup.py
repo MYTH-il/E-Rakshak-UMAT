@@ -36,12 +36,13 @@ CONTROL_PLANE_UNITS = (
     "umat-adapter-worker.service",
     "umat-cape-gateway.service",
     "umat-android-api-relay.service",
+    "umat-android-egress-relay.service",
 )
 EXECUTOR_UNITS = (
     "umat-windows-executor.service",
     "umat-c2-executor.service",
-    "umat-android-executor.service",
 )
+HOST_ANDROID_EXECUTOR_UNIT = "umat-android-executor.service"
 ANDROID_WORKER_UNIT = "umat-android-worker-controller.service"
 ANDROID_WORKER_IMAGE = Path(
     "/var/lib/libvirt/images/umat-android-worker/umat-android-worker-golden.qcow2"
@@ -222,7 +223,9 @@ def start_system(*, timeout: float, skip_status: bool) -> None:
         startup_step("Docker and libvirt", lambda: sudo_systemctl("start", FOUNDATION_UNITS))
         startup_step("UMAT PostgreSQL container", lambda: compose_up(CONTROL_PLANE_COMPOSE))
         startup_step("UMAT PostgreSQL readiness", lambda: wait_for_postgres(timeout))
-        startup_step("Android and MobSF containers", lambda: compose_up(ANDROID_COMPOSE))
+        worker_available = path_exists(ANDROID_WORKER_IMAGE)
+        if not worker_available:
+            startup_step("Android and MobSF containers", lambda: compose_up(ANDROID_COMPOSE))
 
         startup_step(
             "guest firewall, egress broker, and CAPE",
@@ -243,19 +246,29 @@ def start_system(*, timeout: float, skip_status: bool) -> None:
                 "CAPE gateway", "http://127.0.0.1:8091/health/live", timeout
             ),
         )
-        startup_step(
-            "MobSF readiness",
-            lambda: wait_for_url("MobSF", "http://127.0.0.1:8001/", timeout),
-        )
+        if not worker_available:
+            startup_step(
+                "MobSF readiness",
+                lambda: wait_for_url("MobSF", "http://127.0.0.1:8001/", timeout),
+            )
 
         startup_step(
-            "Windows, C2, and Android executors",
+            "Windows and C2 executors",
             lambda: reset_and_start_units(EXECUTOR_UNITS),
         )
-        if path_exists(ANDROID_WORKER_IMAGE):
+        if worker_available:
+            startup_step(
+                "disable legacy host Android executor",
+                lambda: sudo_systemctl("disable", ("--now", HOST_ANDROID_EXECUTOR_UNIT)),
+            )
             startup_step(
                 "disposable Android worker",
                 lambda: reset_and_start_units((ANDROID_WORKER_UNIT,)),
+            )
+        else:
+            startup_step(
+                "host Android executor",
+                lambda: reset_and_start_units((HOST_ANDROID_EXECUTOR_UNIT,)),
             )
 
         if not skip_status and not report_deployment_status():

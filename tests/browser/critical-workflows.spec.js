@@ -27,6 +27,7 @@ test("login, intake, duplicate confirmation, rerun, and cancellation", async ({ 
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Authenticate" }).click();
   await expect(page).toHaveURL(/\/cases$/);
+  await expect(page.locator('link[rel="stylesheet"]')).toHaveAttribute("href", "/assets/app.css?v=20260815.2");
   await expectAccessible(page);
 
   const upload = async (title) => {
@@ -103,6 +104,28 @@ test("officer, analyst, and administrator controls are role-appropriate", async 
   await expect(page.getByRole("link", { name: "Windows profiles" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Android profiles" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Workers" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Users & roles" }).click();
+  await expect(page.getByRole("heading", { name: "Users & roles", level: 2 })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create user" })).toBeVisible();
+  await page.getByRole("link", { name: "Windows profiles" }).click();
+  await expect(page.getByRole("heading", { name: "Windows VM profiles", level: 2 })).toBeVisible();
+  await page.getByRole("link", { name: "Android profiles" }).click();
+  await expect(page.getByRole("heading", { name: "Android emulator profiles", level: 2 })).toBeVisible();
+});
+
+test("responsive rail keeps workspace navigation operable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, "officer");
+  const menu = page.getByRole("button", { name: "Menu" });
+  await expect(menu).toHaveAttribute("aria-expanded", "false");
+  await menu.click();
+  await expect(menu).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("navigation", { name: "Workspace" })).toBeVisible();
+  await page.getByRole("link", { name: "Recent runs" }).click();
+  await expect(page).toHaveURL(/\/runs$/);
+  await expect(page.getByRole("heading", { name: "Recent runs", level: 2 })).toBeVisible();
+  await expectAccessible(page);
 });
 
 test("operations console supports case changes, run diagnosis, retry, and worker inventory", async ({ page }) => {
@@ -111,9 +134,9 @@ test("operations console supports case changes, run diagnosis, retry, and worker
   await page.getByLabel("Search case, reference, filename or SHA-256").fill("BROWSER-FAILED");
   await page.getByRole("button", { name: "Apply filters" }).click();
   await expect(page.getByRole("link", { name: "Browser failed analysis" }).first()).toBeVisible();
-  const failedRun = page.locator("section.card").filter({ hasText: "The backend was unavailable during the fixture run." });
+  const failedRun = page.locator("section.card").filter({ has: page.getByRole("link", { name: "Browser failed analysis" }) }).first();
   await failedRun.getByText("Stage diagnostics").click();
-  await expect(page.getByText("The backend was unavailable during the fixture run.")).toBeVisible();
+  await expect(failedRun.locator("details .case-row").first()).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept("browser verification retry"));
   await failedRun.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByText("Retry queued.")).toBeVisible();
@@ -137,5 +160,10 @@ test("operations console supports case changes, run diagnosis, retry, and worker
   await login(page, "administrator");
   await page.getByRole("link", { name: "Workers" }).click();
   await expect(page.getByRole("heading", { name: "Workers", level: 2 })).toBeVisible();
+  await page.getByText("Capabilities and leases").first().click();
+  const codeBlock = page.locator(".code-block").first();
+  await expect(codeBlock).toBeVisible();
+  await expect(codeBlock).toHaveCSS("white-space", "pre-wrap");
+  await expect(codeBlock).toHaveCSS("overflow-wrap", "anywhere");
   await expectAccessible(page);
 });

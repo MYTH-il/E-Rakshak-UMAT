@@ -1,0 +1,37 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://umat.local/contracts/android/android-access-events.schema.json",
+  "type":"object",
+  "required":["schema_version","platform","package_name","analysis_window","clock","sources","events"],
+  "additionalProperties":false,
+  "properties":{
+    "schema_version":{"const":"1.0"},
+    "platform":{"const":"android"},
+    "package_name":{"type":"string","minLength":1},
+    "analysis_window":{"type":"object","required":["started_at","ended_at"],"additionalProperties":false,"properties":{"started_at":{"type":"string","format":"date-time"},"ended_at":{"type":"string","format":"date-time"}}},
+    "clock":{"type":"object","required":["basis","quality_acceptable","maximum_uncertainty_ms"],"additionalProperties":false,"properties":{"basis":{"const":"executor_utc_first_observation"},"quality_acceptable":{"type":"boolean"},"maximum_uncertainty_ms":{"type":"integer","minimum":0,"maximum":60000}}},
+    "sources":{"type":"array","items":{"type":"object"}},
+    "events":{"type":"array","maxItems":100000,"items":{"$ref":"#/$defs/event"}}
+  },
+  "$defs":{
+    "event":{
+      "type":"object",
+      "required":["event_id","timestamp","timestamp_uncertainty_ms","source","package_name","process_ids","data_type","api_call","operation","source_event_sha256"],
+      "additionalProperties":false,
+      "properties":{
+        "event_id":{"type":"string","format":"uuid"},
+        "timestamp":{"type":"string","format":"date-time"},
+        "timestamp_uncertainty_ms":{"type":"integer","minimum":0,"maximum":60000},
+        "source":{"enum":["frida_api_monitor","frida_log","logcat","perfetto","strace","ebpf"]},
+        "package_name":{"type":"string","minLength":1},
+        "process_ids":{"type":"array","items":{"type":"integer","minimum":1},"uniqueItems":true},
+        "data_type":{"type":"string","minLength":1},
+        "api_call":{"type":"string","minLength":1},
+        "operation":{"enum":["read","write","query","enumerate","access"]},
+        "object_reference":{"type":["string","null"],"maxLength":2048},
+        "called_from":{"type":["string","null"],"maxLength":2048},
+        "source_event_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}
+      }
+    }
+  }
+}

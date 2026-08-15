@@ -22,8 +22,8 @@ The current implementation expects these names and addresses:
 | WireGuard UDP port | `51820` |
 | Workstation policy-routing table | `51820` |
 | Windows guest network | `10.66.0.0/24` on `virbr-winstdt` |
-| Android egress network | `172.31.0.0/24` on `br-umat-egress` |
-| Allowed guest application traffic | TCP 80/443 only |
+| Android egress boundary | `10.68.0.0/24` on `br-umat-malware` |
+| Allowed guest application traffic | TCP 80/443, plus the qualified SpyMax destination `37.120.141.140:7775/TCP` |
 | Guest DNS | Forced to `10.77.0.53`, UDP/TCP 53 |
 | Lease lifetime | 90 seconds, refreshed by executor heartbeat |
 | Per-run byte ceiling | 100 MiB by default |
@@ -36,7 +36,7 @@ Logs are a secondary network record and do not replace that PCAP.
 ```text
 Windows/ReDroid guest
         |
-        | short-lived nftables lease; forced DNS; TCP 80/443 only
+        | short-lived nftables lease; forced DNS; TCP 80/443 plus one destination-scoped SpyMax tuple
         v
 UMAT host guest bridge -- mandatory run PCAP -- source NAT to 10.77.0.2
         |
@@ -79,7 +79,7 @@ The console workflow is the least brittle way to reproduce the AWS resources:
    the local VPC route and `0.0.0.0/0` to the Internet Gateway. Do not add IPv6.
 4. Create a security group with no SSH ingress. Permit inbound UDP 51820 only from the UMAT
    operator's fixed public `/32`.
-5. Permit outbound TCP 80/443 and UDP/TCP 53. These cover the bounded malware policy, resolver,
+5. Permit outbound TCP 80/443, the exact destination `37.120.141.140:7775/TCP`, and UDP/TCP 53. These cover the bounded malware policy, resolver,
    package maintenance and Systems Manager over HTTPS. Add nothing merely to make a failed test
    pass; document any expansion.
 6. Launch a current Ubuntu 24.04 LTS x86_64 instance with an encrypted root volume, IMDSv2
@@ -162,15 +162,18 @@ Use the instance's real public-interface name in place of `ens5`. The policy mus
 
 - accept WireGuard UDP 51820 only from the approved operator public `/32`;
 - accept DNS on `wg0` only from `10.77.0.2`;
-- forward from `wg0` only source `10.77.0.2`, TCP destinations 80/443;
+- forward from `wg0` only source `10.77.0.2`, TCP destinations 80/443, plus destination-scoped `37.120.141.140:7775`;
 - reject loopback, private, carrier-grade NAT, link-local, metadata, benchmark and multicast
   destinations before the general web allow rule;
 - reject IPv6 forwarding and all unsolicited inbound forwarding;
 - permit established replies and masquerade only `10.77.0.2` to the public interface;
 - log bounded deny events without allowing a sample to exhaust disk space.
 
-A minimal nftables shape is shown below. Adapt the public interface and operator address, validate
-with `nft --check`, and have the final rules reviewed under the deployment's security policy:
+A tracked starting point is available at `deployment/full-stack/umat-aws-egress.nft`. Copy it to
+the gateway, replace its documentation-only `operator_ipv4` value and `ens5` with the approved
+operator address and actual public interface, and save the reviewed result as `/etc/nftables.conf`.
+Never install the template with its `192.0.2.1` placeholder. Validate with `nft --check` and have
+the final rules reviewed under the deployment's security policy. Its effective shape is:
 
 ```nft
 table inet umat_aws_egress {
@@ -199,6 +202,8 @@ table inet umat_aws_egress {
         iifname "wg0" ip saddr 10.77.0.2 ip daddr @denied_v4 drop
         iifname "wg0" oifname "ens5" ip saddr 10.77.0.2 tcp dport { 80, 443 } \
             ct state new,established accept
+        iifname "wg0" oifname "ens5" ip saddr 10.77.0.2 ip daddr 37.120.141.140 \
+            tcp dport 7775 ct state new,established accept
     }
 }
 
@@ -342,13 +347,13 @@ uv run umat-deploy status
 
 Expected broker readiness checks are `nft`, `tcpdump`, `uplink_present`, `uplink_up`,
 `recent_wireguard_handshake`, `policy_route`, `source_policy_rules`, `ipv4_forwarding`,
-`windows_policy_set`, and `android_policy_set`, all `true`.
+`windows_policy_set`, `android_policy_set`, and `android_scoped_tcp_policy_set`, all `true`.
 
 Then perform a benign disposable-guest acceptance run and prove all of the following:
 
 1. no lease means no guest Internet access;
-2. an active lease reaches the recording resolver and TCP 80/443 only;
-3. RFC1918, metadata, non-web ports, IPv6, host and management destinations remain blocked;
+2. an active Android lease reaches the recording resolver, TCP 80/443, and only the exact qualified SpyMax endpoint `37.120.141.140:7775/TCP`;
+3. RFC1918, metadata, all non-web ports except the qualified SpyMax tuple, IPv6, host and management destinations remain blocked;
 4. the run PCAP exists before the firewall lease is granted and is non-empty afterward;
 5. stopping the executor or broker removes access within the 90-second kernel timeout;
 6. exceeding the byte ceiling revokes the lease;
