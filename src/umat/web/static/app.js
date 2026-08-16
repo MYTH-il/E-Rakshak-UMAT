@@ -709,13 +709,7 @@ function renderOverview(content, report, run) {
     return;
   }
   const grid = node("div", "grid grid-2");
-  grid.append(listCard("Information accessed", report.information_accessed, (item) => {
-    const objects = [...new Set((item.observed_objects || []).map((entry) => entry.name || entry.path?.split(/[\\/]/).pop()).filter(Boolean))];
-    const evidence = `${human(item.evidence_level)} · ${human(item.confidence)}`;
-    const visible = objects.slice(0, 5);
-    const remainder = objects.length > visible.length ? ` · +${objects.length - visible.length} more` : "";
-    return [human(item.data_type), visible.length ? `${evidence} · ${visible.join(", ")}${remainder}` : evidence];
-  }));
+  grid.append(informationAccessedCard(report.information_accessed));
   grid.append(destinationsCard(report.destinations));
   content.append(grid);
   content.append(node("h3", "section-title", "What was taken and where it went"));
@@ -771,6 +765,61 @@ function listCard(title, items, mapper) {
   if (!items?.length) list.append(node("li", "empty", "No reportable evidence in this section."));
   (items || []).forEach((item) => { const [primary, secondary] = mapper(item); const row = node("li", "data-item"); const copy = node("div"); append(copy, node("strong", "", primary), secondary ? node("small", "", secondary) : null); row.append(copy); list.append(row); });
   card.append(list); return card;
+}
+
+// "Information accessed" is the answer to the officer's first question: what did
+// this take? Summarising it as five filenames and "+59 more" states that 64
+// items were touched and then refuses to name 59 of them, which is the point at
+// which the report stops being evidence.
+//
+// On the Remcos case the visible five were sample.bat, nul, sortdefault.nls,
+// clr.dll and mscorwks.dll -- .NET runtime probing, the least interesting
+// entries in the list. The credential stores were inside the hidden remainder.
+//
+// Each capability is therefore expandable, on demand rather than always open,
+// so the overview stays an overview. The expanded view shows the full path
+// rather than the leaf name, because the directory is what distinguishes a
+// browser credential store from an unrelated file of the same name.
+function informationAccessedCard(items) {
+  const card = node("section", "card card-body");
+  card.append(node("h3", "card-title", "Information accessed"));
+  const list = node("ul", "data-list");
+  if (!items?.length) {
+    list.append(node("li", "empty", "No reportable evidence in this section."));
+    card.append(list);
+    return card;
+  }
+  items.forEach((item) => {
+    const objects = (item.observed_objects || []).filter((entry) => entry && (entry.name || entry.path));
+    const row = node("li", "data-item");
+    const copy = node("div");
+    copy.append(node("strong", "", human(item.data_type)));
+    const evidence = `${human(item.evidence_level)} · ${human(item.confidence)}`;
+    copy.append(node("small", "", objects.length
+      ? `${evidence} · ${objects.length} item${objects.length === 1 ? "" : "s"}`
+      : evidence));
+    if (objects.length) {
+      const disclosure = node("details", "component-raw");
+      disclosure.append(node("summary", "", `Show the ${objects.length} item${objects.length === 1 ? "" : "s"}`));
+      disclosure.append(dataExplorer(
+        ["Item", "Location", "Action", "Process", "PID"],
+        objects,
+        (entry) => [
+          entry.name || (entry.path ? String(entry.path).split(/[\\/]/).pop() : "—"),
+          entry.path || "—",
+          human(entry.operation) || "—",
+          entry.process || "—",
+          entry.process_id ?? "—",
+        ],
+        "Search items, locations or processes",
+      ));
+      copy.append(disclosure);
+    }
+    row.append(copy);
+    list.append(row);
+  });
+  card.append(list);
+  return card;
 }
 
 function androidComponentCard(title, values) {
