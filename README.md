@@ -39,7 +39,7 @@ commit; the analysis modules never talk to each other or to the database directl
 |---|---|---|
 | **UMAT** — control plane | `MYTH-il/E-Rakshak-UMAT` | Intake, custody, scheduling, aggregation, reporting, web console, PostgreSQL |
 | **Windows ST/DT** | `MYTH-il/WinST-DT-module` | Static triage, CAPE detonation, ETW host telemetry, PCAP capture |
-| **Windows C2/Exfil** | `demistifying/C2-Exfil-E-Rakshak` | Network analysis, attribution, host↔network correlation |
+| **C2/Exfil** | `demistifying/C2-Exfil-E-Rakshak` | Network analysis, attribution, host↔network correlation |
 | **Android (ST + DT + C2)** | `d4ruvil/erakshak` | MobSF static analysis, ReDroid dynamic run, Frida instrumentation, traffic capture |
 
 > **This repository is UMAT, the control plane.** This README documents the suite as a
@@ -206,7 +206,7 @@ E-Rakshak-UMAT/
 └── tests/                         unit, integration, migration, Playwright
 ```
 
-### 3.2 Windows C2/Exfiltration module
+### 3.2 C2/Exfiltration module
 
 ```
 windows_c2exfil_module/
@@ -314,7 +314,7 @@ uv run umat-adapter-worker run
 
 PostgreSQL binds only to `127.0.0.1:55432`. CAPE/WinST-DT keeps its own ports and database.
 
-### 4.3 Windows C2/Exfiltration module — standalone
+### 4.3 C2/Exfiltration module — standalone
 
 The module is stdlib-heavy by design and runs offline.
 
