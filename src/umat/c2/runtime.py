@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 from umat.c2.models import C2AnalysisContext, NativeC2Result
 from umat.executors.protocol import ExecutorStopRequested
@@ -405,6 +406,25 @@ class SubprocessC2Runtime:
             and item.get("timestamp")
         ]
         protected_kinds = {"static_ioc", "dns"}
+        # Destinations the sample's own decrypted configuration names as its C2.
+        #
+        # Process attribution is the right default: traffic that cannot be bound
+        # to the sample should not be described as the sample's C2. But it is
+        # weak evidence AGAINST, and remote-access trojans defeat it by design.
+        # Remcos injects into a host process, so its beacons leave under another
+        # PID and every connection-derived finding for the real C2 was rewritten
+        # to "observed without sample-process attribution" at weak.
+        #
+        # On that run the same report simultaneously listed
+        # hftook7lmaroutsg1.duckdns.org as "Known malicious" in destinations,
+        # carried it as a cape_config indicator extracted from the binary, and
+        # told the officer it was "not attributed to this sample's C2 or
+        # exfiltration behavior". A report cannot say both.
+        #
+        # A config extractor decrypting the binary and naming a host outweighs
+        # the absence of a PID match. The caveat is still recorded, so the
+        # attribution gap remains visible; only the neutralisation is withheld.
+        configured_destinations = self._configured_c2_destinations(context)
         for event in events:
             destination_ip = str(event.get("destination_ip") or "")
             destination_port = int(event.get("destination_port") or 0)
@@ -459,7 +479,12 @@ class SubprocessC2Runtime:
                 )
             if sample_matches:
                 continue
-            if event.get("finding_kind") in protected_kinds:
+            destination_name = str(event.get("destination_domain") or "").strip().rstrip(".").lower()
+            configured = bool(
+                (destination_name and destination_name in configured_destinations)
+                or (destination_ip and destination_ip in configured_destinations)
+            )
+            if event.get("finding_kind") in protected_kinds or configured:
                 event["capped_by_caveat"] = (
                     "network_process_not_sample" if matches else "network_process_unattributed"
                 )
@@ -763,6 +788,41 @@ class SubprocessC2Runtime:
                 }
             )
         return correlated
+
+    @staticmethod
+    def _configured_c2_destinations(context: C2AnalysisContext) -> set[str]:
+        """Hosts and addresses named by a CONFIG EXTRACTOR, not a string scrape.
+
+        Only ``cape_config`` provenance counts. A string harvested from the
+        binary is not the sample's declared C2 -- the same run also produced
+        ``microsoft.powershell.host`` -- and protecting those would let any
+        scraped hostname bypass process attribution.
+        """
+        source = context.static_prior
+        if source is None:
+            return set()
+        try:
+            document = json.loads(Path(source.local_path).read_text())
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return set()
+        if not isinstance(document, dict):
+            return set()
+        configured: set[str] = set()
+        for item in document.get("iocs") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("source") or "").lower() != "cape_config":
+                continue
+            value = str(item.get("value") or "").strip().rstrip(".").lower()
+            if not value:
+                continue
+            configured.add(value)
+            # A URL indicator protects the host it points at.
+            if "://" in value:
+                host = urlparse(value).hostname
+                if host:
+                    configured.add(host.strip().rstrip(".").lower())
+        return configured
 
     @staticmethod
     def _prepare_static_prior(context: C2AnalysisContext, workspace: Path) -> Path:
