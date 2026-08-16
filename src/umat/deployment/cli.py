@@ -9,6 +9,7 @@ import platform
 import secrets
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -319,7 +320,7 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         ("UMAT_CAPE_MANAGEMENT_URL", "http://127.0.0.1:8091"),
         ("UMAT_QUARANTINE_ROOT", "/var/lib/umat/quarantine"),
         ("UMAT_ARTIFACT_ROOT", "/var/lib/umat/artifacts"),
-        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/478f131-umat.2"),
+        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/bf1f275-umat.2"),
         ("UMAT_GEOLITE2_CITY_DB", "/srv/winstdt/c2-data/GeoLite2-City.mmdb"),
         ("UMAT_GEOLITE2_ASN_DB", "/srv/winstdt/c2-data/GeoLite2-ASN.mmdb"),
         ("UMAT_WINSTDT_SCHEMA_ROOT", "/opt/umat/upstreams/winstdt/schemas"),
@@ -942,6 +943,7 @@ def status() -> None:
     runtime_manifest = (
         json.loads(runtime_manifest_path.read_text()) if runtime_manifest_path.is_file() else {}
     )
+    expected_threat_intelligence = manifest["components"]["c2"]["threat_intelligence"]
     check(
         "c2_effective_runtime",
         runtime_manifest.get("upstream_commit") == manifest["components"]["c2"]["commit"]
@@ -952,9 +954,36 @@ def status() -> None:
         and runtime_manifest.get("dependency_lock_sha256")
         == manifest["components"]["c2"]["dependency_lock_sha256"]
         and runtime_manifest.get("patch_series_sha256")
-        == manifest["components"]["c2"]["patch_series_sha256"],
+        == manifest["components"]["c2"]["patch_series_sha256"]
+        and runtime_manifest.get("threat_intelligence") == expected_threat_intelligence,
         runtime_manifest or "runtime manifest unavailable",
     )
+    threatintel_path = Path(expected_threat_intelligence["database_path"])
+    threatintel_detail: dict[str, Any] = {
+        "path": str(threatintel_path),
+        "minimum_indicators": expected_threat_intelligence["minimum_indicators"],
+        "qualified_indicators": expected_threat_intelligence["qualified_indicators"],
+    }
+    threatintel_ok = False
+    try:
+        with sqlite3.connect(f"file:{threatintel_path}?mode=ro", uri=True) as database:
+            integrity = database.execute("PRAGMA integrity_check").fetchone()
+            observed_indicators = database.execute(
+                "SELECT COUNT(*) FROM bad_indicators"
+            ).fetchone()[0]
+        threatintel_detail.update(
+            {
+                "integrity": integrity[0] if integrity else "unavailable",
+                "observed_indicators": observed_indicators,
+            }
+        )
+        threatintel_ok = (
+            integrity == ("ok",)
+            and observed_indicators >= expected_threat_intelligence["minimum_indicators"]
+        )
+    except (OSError, sqlite3.Error) as exc:
+        threatintel_detail["error"] = str(exc)
+    check("c2_threat_intelligence", threatintel_ok, threatintel_detail)
     handoff_root = Path(paths["winstdt_runtime_root"]) / "handoff"
     handoffs = sorted(
         (item for item in handoff_root.glob("*/manifest.json") if item.parent.name.isdigit()),

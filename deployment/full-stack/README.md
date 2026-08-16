@@ -155,19 +155,26 @@ published to the network. Host/guest clipboard sharing, file transfer, and indep
 controls are not part of this path. Access expires with the CAPE task or its 10-minute capability,
 whichever happens first.
 
-### Optional offline C2 enrichment data
+### Offline C2 enrichment data
 
-GeoLite2 City, GeoLite2 ASN, and `threatintel.sqlite` may be provisioned under
-`/srv/winstdt/c2-data`, outside the verified C2 runtime tree. Provision either all three files or
-none: `install-services.sh` rejects a partial data set because it would misrepresent enrichment
-coverage. The executor validates configured MMDB readability, the threat-intelligence schema, and
-a real SQLite write transaction before it publishes capabilities or claims work.
+The verified C2 runtime ships Feodo, URLhaus, and ThreatFox snapshots. During service installation,
+`scripts/seed_threatintel.py --rebuild` creates a temporary SQLite database, requires at least
+40,000 normalized indicators, and atomically promotes it to
+`/srv/winstdt/c2-data/threatintel.sqlite`. The qualified snapshot produces 47,832 unique records.
+ThreatFox network reputation is deliberately limited to non-compromised `botnet_cc` rows; payload
+delivery and card-skimming hosts are not misrepresented as C2, while MD5, SHA-1, and SHA-256
+payload hashes remain typed indicators. UMAT stores the complete CSV in a compressed ZIP asset;
+the runtime installer verifies the archive digest, extracts its sole member without network access,
+then verifies the CSV digest before qualification. Both digests and the qualified count are locked
+in the C2 dependency lock, deployment manifest, and runtime manifest.
 
-The service grants directory write access for SQLite journal/WAL files. The two MMDB files remain
-mode `0440`; do not add `/srv/winstdt/c2-data` to `ReadOnlyPaths`, because that also prevents SQLite
-from opening its required write transaction. Install the tracked
-`umat-c2-executor-data.conf` drop-in and restart the executor after updating the databases. A failed
-preflight keeps the executor unavailable instead of exhausting analysis-stage retries.
+GeoLite2 City and ASN remain optional, but they must be provisioned together under
+`/srv/winstdt/c2-data`; `install-services.sh` rejects a partial pair. The always-installed
+`umat-c2-executor-data.conf` enables the seeded SQLite database, while
+`umat-c2-executor-geolite.conf` is installed only when both MMDB files exist. SQLite receives mode
+`0660` and directory write access for journal/WAL files; immutable MMDB files remain mode `0440`.
+The executor validates configured MMDB readability, the threat-intelligence schema, and a real
+SQLite write transaction before publishing capabilities or claiming work.
 
 Phase 6 provides `umat ops backup create`, `verify`, `restore`, and `rollback`. Do not manually
 remove a legacy database or Docker volume merely to make the status command green.

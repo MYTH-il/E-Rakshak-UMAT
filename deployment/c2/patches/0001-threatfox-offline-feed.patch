@@ -1,0 +1,280 @@
+diff --git a/data/feeds/README.md b/data/feeds/README.md
+index 305e21e..8bd42bb 100644
+--- a/data/feeds/README.md
++++ b/data/feeds/README.md
+@@ -8,6 +8,7 @@ calls during analysis — this is what keeps the air-gapped objective true.
+ |---|---|---|
+ | `feodo_ipblocklist.csv` | abuse.ch Feodo Tracker botnet C2 blocklist | 2026-08-10 |
+ | `urlhaus_online.csv` | abuse.ch URLhaus, online URLs (text feed converted to the CSV columns `import_urlhaus` reads) | 2026-08-10 |
++| `threatfox.csv` | abuse.ch ThreatFox full IOC export (extracted CSV) | 2026-08-16 |
+ 
+ Terms of use: <https://feodotracker.abuse.ch/blocklist/> and
+ <https://urlhaus.abuse.ch/api/>. abuse.ch feeds are free for non-commercial and
+@@ -31,8 +32,8 @@ comes back empty, which looks exactly like the module being broken.
+ ## Refreshing the snapshots
+ 
+ Download the current feeds on a connected machine, replace the files here
+-(keeping the `feodo*` / `urlhaus*` filename prefixes, which is how `refresh()`
+-recognises them), then re-run the seeder air-gapped:
++(keeping the `feodo*`, `urlhaus*`, and `threatfox*` filename prefixes, which is
++how `refresh()` recognises them), then re-run the seeder air-gapped:
+ 
+     python scripts/seed_threatintel.py --rebuild
+ 
+@@ -62,11 +63,19 @@ appearing to reproduce the shipped one. They are now enforced in code:
+    with the note "malware_download". One such finding in front of a review
+    committee discredits every other finding in the report.
+ 
+-Snapshot after normalisation: **634 indicators (567 IP, 63 domain, 4 JA3)**.
+-`scripts/seed_threatintel.py` fails if the rebuilt total falls below 500, so a
+-feed-format change is caught loudly instead of leaving a near-empty database.
++Snapshot after normalisation and cross-feed de-duplication: **47,832 indicators**
++(19,184 IP, 16,174 domain, 3,691 MD5, 2,779 SHA-1, 6,000 SHA-256, and 4 JA3).
++`scripts/seed_threatintel.py` fails if the rebuilt total falls below 40,000, so
++a missing or truncated ThreatFox snapshot and feed-format changes are caught
++loudly instead of leaving a near-empty database.
+ 
+ The shared-hosting list can never be complete, which is the deeper reason a
+ URL-derived *domain* indicator is weak evidence. The filter removes the worst
+ offenders; the corroboration rule is what actually stops a lone indicator from
+ becoming a verdict.
++
++ThreatFox is scoped more narrowly than its full export: only non-compromised
++`botnet_cc` IP, domain, and URL records enter destination reputation. Payload
++delivery and card-skimming infrastructure is excluded because the current
++lookup path would otherwise misrepresent it as C2. Payload hashes are retained
++under their explicit MD5, SHA-1, or SHA-256 indicator types.
+diff --git a/pipeline/feed_import.py b/pipeline/feed_import.py
+index 4e85628..6ebce7d 100644
+--- a/pipeline/feed_import.py
++++ b/pipeline/feed_import.py
+@@ -4,6 +4,7 @@ feed_import.py — import threat-intel from abuse.ch CSV feeds into the local DB
+ Supports two feed formats:
+   * Feodo Tracker C2 IP blocklist (csv.gz from abuse.ch)
+   * URLhaus URL dump (csv.gz from abuse.ch)
++  * ThreatFox full IOC export (extracted CSV from abuse.ch)
+ 
+ Designed for OFFLINE use: download the CSVs once (or on a connected machine),
+ then run this importer air-gapped. The threat-intel DB schema and lookup
+@@ -236,6 +237,94 @@ def import_urlhaus(csv_path: str, db_path: str = _REP_DB) -> int:
+     return count
+ 
+ 
++def import_threatfox(csv_path: str, db_path: str = _REP_DB) -> int:
++    """Import lookup-safe indicators from a ThreatFox full CSV export.
++
++    The C2 pipeline performs reputation lookups for destinations, so network
++    indicators are limited to active, non-compromised ``botnet_cc`` rows.
++    Payload-delivery and card-skimming hosts are deliberately excluded: they
++    frequently identify compromised or shared infrastructure and treating them
++    as C2 destinations would create false-positive attribution. Payload hashes
++    are retained as typed indicators for sample-reputation consumers.
++    """
++    if not os.path.exists(csv_path):
++        print(f"[!] File not found: {csv_path}")
++        return 0
++
++    import ipaddress
++    from urllib.parse import urlparse
++
++    conn = sqlite3.connect(db_path)
++    _ensure_schema(conn)
++    count = 0
++    hash_types = {
++        "md5_hash": "md5",
++        "sha1_hash": "sha1",
++        "sha256_hash": "sha256",
++    }
++
++    with open(csv_path, newline="", encoding="utf-8", errors="replace") as handle:
++        rows = csv.reader(
++            (line for line in handle if line.strip() and not line.startswith("#")),
++            skipinitialspace=True,
++        )
++        for row in rows:
++            if len(row) < 15 or row[0].strip().lower() == "first_seen_utc":
++                continue
++            first_seen, value, ioc_type, threat_type = (
++                row[0].strip(), row[2].strip(), row[3].strip().lower(), row[4].strip().lower()
++            )
++            malware = row[7].strip()
++            last_seen = row[8].strip() or first_seen
++            compromised = row[10].strip().lower() == "true"
++            indicator_type = hash_types.get(ioc_type)
++
++            if indicator_type:
++                if threat_type != "payload":
++                    continue
++                normalized = value.lower()
++            else:
++                if threat_type != "botnet_cc" or compromised:
++                    continue
++                if ioc_type == "domain":
++                    normalized = value.lower().rstrip(".")
++                    indicator_type = "domain"
++                elif ioc_type == "url":
++                    normalized = (urlparse(value).hostname or "").lower().rstrip(".")
++                    if not normalized:
++                        continue
++                    indicator_type = "ip" if _is_ip_literal(normalized) else "domain"
++                elif ioc_type == "ip:port":
++                    host = value.rsplit(":", 1)[0].strip("[]")
++                    try:
++                        normalized = str(ipaddress.ip_address(host))
++                    except ValueError:
++                        continue
++                    indicator_type = "ip"
++                else:
++                    continue
++
++                if indicator_type == "domain" and any(
++                        normalized == domain or normalized.endswith("." + domain)
++                        for domain in _SHARED_HOSTING):
++                    continue
++
++            if not normalized:
++                continue
++            note = f"{malware or 'Unknown malware'} {threat_type} ({ioc_type})"
++            conn.execute(
++                "INSERT OR REPLACE INTO bad_indicators "
++                "(value, source, note, indicator_type, last_seen) "
++                "VALUES (?, ?, ?, ?, ?)",
++                (normalized, "abuse.ch/ThreatFox", note, indicator_type, last_seen),
++            )
++            count += 1
++
++    conn.commit()
++    conn.close()
++    return count
++
++
+ def import_ja3_known_bad(db_path: str = _REP_DB) -> int:
+     """Seed known-bad JA3 hashes into the threat-intel DB.
+ 
+@@ -319,10 +408,10 @@ def db_stats(db_path: str = _REP_DB) -> dict:
+ def refresh(directory: str, db_path: str = _REP_DB) -> dict:
+     """Offline bulk refresh: import every recognised feed file in a directory.
+ 
+-    Filename conventions: feodo*.csv, urlhaus*.csv, *dga*.txt / *domains*.txt,
+-    *ja4*.txt. Download the feeds once on a connected machine, drop them here,
+-    and run this air-gapped. (MISP path: swap this for a pymisp pull into the
+-    same table.)
++    Filename conventions: feodo*.csv, urlhaus*.csv, threatfox*.csv,
++    *dga*.txt / *domains*.txt, *ja4*.txt. Download the feeds once on a connected
++    machine, drop them here, and run this air-gapped. (MISP path: swap this for
++    a pymisp pull into the same table.)
+     """
+     import glob
+     total = {}
+@@ -332,6 +421,8 @@ def refresh(directory: str, db_path: str = _REP_DB) -> dict:
+             total[name] = import_feodo(p, db_path)
+         elif name.startswith("urlhaus"):
+             total[name] = import_urlhaus(p, db_path)
++        elif name.startswith("threatfox"):
++            total[name] = import_threatfox(p, db_path)
+         elif "dga" in name or "domains" in name or "domain" in name:
+             total[name] = import_indicator_list(p, "domain", "feed/dga", db_path)
+         elif "ja4" in name:
+@@ -346,6 +437,7 @@ if __name__ == "__main__":
+         print("Usage:")
+         print("  python pipeline/feed_import.py feodo <csv>")
+         print("  python pipeline/feed_import.py urlhaus <csv>")
++        print("  python pipeline/feed_import.py threatfox <csv>")
+         print("  python pipeline/feed_import.py domains <list.txt>")
+         print("  python pipeline/feed_import.py ja3 | ja4")
+         print("  python pipeline/feed_import.py refresh <feed_dir>")
+@@ -359,6 +451,8 @@ if __name__ == "__main__":
+         print(f"[*] Imported {import_feodo(arg or 'data/feodotracker.csv')} Feodo C2 IPs")
+     elif feed_type == "urlhaus":
+         print(f"[*] Imported {import_urlhaus(arg or 'data/urlhaus.csv')} URLhaus indicators")
++    elif feed_type == "threatfox":
++        print(f"[*] Imported {import_threatfox(arg or 'data/threatfox.csv')} ThreatFox indicators")
+     elif feed_type == "domains":
+         print(f"[*] Imported {import_indicator_list(arg, 'domain', 'custom')} domain indicators")
+     elif feed_type == "ja3":
+diff --git a/scripts/seed_threatintel.py b/scripts/seed_threatintel.py
+index a89b739..25286cc 100644
+--- a/scripts/seed_threatintel.py
++++ b/scripts/seed_threatintel.py
+@@ -41,7 +41,7 @@ DB_PATH = os.environ.get("THREATINTEL_DB", os.path.join(ROOT, "data", "threatint
+ # pass, while a broken parser (a feed format change, an empty download) drops
+ # well below it and fails loudly instead of leaving a near-empty database that
+ # silently produces no findings.
+-MIN_EXPECTED_INDICATORS = 500
++MIN_EXPECTED_INDICATORS = 40_000
+ 
+ 
+ def main() -> int:
+diff --git a/tests/test_feeds_allowlist.py b/tests/test_feeds_allowlist.py
+index a391a57..eef961f 100644
+--- a/tests/test_feeds_allowlist.py
++++ b/tests/test_feeds_allowlist.py
+@@ -7,7 +7,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "pipeline"))
+ 
+ import pytest
+ from pipeline.attribution import domain_reputation, init_threatintel_db
+-from pipeline.feed_import import import_indicator_list, db_stats, import_ja4_known_bad
++from pipeline.feed_import import (
++    db_stats,
++    import_indicator_list,
++    import_ja4_known_bad,
++    import_threatfox,
++    refresh,
++)
+ from pipeline.allowlist import is_allowlisted, apply_allowlist, load_allowlist
+ 
+ 
+@@ -44,6 +50,53 @@ class TestDomainReputation:
+         import_ja4_known_bad(db)          # from KNOWN_BAD_JA4 (may be 0, must not error)
+         assert isinstance(db_stats(db), dict)
+ 
++    def test_threatfox_import_is_c2_scoped_and_normalized(self, tmp_path):
++        db = str(tmp_path / "ti.sqlite")
++        init_threatintel_db(path=db, seed=False)
++        feed = tmp_path / "threatfox.csv"
++        feed.write_text(
++            '# ThreatFox fixture\n'
++            '# "first_seen_utc","ioc_id","ioc_value","ioc_type","threat_type",'
++            '"fk_malware","malware_alias","malware_printable","last_seen_utc",'
++            '"confidence_level","is_compromised","reference","tags","anonymous","reporter"\n'
++            '"2026-08-16 01:00:00", "1", "198.51.100.7:443", "ip:port", "botnet_cc", '
++            '"win.test", "None", "Test RAT", "", "100", "False", "None", "test", "0", "analyst"\n'
++            '"2026-08-16 01:00:00", "2", "https://c2.example.test/gate", "url", "botnet_cc", '
++            '"win.test", "None", "Test RAT", "", "100", "False", "None", "test", "0", "analyst"\n'
++            '"2026-08-16 01:00:00", "3", "compromised.example", "domain", "botnet_cc", '
++            '"win.test", "None", "Test RAT", "", "100", "True", "None", "test", "0", "analyst"\n'
++            '"2026-08-16 01:00:00", "4", "delivery.example", "domain", "payload_delivery", '
++            '"win.test", "None", "Test RAT", "", "100", "False", "None", "test", "0", "analyst"\n'
++            '"2026-08-16 01:00:00", "5", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", '
++            '"sha256_hash", "payload", "win.test", "None", "Test RAT", "", "100", "False", '
++            '"None", "test", "0", "analyst"\n',
++            encoding="utf-8",
++        )
++
++        assert import_threatfox(str(feed), db) == 3
++        conn = sqlite3.connect(db)
++        rows = conn.execute(
++            "SELECT value, indicator_type FROM bad_indicators ORDER BY value"
++        ).fetchall()
++        conn.close()
++        assert rows == [
++            ("198.51.100.7", "ip"),
++            ("a" * 64, "sha256"),
++            ("c2.example.test", "domain"),
++        ]
++
++    def test_refresh_recognizes_threatfox_snapshot(self, tmp_path):
++        db = str(tmp_path / "ti.sqlite")
++        init_threatintel_db(path=db, seed=False)
++        feed = tmp_path / "threatfox_daily.csv"
++        feed.write_text(
++            '"2026-08-16 01:00:00", "1", "198.51.100.8:8443", "ip:port", "botnet_cc", '
++            '"win.test", "None", "Test RAT", "", "100", "False", "None", "test", "0", "analyst"\n',
++            encoding="utf-8",
++        )
++
++        assert refresh(str(tmp_path), db) == {"threatfox_daily.csv": 1}
++
+ 
+ # ---------------- F2: sanctioned-service allowlist ----------------
+ 

@@ -386,9 +386,9 @@ def run(
     ),
     work_root: Path = typer.Option(Path("var/c2-work"), envvar="UMAT_C2_WORK_ROOT"),
     runtime_root: Path | None = typer.Option(None, envvar="UMAT_C2_RUNTIME_ROOT"),
-    runtime_commit: str = typer.Option("478f131de510ad580754f152d946086b3aeacf05"),
+    runtime_commit: str = typer.Option("bf1f275be8027e0adf5b2e049ad2c9a556526398"),
     runtime_patch_sha256: str = typer.Option(
-        "410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199"
+        "973f3a15d2a200f8bcc9b71465b818d97be1f43fd8ddc41e3613c2758f0f4741"
     ),
     runtime_timeout_seconds: int = typer.Option(1800, min=1),
     max_result_bytes: int = typer.Option(1024 * 1024 * 1024, min=1),

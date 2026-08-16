@@ -14,12 +14,14 @@ Implemented and verified:
   credential revocation.
 - Fresh migration, downgrade/re-upgrade, role-seed, append-only audit, and custody-FK tests.
 - Immutable WinST schema worktree at commit `7bc74765e9d38d7ba6df3f2115db67761cb4cbd8`.
-- C2 execution pinned to effective runtime `478f131-umat.2` and a verified patch-series digest
-  `410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199`.
-  The unchanged schema-v1.3 boundary is the normalized contract reference. The promoted runtime
-  applies GeoLite2 country/ASN enrichment to every IP-bearing event, suppresses URL-feed false
-  positives for shared hosts, rolls tunnel subdomains into their claimed parent, keeps HTTP
-  destination domains correctly typed, and hashes large captures in chunks.
+- C2 execution pins reachable upstream commit `bf1f275` as effective runtime
+  `bf1f275-umat.2`. The former UMAT GeoLite overlay is now implemented upstream; the remaining
+  deployment patch adds the ThreatFox importer and completeness gate. The complete CSV is stored
+  in a separately digest-locked ZIP deployment asset, then extracted and independently verified
+  offline by the runtime installer. The unchanged schema-v1.3 boundary is the
+  normalized contract reference. The runtime applies GeoLite2 enrichment to every IP-bearing
+  event, keeps allowlisted destinations out of compromise evidence, carries richer object/process
+  context, and seeds ThreatFox using botnet-C2 scoping.
 - Android PCAP-only execution through the effective C2 runtime, followed by signed schema-v1.3
   result-bundle verification. The PCAP-only shim cannot load host-access evidence.
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -80,12 +81,24 @@ def test_full_stack_manifest_matches_dependency_locks() -> None:
     assert components["c2"]["effective_tree_sha256"] == c2["effective_tree_sha256"]
     assert components["c2"]["dependency_lock_sha256"] == c2["dependency_lock_sha256"]
     assert components["c2"]["patch_series_sha256"] == c2["patch_series_sha256"]
+    assert components["c2"]["threat_intelligence"] == c2["threat_intelligence"]
     c2_patch_digest = hashlib.sha256()
     c2_patches = sorted((ROOT / "deployment/c2/patches").glob("*.patch"))
-    assert c2_patches
     for patch_path in c2_patches:
         c2_patch_digest.update(patch_path.read_bytes())
     assert c2_patch_digest.hexdigest() == c2["patch_series_sha256"]
+    assert [str(path.relative_to(ROOT)) for path in c2_patches] == [
+        patch["path"] for patch in c2["patches"]
+    ]
+    threatintel_asset = ROOT / c2["threat_intelligence"]["deployment_asset"]
+    assert hashlib.sha256(threatintel_asset.read_bytes()).hexdigest() == (
+        c2["threat_intelligence"]["asset_sha256"]
+    )
+    with zipfile.ZipFile(threatintel_asset) as archive:
+        assert archive.namelist() == ["threatfox.csv"]
+        assert hashlib.sha256(archive.read("threatfox.csv")).hexdigest() == (
+            c2["threat_intelligence"]["feed_sha256"]
+        )
     assert components["umat_postgres"]["image"] == (
         f"{postgres['image']}@{postgres['image_digest']}"
     )
@@ -363,6 +376,11 @@ def test_c2_installers_enforce_every_locked_runtime_identity_field() -> None:
         c2["effective_tree_sha256"],
         c2["dependency_lock_sha256"],
         c2["patch_series_sha256"],
+        c2["threat_intelligence"]["asset_sha256"],
+        c2["threat_intelligence"]["feed_sha256"],
+        str(c2["threat_intelligence"]["minimum_indicators"]),
+        str(c2["threat_intelligence"]["qualified_indicators"]),
+        c2["threat_intelligence"]["deployment_asset"],
     ):
         assert value in runtime_installer
     assert c2["patch_series_sha256"] in (ROOT / "src/umat/c2/executor.py").read_text()
@@ -382,12 +400,21 @@ def test_c2_installers_enforce_every_locked_runtime_identity_field() -> None:
 def test_c2_data_service_policy_separates_mutable_sqlite_from_read_only_mmdb() -> None:
     installer = (ROOT / "deployment/full-stack/install-services.sh").read_text()
     policy = (ROOT / "deployment/full-stack/umat-c2-executor-data.conf").read_text()
+    geolite = (ROOT / "deployment/full-stack/umat-c2-executor-geolite.conf").read_text()
     assert "THREATINTEL_DB=/srv/winstdt/c2-data/threatintel.sqlite" in policy
+    assert "GEOLITE2_CITY_DB=/srv/winstdt/c2-data/GeoLite2-City.mmdb" in geolite
+    assert "GEOLITE2_ASN_DB=/srv/winstdt/c2-data/GeoLite2-ASN.mmdb" in geolite
     assert "ReadWritePaths=/srv/winstdt/c2-data" in policy
     assert "ReadOnlyPaths=/srv/winstdt/c2-data" not in policy
+    assert "seed_threatintel.py" in installer
+    assert "THREATINTEL_DB=\"$c2_threatintel_stage\"" in installer
+    assert "mv -f -- \"$c2_threatintel_stage\" \"$c2_threatintel\"" in installer
     assert "chmod 0440" in installer
     assert "chmod 0660" in installer
-    assert 'chmod 0770 "$c2_data_root"' in installer
+    assert (
+        'install -d -o "$SERVICE_USER" -g "$EXECUTOR_USER" -m 0770 "$c2_data_root"'
+        in installer
+    )
 
 
 def test_executor_units_use_separate_identity_and_hide_control_plane_evidence() -> None:
@@ -399,8 +426,9 @@ def test_executor_units_use_separate_identity_and_hide_control_plane_evidence() 
     firewall = (ROOT / "deployment/full-stack/umat-host-firewall.nft").read_text()
     assert 'meta skuid "umat-executor" tcp dport 55432 reject' in firewall
     assert "umat-c2-executor.service.d/c2-data.conf" in installer
-    assert "C2 enrichment data is partially provisioned" in installer
-    assert "c2_data_present" in installer
+    assert "umat-c2-executor-geolite.conf" in installer
+    assert "GeoLite2 enrichment is partially provisioned" in installer
+    assert "c2_geolite_present" in installer
 
 
 def test_android_runtime_installer_enforces_locked_emulator_and_license() -> None:

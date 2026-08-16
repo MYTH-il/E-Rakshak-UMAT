@@ -181,7 +181,7 @@ ReadWritePaths=/var/lib/umat/executors/${executor_name} /var/lib/umat/${executor
 WantedBy=multi-user.target
 EOF
   if [[ "$executor_name" == "c2" ]]; then
-    sed -i '/ReadWritePaths=/i ReadOnlyPaths=/srv/winstdt/libexec/c2-exfil/478f131-umat.2' "$executor_unit"
+    sed -i '/ReadWritePaths=/i ReadOnlyPaths=/srv/winstdt/libexec/c2-exfil/bf1f275-umat.2' "$executor_unit"
   else
     sed -i '/ReadWritePaths=/i SupplementaryGroups=kvm docker' "$executor_unit"
   fi
@@ -192,37 +192,56 @@ EOF
   rm -f -- "$executor_unit"
 done
 
-# C2 enrichment databases live outside the verified runtime tree. An entirely
-# absent data set preserves the runtime's documented graceful degradation. A
-# partial data set is a deployment error: silently starting in that state would
-# misrepresent coverage. SQLite needs directory write access for journal/WAL
-# files; immutable MMDB files are protected separately with read-only modes.
+# ThreatFox is shipped inside the verified C2 runtime, but the mutable SQLite
+# database lives outside that read-only tree. Rebuild through a temporary file
+# and atomically promote it so upgrades never expose a partial database. GeoLite
+# City and ASN remain an optional pair; provisioning only one is a hard error.
 c2_data_root=/srv/winstdt/c2-data
-c2_data_files=(
+c2_runtime_root=/srv/winstdt/libexec/c2-exfil/bf1f275-umat.2
+c2_threatintel="$c2_data_root/threatintel.sqlite"
+c2_geolite_files=(
   "$c2_data_root/GeoLite2-City.mmdb"
   "$c2_data_root/GeoLite2-ASN.mmdb"
-  "$c2_data_root/threatintel.sqlite"
 )
-echo "+ validate optional C2 enrichment data"
+echo "+ seed required offline C2 threat intelligence and validate optional GeoLite2 data"
 if [[ "$EXECUTE" -eq 1 ]]; then
-  c2_data_present=0
-  for data_file in "${c2_data_files[@]}"; do
-    sudo -n test -f "$data_file" && ((c2_data_present += 1)) || true
-  done
-  if [[ "$c2_data_present" -ne 0 && "$c2_data_present" -ne "${#c2_data_files[@]}" ]]; then
-    echo "C2 enrichment data is partially provisioned under $c2_data_root" >&2
+  c2_python="$c2_runtime_root/.venv/bin/python"
+  c2_seed="$c2_runtime_root/source/scripts/seed_threatintel.py"
+  sudo -n test -x "$c2_python" || { echo "C2 runtime Python is unavailable: $c2_python" >&2; exit 1; }
+  sudo -n test -f "$c2_seed" || { echo "C2 threat-intelligence seeder is unavailable: $c2_seed" >&2; exit 1; }
+  sudo -n install -d -o "$SERVICE_USER" -g "$EXECUTOR_USER" -m 0770 "$c2_data_root"
+  c2_threatintel_stage="$(sudo -n mktemp "$c2_data_root/.threatintel.sqlite.XXXXXX")"
+  if ! sudo -n env THREATINTEL_DB="$c2_threatintel_stage" \
+      "$c2_python" "$c2_seed" --rebuild; then
+    sudo -n rm -f -- "$c2_threatintel_stage"
     exit 1
   fi
-  if [[ "$c2_data_present" -eq "${#c2_data_files[@]}" ]]; then
-    echo "+ install $UNIT_DIR/umat-c2-executor.service.d/c2-data.conf"
-    sudo -n install -d -m 0755 "$UNIT_DIR/umat-c2-executor.service.d"
+  sudo -n chown "$SERVICE_USER":"$EXECUTOR_USER" "$c2_threatintel_stage"
+  sudo -n chmod 0660 "$c2_threatintel_stage"
+  sudo -n mv -f -- "$c2_threatintel_stage" "$c2_threatintel"
+
+  c2_geolite_present=0
+  for data_file in "${c2_geolite_files[@]}"; do
+    sudo -n test -f "$data_file" && ((c2_geolite_present += 1)) || true
+  done
+  if [[ "$c2_geolite_present" -ne 0 && "$c2_geolite_present" -ne "${#c2_geolite_files[@]}" ]]; then
+    echo "GeoLite2 enrichment is partially provisioned under $c2_data_root" >&2
+    exit 1
+  fi
+
+  echo "+ install $UNIT_DIR/umat-c2-executor.service.d/c2-data.conf"
+  sudo -n install -d -m 0755 "$UNIT_DIR/umat-c2-executor.service.d"
+  sudo -n install -m 0644 \
+    "$PROJECT_ROOT/deployment/full-stack/umat-c2-executor-data.conf" \
+    "$UNIT_DIR/umat-c2-executor.service.d/c2-data.conf"
+  if [[ "$c2_geolite_present" -eq "${#c2_geolite_files[@]}" ]]; then
     sudo -n install -m 0644 \
-      "$PROJECT_ROOT/deployment/full-stack/umat-c2-executor-data.conf" \
-      "$UNIT_DIR/umat-c2-executor.service.d/c2-data.conf"
-    sudo -n chgrp "$EXECUTOR_USER" "$c2_data_root" "${c2_data_files[@]}"
-    sudo -n chmod 0770 "$c2_data_root"
-    sudo -n chmod 0440 "${c2_data_files[0]}" "${c2_data_files[1]}"
-    sudo -n chmod 0660 "${c2_data_files[2]}"
+      "$PROJECT_ROOT/deployment/full-stack/umat-c2-executor-geolite.conf" \
+      "$UNIT_DIR/umat-c2-executor.service.d/c2-geolite.conf"
+    sudo -n chown root:"$EXECUTOR_USER" "${c2_geolite_files[@]}"
+    sudo -n chmod 0440 "${c2_geolite_files[@]}"
+  else
+    sudo -n rm -f -- "$UNIT_DIR/umat-c2-executor.service.d/c2-geolite.conf"
   fi
 fi
 
@@ -284,7 +303,7 @@ if [[ "$EXECUTE" -eq 1 ]]; then
     'UMAT_EXECUTOR_URL=http://127.0.0.1:8080' \
     'UMAT_C2_STATE_PATH=/var/lib/umat/executors/c2/state.json' \
     'UMAT_C2_WORK_ROOT=/var/lib/umat/c2-work' \
-    'UMAT_C2_RUNTIME_ROOT=/srv/winstdt/libexec/c2-exfil/478f131-umat.2' \
+    'UMAT_C2_RUNTIME_ROOT=/srv/winstdt/libexec/c2-exfil/bf1f275-umat.2' \
     'UMAT_C2_EXECUTOR_NAME=c2-executor' >"$c2_env"
   mobsf_api_key="$(sudo -n awk -F= '$1 == "MOBSF_API_KEY" {print substr($0, index($0, "=") + 1)}' "$ENV_FILE")"
   [[ -n "$mobsf_api_key" ]] || { echo 'MOBSF_API_KEY is missing' >&2; exit 1; }

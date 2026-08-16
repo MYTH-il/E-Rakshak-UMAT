@@ -39,12 +39,23 @@
     },
     "c2": {
       "repository": "https://github.com/demistifying/C2-Exfil-E-Rakshak.git",
-      "commit": "478f131de510ad580754f152d946086b3aeacf05",
-      "effective_version": "478f131-umat.2",
-      "upstream_tree_sha256": "792c340721cc75dfc9b43a5bba4908be22071b75bd99f2871e9bd85d52407c28",
-      "effective_tree_sha256": "0fa3e0a81129a1ac53066a2f4f4a746f0cdba135f6868f950d16555950f8b6a3",
+      "commit": "bf1f275be8027e0adf5b2e049ad2c9a556526398",
+      "effective_version": "bf1f275-umat.2",
+      "upstream_tree_sha256": "e70b39cd2c57d0e1abf1d47974535e479878b14bb0649826547f7f17964e272e",
+      "effective_tree_sha256": "b0f5341f5adee036e41d5dcd408b5371ff3a827a8f268689a561bd68cba68510",
       "dependency_lock_sha256": "18d8e1acfd170b8f8c321aa3737b465ea4f19d28bcefd9534f5b6becb6e1ea6d",
-      "patch_series_sha256": "410bb5568669c559f831c386135628571874802ef57d024a87810ac6e8c9c199",
+      "patch_series_sha256": "973f3a15d2a200f8bcc9b71465b818d97be1f43fd8ddc41e3613c2758f0f4741",
+      "threat_intelligence": {
+        "feed": "data/feeds/threatfox.csv",
+        "deployment_asset": "deployment/c2/feeds/threatfox.zip",
+        "asset_sha256": "95b27f9b34af50baf05d6c256c571fcb57164b3b378b92d6365e36951c9bb361",
+        "feed_sha256": "3360b7e1089d0438bba9c49e2839b0f722c5fcde8e33fa6188d8dca7f7faae61",
+        "minimum_indicators": 40000,
+        "qualified_indicators": 47832,
+        "database_path": "/srv/winstdt/c2-data/threatintel.sqlite",
+        "network_scope": "non_compromised_botnet_cc",
+        "payload_hashes": ["md5", "sha1", "sha256"]
+      },
       "license_status": "authorization_required_no_upstream_license_file"
     },
     "android": {
