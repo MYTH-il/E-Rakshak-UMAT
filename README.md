@@ -40,7 +40,7 @@ commit; the analysis modules never talk to each other or to the database directl
 | **UMAT** — control plane | `MYTH-il/E-Rakshak-UMAT` | Intake, custody, scheduling, aggregation, reporting, web console, PostgreSQL |
 | **Windows ST/DT** | `MYTH-il/WinST-DT-module` | Static triage, CAPE detonation, ETW host telemetry, PCAP capture |
 | **C2/Exfil** | `demistifying/C2-Exfil-E-Rakshak` | Network analysis, attribution, host↔network correlation |
-| **Android (ST + DT + C2)** | `d4ruvil/erakshak` | MobSF static analysis, ReDroid dynamic run, Frida instrumentation, traffic capture |
+| **Android (ST + DT)** | `d4ruvil/erakshak` | MobSF static analysis, ReDroid dynamic run, Frida instrumentation, traffic capture |
 
 > **This repository is UMAT, the control plane.** This README documents the suite as a
 > whole. For the control plane in depth — implementation status, verification evidence,
