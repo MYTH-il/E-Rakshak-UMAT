@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     audit_signing_key_path: Path | None = None
     c2_runtime_root: Path | None = None
     c2_work_root: Path = Path("var/c2-work")
-    c2_runtime_commit: str = "bf1f275be8027e0adf5b2e049ad2c9a556526398"
+    c2_runtime_commit: str = "970e941362158e62e666a8f38fcb1fb71370d75a"
     c2_runtime_patch_sha256: str = (
         "973f3a15d2a200f8bcc9b71465b818d97be1f43fd8ddc41e3613c2758f0f4741"
     )

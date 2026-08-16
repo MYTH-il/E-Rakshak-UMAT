@@ -48,6 +48,54 @@ def _load_object(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
+# Evidence the Windows analysis cannot proceed without. Everything else the
+# handoff declares is enrichment: valuable, and its absence is a caveat rather
+# than a failure.
+#
+# The distinction exists because treating every declared artifact as mandatory
+# threw away good evidence. On a Remcos RAT case the sample was a 726 KB
+# obfuscated batch script; WinST/DT declared behavior/trace.etl in
+# artifact_paths and did not write it -- ETW captured nothing for a cmd.exe
+# based sample -- so the bundle was rejected outright with
+# "missing WinST/DT artifact: trace_etl". The capture WAS present and contained
+# the RAT's C2 traffic on TCP 3980, but platform_analysis failed, c2_analysis
+# never claimed, and the officer received nothing at all.
+#
+# Losing host-side correlation is a real reduction in what can be concluded, and
+# it is reported as one. Losing the network evidence too, because a different
+# artifact is absent, is a self-inflicted blind spot.
+ESSENTIAL_ARTIFACTS = frozenset({"pcap"})
+
+# Declared-but-absent artifacts, mapped to the caveat their absence justifies.
+# Both codes already exist in contracts/vocabularies/caveats.json.
+_ARTIFACT_ABSENCE_CAVEATS: dict[str, str] = {
+    "trace_etl": "host_telemetry_degraded",
+    "kernel_etl": "host_telemetry_degraded",
+    "etw_events": "host_telemetry_degraded",
+    "raw_etl": "host_telemetry_degraded",
+    "access_events": "host_network_correlation_unavailable",
+    "clock_sync": "host_network_correlation_unavailable",
+}
+
+
+def absent_declared_artifacts(root: Path, handoff: dict[str, Any]) -> list[str]:
+    """Artifact kinds the handoff declares but did not write.
+
+    Only meaningful for non-essential kinds; an absent essential artifact has
+    already failed validation before this is consulted.
+    """
+    declared = handoff.get("artifact_paths")
+    if not isinstance(declared, dict):
+        return []
+    absent: list[str] = []
+    for kind, relative in declared.items():
+        if kind in ESSENTIAL_ARTIFACTS or not isinstance(relative, str):
+            continue
+        if not (root / relative).is_file():
+            absent.append(str(kind))
+    return sorted(absent)
+
+
 @dataclass(frozen=True)
 class BuiltWindowsBundle:
     root: Path
@@ -99,8 +147,20 @@ class NativeWindowsValidator:
             if not isinstance(relative, str):
                 raise WindowsBundleError(f"invalid WinST/DT artifact path for {kind}")
             path = (root / relative).resolve()
-            if root.resolve() not in path.parents or not path.is_file():
-                raise WindowsBundleError(f"missing WinST/DT artifact: {kind}")
+            # Escaping the bundle is always fatal: a manifest that points outside
+            # its own directory is either broken or hostile, and no caveat makes
+            # that safe to read.
+            if root.resolve() not in path.parents:
+                raise WindowsBundleError(f"WinST/DT artifact path escapes the bundle: {kind}")
+            if not path.is_file():
+                # Declared but not written. Fatal only for evidence the analysis
+                # cannot proceed without; otherwise the run degrades and says so.
+                if kind in ESSENTIAL_ARTIFACTS:
+                    raise WindowsBundleError(f"missing WinST/DT artifact: {kind}")
+                continue
+            # Present but unhashed is always fatal: an artifact outside the hash
+            # manifest has no custody, and accepting it would let an unsigned
+            # file enter a signed bundle.
             if relative not in verified_paths:
                 raise WindowsBundleError(f"unhashed WinST/DT artifact: {kind}")
         declared_hashes = (handoff.get("integrity") or {}).get("hash_manifest_sha256")
@@ -200,7 +260,9 @@ class WindowsBundleBuilder:
             },
             "selected_profile": profile_snapshot,
             "artifacts": descriptors,
-            "caveats": self._caveats(handoff, profile_snapshot),
+            "caveats": self._caveats(
+                handoff, profile_snapshot, absent_declared_artifacts(native_root, handoff)
+            ),
         }
         signature = base64.b64encode(self.signing_key.sign(canonical_json(unsigned))).decode()
         manifest = unsigned | {
@@ -223,8 +285,26 @@ class WindowsBundleBuilder:
         return BuiltWindowsBundle(destination, archive, manifest)
 
     @staticmethod
-    def _caveats(handoff: dict[str, Any], profile_snapshot: dict[str, Any]) -> list[str]:
+    def _caveats(
+        handoff: dict[str, Any],
+        profile_snapshot: dict[str, Any],
+        absent_artifacts: list[str] | None = None,
+    ) -> list[str]:
         caveats: list[str] = []
+        # An artifact the producer promised and did not deliver reduces what can
+        # be concluded, and the report has to say so. Silently proceeding would
+        # let an absence of host evidence read as an absence of host activity —
+        # the exact confusion the caveat vocabulary exists to prevent.
+        #
+        # These codes overlap with the telemetry and correlation flags below: a
+        # run can both declare telemetry_degraded and omit trace_etl. The result
+        # is deduplicated on return because windows-import.schema.json sets
+        # uniqueItems on caveats, so a repeat would fail contract validation and
+        # take the whole bundle down.
+        for kind in absent_artifacts or []:
+            code = _ARTIFACT_ABSENCE_CAVEATS.get(kind)
+            if code:
+                caveats.append(code)
         authoritative_mode = profile_snapshot.get("network_mode")
         if authoritative_mode == "isolated_simulated" or (
             authoritative_mode != "real_world_egress"
@@ -235,7 +315,7 @@ class WindowsBundleBuilder:
             caveats.append("host_telemetry_degraded")
         if not (handoff.get("correlation") or {}).get("host_network_correlation_enabled", False):
             caveats.append("host_network_correlation_unavailable")
-        return caveats
+        return list(dict.fromkeys(caveats))
 
 
 def safe_extract_windows_bundle(archive: Path, destination: Path, max_bytes: int) -> Path:

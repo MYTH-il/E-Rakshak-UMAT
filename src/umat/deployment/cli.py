@@ -320,7 +320,7 @@ def install_environment(runner: CommandRunner, manifest: dict[str, Any]) -> Path
         ("UMAT_CAPE_MANAGEMENT_URL", "http://127.0.0.1:8091"),
         ("UMAT_QUARANTINE_ROOT", "/var/lib/umat/quarantine"),
         ("UMAT_ARTIFACT_ROOT", "/var/lib/umat/artifacts"),
-        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/bf1f275-umat.2"),
+        ("UMAT_C2_RUNTIME_ROOT", "/srv/winstdt/libexec/c2-exfil/970e941-umat.1"),
         ("UMAT_GEOLITE2_CITY_DB", "/srv/winstdt/c2-data/GeoLite2-City.mmdb"),
         ("UMAT_GEOLITE2_ASN_DB", "/srv/winstdt/c2-data/GeoLite2-ASN.mmdb"),
         ("UMAT_WINSTDT_SCHEMA_ROOT", "/opt/umat/upstreams/winstdt/schemas"),

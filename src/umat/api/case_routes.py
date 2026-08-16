@@ -45,7 +45,7 @@ from umat.db.models import (
     WindowsVMProfile,
 )
 from umat.egress.readiness import require_controlled_egress
-from umat.intake import is_structurally_valid_apk
+from umat.intake import is_structurally_valid_apk, reject_container_submission
 from umat.reporting import filter_report_for_roles
 from umat.storage.local import LocalArtifactStore, UploadTooLargeError
 
@@ -145,6 +145,7 @@ async def create_case(
     filename = Path(file.filename or "unnamed").name[:512]
     platform = Platform.ANDROID if is_structurally_valid_apk(quarantined.path) else Platform.WINDOWS
     try:
+        reject_container_submission(quarantined.path, filename)
         if platform == Platform.ANDROID and windows_profile_id:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
